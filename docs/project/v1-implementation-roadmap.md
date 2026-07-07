@@ -9,11 +9,13 @@
 交付一个桌面端 V1，能够：
 
 - 接收模糊产品想法
-- 做极轻量 Quick Clarify
-- 运行固定三 Agent
+- 让 Conductor / Researcher / Specialist 在同一个聊天窗口进行真实会话
+- 由 Conductor 汇总聊天并生成 Task Brief
+- 运行固定三 Agent 编排
 - 读取用户授权工作区
 - 执行 Web 轻调研
-- 输出四份标准 PRD 交付文件
+- 在左右面板展示真实 Researcher / Specialist 执行过程
+- 输出一个默认用户交付文件：`prd.md`
 
 ## Milestone 1: Skeleton App
 
@@ -28,20 +30,34 @@
 - 有三舱基础布局
 - 有 New Task 基础输入区
 
-## Milestone 2: Task Runtime
+## Milestone 2: Agent Conversation Runtime
 
 目标：
 
-- 建立最小任务状态机
-- 可从输入进入 `classifying -> preparing_context -> completed`
+- 建立共享三 Agent 聊天模型
+- Conductor / Researcher / Specialist 都能在同一聊天中发言和提问
 
 完成标准：
 
-- 任务对象可创建
-- 状态可追踪
-- 历史记录可保存基础元数据
+- 所有消息有明确 agent 标识
+- Researcher / Specialist 的问题基于职责产生，不是固定 UI 文案
+- 用户在同一聊天窗口回答
 
-## Milestone 3: Workspace Read Layer
+## Milestone 3: Task Brief And Orchestration
+
+目标：
+
+- 建立 Conductor 主控编排
+- 生成可见 Task Brief
+- 明确何时进入 dispatch
+
+完成标准：
+
+- Task Brief 字段完整
+- Conductor 能判断信息是否足够
+- Conductor 能把 Task Brief 分派给 Researcher / Specialist
+
+## Milestone 4: Workspace Read Layer
 
 目标：
 
@@ -55,92 +71,99 @@
 - 可搜文本
 - 明确排除规则生效
 
-## Milestone 4: Provider Adapter
+## Milestone 5: Provider Adapter
 
 目标：
 
-- 接入 OpenRouter
+- 接入 Ark Responses
 - 打通结构化输出调用
+- Researcher slot 可使用 Ark web_search
 
 完成标准：
 
-- 可向单模型发请求
+- 可向模型发请求
 - 可拿到结构化 JSON
-- 能为不同角色切换不同模型配置
+- Web Search 只在 Researcher 阶段使用
+- 能为不同角色注入不同 role profile
 
-## Milestone 5: Fixed Tri-Agent Flow
+## Milestone 6: Fixed Tri-Agent Execution
 
 目标：
 
-- 跑通 Conductor / Researcher / Specialist 固定流程
+- 跑通 Conductor / Researcher / Specialist 固定执行流程
 
 完成标准：
 
-- Conductor 能识别 `PRD` 任务
-- Quick Clarify 最多只问少量问题
-- Researcher 与 Specialist 可并行执行
-- Conductor 能合并结果
+- Conductor 负责 intake、Task Brief、dispatch、merge
+- Researcher 基于 Task Brief 执行轻调研
+- Specialist 基于 Task Brief 执行产品审查
+- 左右面板显示真实执行事件
 
-## Milestone 6: Delivery Package Writer
+## Milestone 7: Single PRD Output Writer
 
 目标：
 
-- 写出完整四文件交付包
+- 写出单一默认交付文件 `prd.md`
 
 完成标准：
 
 - 可创建输出目录
-- 固定文件命名正确
+- 默认只写 `prd.md`
+- 不再默认写四个 Markdown 文件
 - 不覆盖已有输出
-- 任务完成后 UI 可直接打开结果
+- 任务完成后 UI 可直接打开或预览 `prd.md`
 
-## Milestone 7: V1 UI Completion
+## Milestone 8: V1 UI Completion
 
 目标：
 
-- 把三舱内容和任务结果完整落到界面
+- 把三舱内容、任务状态、Task Brief、执行过程和 PRD 结果完整落到界面
 
 完成标准：
 
 - 左舱显示调研过程
-- 中舱显示输入、Quick Clarify、收敛与结果
-- 右舱显示专业审查
-- 完成态默认打开最终 PRD
+- 中舱显示共享三 Agent 聊天、Task Brief、分派与结果
+- 右舱显示专业审查过程
+- 完成态默认打开 `prd.md`
 
-## Milestone 8: Quality Validation
+## Milestone 9: Quality Validation
 
 目标：
 
-- 证明这个产品相比普通聊天更擅长出首稿
+- 证明这个产品相比普通聊天更擅长出 PRD 首稿
 
 完成标准：
 
 - 准备一批模糊产品想法样例
 - 评估是否能稳定产出结构完整的 PRD 首稿
-- 检查输出包结构是否稳定
+- 检查输出是否稳定为 `prd.md`
+- 检查左右面板是否显示真实过程而不是 demo 状态
 
 ## Recommended Build Order
 
 推荐严格按下面顺序做，避免 UI 和 runtime 互相等待：
 
 1. Skeleton App
-2. Task Runtime
-3. Workspace Read Layer
-4. Provider Adapter
-5. Fixed Tri-Agent Flow
-6. Delivery Package Writer
-7. UI Completion
-8. Quality Validation
+2. Agent Conversation Runtime
+3. Task Brief And Orchestration
+4. Workspace Read Layer
+5. Provider Adapter
+6. Fixed Tri-Agent Execution
+7. Single PRD Output Writer
+8. UI Completion
+9. Quality Validation
 
 ## First-Cut Acceptance Checklist
 
 - 用户能从桌面端输入模糊需求
 - 系统不会先用长表单阻塞用户
-- Quick Clarify 足够轻
+- 三 Agent 能在同一聊天窗口真实发言和提问
+- Conductor 能生成 Task Brief
 - PRD 模板能稳定运行
 - 工作区只读边界正确
-- Web 调研结果能进入参考资料
-- 最终能生成四份标准文件
+- Web 调研结果能影响 PRD
+- 左右面板能展示真实调研和审查过程
+- 最终能生成 `prd.md`
 
 ## What Not To Build During V1
 
@@ -150,3 +173,4 @@
 - 深度研究模式
 - 云端协作
 - 重型配置系统
+- 四文件默认交付包
