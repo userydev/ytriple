@@ -6,6 +6,10 @@ Blocking task for V1 usability.
 
 Current V1 cannot be treated as usable until the product implements a real three-agent conversation and execution flow.
 
+This task must follow the output contract in:
+
+- `docs/product/v1-output-contract.md`
+
 ## Problem
 
 The current app has the visual shape of yTriple, but the core strategy is not fully executed.
@@ -20,6 +24,7 @@ Known issues:
 6. Research is not yet exposed as a visible process: query intent, search action, sources, findings, assumptions, and uncertainty are not clearly shown.
 7. Specialist review is not yet exposed as a visible process: role checklist, missing context, risks, trade-offs, and review judgment are not clearly shown.
 8. Runtime is split between TypeScript and Rust/Tauri paths, creating ambiguity over the actual source of product behavior.
+9. The old four-file output assumption conflicts with the product promise: `Three Agents, One Perfect Output`.
 
 ## Product Decision
 
@@ -32,10 +37,32 @@ User shared chat
   -> Specialist asks product-review questions and later executes structured review
   -> Conductor dispatches both agents after enough context exists
   -> side panels show real execution traces
-  -> Conductor merges results into the four-file PRD package
+  -> Conductor merges results into one clean PRD draft
+  -> app writes prd.md as the only default user-facing deliverable
 ```
 
-The product is not a one-button PRD generator with decorative side panels. It is a constrained three-agent working session that produces a PRD delivery package.
+The product is not a one-button PRD generator with decorative side panels. It is a constrained three-agent working session that produces one clean PRD output.
+
+## Output Decision
+
+Default output is exactly one user-facing Markdown file:
+
+```text
+<output-root>/ytriple-outputs/<task-id>/prd.md
+```
+
+Do not generate these as default deliverables:
+
+```text
+01-final-prd.md
+02-assumptions-and-open-questions.md
+03-research-notes.md
+04-specialist-review.md
+```
+
+Researcher notes, Specialist review, Task Brief, source cards, and conversation transcript are process materials. They should be visible in the app and may be stored as internal trace data, but they are not default Markdown deliverables.
+
+`prd.md` must include assumptions, open questions, and source notes where relevant.
 
 ## Required UX Model
 
@@ -74,7 +101,7 @@ Required behavior:
 - Summarize accumulated user answers into a task brief.
 - Decide when the task is ready for dispatch.
 - Dispatch Researcher and Specialist with the structured brief.
-- Merge outputs into the final PRD package.
+- Merge outputs into the final PRD.
 
 Conductor must produce a visible `Task Brief` before dispatch.
 
@@ -108,7 +135,7 @@ Execution phase:
 - Show search queries or query intent.
 - Show source cards.
 - Separate facts, inferences, and assumptions.
-- Produce `03-research-notes.md` content.
+- Produce structured research input for Conductor's PRD merge.
 
 Left panel must show real Researcher process, not demo progress.
 
@@ -120,7 +147,7 @@ Required left-panel sections:
 - Source cards
 - Key findings
 - Facts vs assumptions
-- Research notes ready state
+- Research contribution ready state
 
 ### 4. Specialist Responsibility
 
@@ -137,7 +164,7 @@ Execution phase:
 - Show review checklist.
 - Identify missing PRD sections.
 - Identify product risks and trade-offs.
-- Produce `04-specialist-review.md` content.
+- Produce structured review input for Conductor's PRD merge.
 
 Right panel must show real Specialist process, not demo progress.
 
@@ -149,7 +176,7 @@ Required right-panel sections:
 - Risks
 - Scope warnings
 - Recommendations
-- Specialist review ready state
+- Specialist contribution ready state
 
 ## Runtime Contract Change
 
@@ -189,7 +216,7 @@ type RuntimeEvent =
   | { type: "task_status"; status: TaskStatus }
   | { type: "research_event"; stage: string; detail: string; sources?: SourceNote[] }
   | { type: "specialist_event"; stage: string; detail: string }
-  | { type: "artifact_written"; filename: string; path: string }
+  | { type: "artifact_written"; filename: "prd.md"; path: string }
   | { type: "error"; stage: string; message: string };
 ```
 
@@ -216,7 +243,7 @@ interface RuntimeRoleProfile {
 V1 fixed mappings:
 
 - Conductor: orchestration, task readiness, brief synthesis, dispatch, final merge.
-- Researcher: light research, sources, facts/inferences, research notes.
+- Researcher: light research, sources, facts/inferences, research contribution.
 - Specialist: product lead review, scope, risks, missing sections, recommendations.
 
 Do not expose custom agent composition in V1.
@@ -234,7 +261,8 @@ Do not expose custom agent composition in V1.
 7. Make left and right panels render real Researcher/Specialist events.
 8. Make Ark provider strategy the explicit V1 provider strategy in docs and code.
 9. Decide one source of runtime truth for desktop behavior. For V1 desktop, Rust/Tauri command path is the product path; TypeScript runtime may remain only as test harness if kept in sync.
-10. Add tests for conversation, agent questions, task brief creation, dispatch, event emission, and four-file output.
+10. Replace four-file artifact assumptions with the single-output contract: `prd.md`.
+11. Add tests for conversation, agent questions, task brief creation, dispatch, event emission, and single PRD output.
 
 ### UI Rules
 
@@ -242,7 +270,7 @@ Do not expose custom agent composition in V1.
 - Agent questions must appear in the center chat.
 - Side panels must show process, not alternate chat windows.
 - Final PRD remains the primary output after completion.
-- Research notes and specialist review remain separate artifacts.
+- Researcher and Specialist contributions remain visible in side panels, not separate default output files.
 
 ## Acceptance Criteria
 
@@ -266,10 +294,10 @@ Expected behavior:
 6. Conductor dispatches Researcher and Specialist.
 7. Left panel shows real Researcher stages and sources.
 8. Right panel shows real Specialist checklist, risks, and recommendations.
-9. The app writes the four standard files.
-10. `01-final-prd.md` does not contain raw research notes or specialist review noise.
-11. `03-research-notes.md` contains source-backed findings or clearly marked assumptions.
-12. `04-specialist-review.md` contains product risks, missing sections, and recommendations.
+9. The app writes exactly one default user-facing Markdown file: `prd.md`.
+10. `prd.md` contains a clean PRD draft with assumptions and open questions included.
+11. `prd.md` does not contain raw research dump or raw specialist-review noise.
+12. Researcher and Specialist process remains visible in the app.
 
 ### Technical Test Evidence Required In PR
 
@@ -277,8 +305,8 @@ PR description must include:
 
 - Screenshot or recording of the shared three-agent chat.
 - Screenshot or recording of left/right panels showing real execution process.
-- Sample generated output directory listing.
-- Contents preview or excerpt of the four generated files.
+- Sample generated output directory listing showing `prd.md`.
+- Contents preview or excerpt of `prd.md`.
 - Test command output for `npm test`.
 - Build command output for `npm run build`.
 - Tauri dev/manual run notes.
@@ -295,6 +323,7 @@ Do not add these in this task:
 - Cloud sync.
 - More templates beyond PRD.
 - Role marketplace.
+- Four-file default output package.
 
 ## Review Gate
 
@@ -307,4 +336,5 @@ Reject the PR if:
 - Researcher does not perform or display real light research behavior.
 - Specialist does not perform or display real product-review behavior.
 - Conductor does not produce a structured Task Brief before dispatch.
-- The generated package does not clearly separate PRD, assumptions, research notes, and specialist review.
+- The app still writes the old four default Markdown files.
+- The generated `prd.md` is not clean enough to hand to a developer or AI coding agent.
