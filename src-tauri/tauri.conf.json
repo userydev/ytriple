@@ -1,0 +1,29 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "yTriple",
+  "version": "0.1.0",
+  "identifier": "com.ytriple.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "bundle": {
+    "active": false
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "yTriple",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1080,
+        "minHeight": 680
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  }
+}

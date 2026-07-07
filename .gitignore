@@ -1,0 +1,12 @@
+node_modules/
+dist/
+build/
+.next/
+coverage/
+artifacts/
+.env
+.env.*
+!.env.example
+*.log
+src-tauri/target/
+ytriple-outputs/
