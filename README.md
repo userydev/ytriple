@@ -2,9 +2,9 @@
 
 Three Agents, One Perfect Output.
 
-yTriple 是一款轻量、垂直的桌面端 PRD 首稿工具。它通过一个主 Agent 与两个固定副 Agent 的协作，把模糊产品想法快速收束成正式 PRD 和独立参考资料。
+yTriple 是一款轻量、垂直的桌面端 PRD 首稿工具。它通过一个主 Agent 与两个固定副 Agent 的协作，把模糊产品想法快速收束成一份正式 PRD。
 
-V1 只聚焦一个场景：把模糊产品想法生成 `PRD 首稿交付包`。工作流固定为 `Conductor / Researcher / Specialist` 三个 Agent，不提供用户自定义编排，不修改工作区已有文件。
+V1 只聚焦一个场景：把模糊产品想法生成 `PRD 首稿`。工作流固定为 `Conductor / Researcher / Specialist` 三个 Agent，不提供用户自定义编排，不修改工作区已有文件。
 
 ## 本地使用
 
@@ -38,14 +38,11 @@ npm run tauri dev
 按需填写：
 
 - `Workspace path`：只读工作区绝对路径，可留空。
-- `Output root`：交付包输出根目录，可留空。留空时优先写到工作区，否则写到应用运行目录。
+- `Output root`：PRD 输出根目录，可留空。留空时优先写到工作区，否则写到应用运行目录。
 
 点击 `Generate PRD` 后会调用火山方舟，生成：
 
-- `01-final-prd.md`
-- `02-assumptions-and-open-questions.md`
-- `03-research-notes.md`
-- `04-specialist-review.md`
+- `prd.md`
 
 生成完成后可以在界面里打开输出目录。
 
@@ -65,15 +62,19 @@ npm run run:prd -- --input-file ./brief.md --workspace-root /absolute/workspace 
 
 - 产品 PRD V1：[docs/product/prd-v1.md](docs/product/prd-v1.md)
 - V1 产品契约：[docs/product/v1-product-contract.md](docs/product/v1-product-contract.md)
+- V1 Output Contract：[docs/product/v1-output-contract.md](docs/product/v1-output-contract.md)
 - V1 Runtime And Tool Contract：[docs/product/v1-runtime-tool-contract.md](docs/product/v1-runtime-tool-contract.md)
 - V1 Information Architecture：[docs/product/v1-information-architecture.md](docs/product/v1-information-architecture.md)
 - V1 UI And Interaction Spec：[docs/design/v1-ui-and-interaction-spec.md](docs/design/v1-ui-and-interaction-spec.md)
 - V1 Technical Architecture：[docs/technical/v1-technical-architecture.md](docs/technical/v1-technical-architecture.md)
 - V1 Implementation Roadmap：[docs/project/v1-implementation-roadmap.md](docs/project/v1-implementation-roadmap.md)
+- V1 Agent Conversation Runtime Fix：[docs/project/v1-agent-conversation-runtime-task.md](docs/project/v1-agent-conversation-runtime-task.md)
 
 ## 当前阶段
 
-当前仓库已经具备 V1 最短闭环：桌面壳、三舱 UI、Conductor 多轮聊天收集、只读工作区摘要、火山方舟 Responses 调用、Researcher Web Search 配置、固定三 Agent 编排、四文件交付包写出。
+当前仓库已经具备 V1 最短闭环雏形：桌面壳、三舱 UI、Conductor 多轮聊天收集、只读工作区摘要、火山方舟 Responses 调用、Researcher Web Search 配置、固定三 Agent 编排雏形、单文件 PRD 输出方向。
+
+但当前 V1 仍有阻断问题：必须落实真实三 Agent 会话、固定 Agent 编排、Conductor Task Brief、Researcher/Specialist 真实执行过程，以及默认单文件 `prd.md` 输出。
 
 ## Role Library Reference
 
