@@ -63,6 +63,7 @@ npm run run:prd -- --input-file ./brief.md --workspace-root /absolute/workspace 
 - 产品 PRD V1：[docs/product/prd-v1.md](docs/product/prd-v1.md)
 - V1 产品契约：[docs/product/v1-product-contract.md](docs/product/v1-product-contract.md)
 - V1 Output Contract：[docs/product/v1-output-contract.md](docs/product/v1-output-contract.md)
+- V1 Role Selection Contract：[docs/product/v1-role-selection-contract.md](docs/product/v1-role-selection-contract.md)
 - V1 Runtime And Tool Contract：[docs/product/v1-runtime-tool-contract.md](docs/product/v1-runtime-tool-contract.md)
 - V1 Information Architecture：[docs/product/v1-information-architecture.md](docs/product/v1-information-architecture.md)
 - V1 UI And Interaction Spec：[docs/design/v1-ui-and-interaction-spec.md](docs/design/v1-ui-and-interaction-spec.md)
@@ -74,7 +75,7 @@ npm run run:prd -- --input-file ./brief.md --workspace-root /absolute/workspace 
 
 当前仓库已经具备 V1 最短闭环雏形：桌面壳、三舱 UI、Conductor 多轮聊天收集、只读工作区摘要、火山方舟 Responses 调用、Researcher Web Search 配置、固定三 Agent 编排雏形、单文件 PRD 输出方向。
 
-但当前 V1 仍有阻断问题：必须落实真实三 Agent 会话、固定 Agent 编排、Conductor Task Brief、Researcher/Specialist 真实执行过程，以及默认单文件 `prd.md` 输出。
+但当前 V1 仍有阻断问题：必须落实真实三 Agent 会话、固定 Agent 编排、Conductor Task Brief、Researcher/Specialist 真实执行过程、手动角色配置，以及默认单文件 `prd.md` 输出。
 
 ## Role Library Reference
 
@@ -86,4 +87,4 @@ yTriple 仍只运行固定三 Agent：
 - `Researcher` 参考 `product/product-trend-researcher.md`
 - `Specialist` 参考 `product/product-manager.md`
 
-这些角色只用于定位、工作原则和审查视角，不向最终用户开放自定义 agent 编排。
+V1 允许在固定 slot 内进行手动角色配置，但不允许用户自定义 agent 编排。Conductor 默认锁定；Researcher 和 Specialist 只能从 curated allowlist 中选择。
