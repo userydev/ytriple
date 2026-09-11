@@ -2,6 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import {
   ArrowUpRight,
   BookOpen,
+  BookmarkPlus,
+  Sparkles,
+  ArrowRight,
   Check,
   ChevronDown,
   FileText,
@@ -17,6 +20,8 @@ import {
 } from "lucide-react";
 import type { Artifact, Source, Task } from "../shared/types";
 import { formatDate, formatTime, Markdown, type Dispatch } from "./common";
+import { useDocumentDraft } from "./drafts";
+import { ProcessView } from "./ProcessView";
 
 export function SourceList({
   sources,
@@ -117,9 +122,24 @@ export function ArtifactView({
   dispatch: Dispatch;
   compact?: boolean;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(artifact.content ?? "");
-  const [baseHash, setBaseHash] = useState(artifact.hash);
+  const {
+    draft: editState,
+    setDraft: setEditState,
+    changedExternally,
+  } = useDocumentDraft(
+    `artifact:${task.id}:${artifact.id}`,
+    artifact.content ?? "",
+    artifact.hash,
+  );
+  const { editing, content: draft, baseHash } = editState;
+  const setEditing = (editing: boolean) =>
+    setEditState((current) => ({ ...current, editing }));
+  const [refining, setRefining] = useState(false);
+  const [instruction, setInstruction] = useState("");
+  const [processing, setProcessing] = useState(false);
+  const [collecting, setCollecting] = useState(false);
+  const [collectedHash, setCollectedHash] = useState<string | null>(null);
+  const [refineHash, setRefineHash] = useState(artifact.hash);
   const [saving, setSaving] = useState(false);
   const [history, setHistory] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -131,11 +151,12 @@ export function ArtifactView({
     },
     [],
   );
-  const changedExternally = editing && baseHash !== artifact.hash;
   const beginEdit = () => {
-    setDraft(artifact.content ?? "");
-    setBaseHash(artifact.hash);
-    setEditing(true);
+    setEditState({
+      content: artifact.content ?? "",
+      baseHash: artifact.hash,
+      editing: true,
+    });
     setSaved(false);
   };
   const save = async () => {
@@ -166,6 +187,33 @@ export function ArtifactView({
     });
     setExporting(null);
   };
+  const collect = async () => {
+    setCollecting(true);
+    const result = await dispatch({
+      type: "library.collect",
+      taskId: task.id,
+      artifactId: artifact.id,
+      expectedHash: artifact.hash,
+    });
+    setCollecting(false);
+    if (result) setCollectedHash(artifact.hash);
+  };
+  const refine = async () => {
+    if (!instruction.trim() || processing) return;
+    setProcessing(true);
+    const result = await dispatch({
+      type: "artifact.refine",
+      taskId: task.id,
+      artifactId: artifact.id,
+      instruction: instruction.trim(),
+      expectedHash: refineHash,
+    });
+    setProcessing(false);
+    if (result) {
+      setInstruction("");
+      setRefining(false);
+    }
+  };
   return (
     <div className={`artifact-view ${compact ? "compact" : ""}`}>
       <div className="artifact-heading">
@@ -187,7 +235,7 @@ export function ArtifactView({
         </button>
       </div>
       <div className="artifact-actions">
-        {artifact.format === "md" ? (
+        {artifact.format === "md" || artifact.format === "html" ? (
           editing ? (
             <>
               <button
@@ -239,6 +287,35 @@ export function ArtifactView({
             </button>
           </>
         ) : null}
+        {!editing ? (
+          <>
+            {artifact.format === "md" || artifact.format === "html" ? (
+              <button
+                className={`button secondary small ${refining ? "selected" : ""}`}
+                disabled={Boolean(artifact.readError)}
+                onClick={() => {
+                  if (!refining) setRefineHash(artifact.hash);
+                  setRefining(!refining);
+                }}
+              >
+                <Sparkles size={13} />
+                继续加工
+              </button>
+            ) : null}
+            <button
+              className="text-button"
+              disabled={collecting || Boolean(artifact.readError)}
+              onClick={() => void collect()}
+            >
+              <BookmarkPlus size={14} />
+              {collecting
+                ? "收藏中…"
+                : collectedHash === artifact.hash
+                  ? "已收藏到 Lib"
+                  : "收藏到 Lib"}
+            </button>
+          </>
+        ) : null}
         <button
           className={`icon-button ${history ? "selected" : ""}`}
           title="查看版本记录"
@@ -254,6 +331,41 @@ export function ArtifactView({
           </span>
         ) : null}
       </div>
+      {refining && !editing ? (
+        <form
+          className="refine-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void refine();
+          }}
+        >
+          <label htmlFor={`refine-${artifact.id}`}>
+            让团队接着完善这份成果
+          </label>
+          <textarea
+            id={`refine-${artifact.id}`}
+            value={instruction}
+            onChange={(event) => setInstruction(event.target.value)}
+            placeholder="例如：保留结论，补上反方观点；或把第二段改得更简洁。"
+            rows={3}
+          />
+          <div>
+            <span>修订会保留版本记录</span>
+            <button
+              className="button primary small"
+              disabled={!instruction.trim() || processing}
+            >
+              {processing ? "正在交给团队…" : "开始加工"}
+              <ArrowRight size={13} />
+            </button>
+          </div>
+        </form>
+      ) : null}
+      {artifact.format === "png" || artifact.format === "pptx" ? (
+        <p className="editor-footnote">
+          需要修改时，可选择对应的 MD / HTML 源文档，继续加工并重新导出。
+        </p>
+      ) : null}
       {artifact.goalVersion !== task.goalVersion ? (
         <div className="inline-notice">
           这是目标版本 {artifact.goalVersion} 下的成果，当前目标已更新。
@@ -295,9 +407,16 @@ export function ArtifactView({
       {editing ? (
         <textarea
           className="artifact-editor"
-          aria-label="Markdown 原文编辑"
+          aria-label={
+            artifact.format === "html" ? "HTML 原文编辑" : "Markdown 原文编辑"
+          }
           value={draft}
-          onChange={(event) => setDraft(event.target.value)}
+          onChange={(event) =>
+            setEditState((current) => ({
+              ...current,
+              content: event.target.value,
+            }))
+          }
           spellCheck={false}
         />
       ) : artifact.format === "md" ? (
@@ -421,6 +540,9 @@ export function ContextPanel({
   onAdd: () => void;
   onClose?: () => void;
 }) {
+  const [evidenceTab, setEvidenceTab] = useState<"process" | "sources">(
+    "process",
+  );
   return (
     <aside className="context-panel">
       <header className="context-header">
@@ -438,7 +560,7 @@ export function ContextPanel({
             className={tab === "evidence" ? "active" : ""}
             onClick={() => onTab("evidence")}
           >
-            资料
+            过程与资料
             {task?.sources.length ? <span>{task.sources.length}</span> : null}
           </button>
         </div>
@@ -481,11 +603,29 @@ export function ContextPanel({
                 添加
               </button>
             </div>
-            <SourceList
-              sources={task?.sources ?? []}
-              dispatch={dispatch}
-              onAdd={onAdd}
-            />
+            <div className="panel-tabs evidence-inline-tabs">
+              <button
+                className={evidenceTab === "process" ? "active" : ""}
+                onClick={() => setEvidenceTab("process")}
+              >
+                Agent 过程
+              </button>
+              <button
+                className={evidenceTab === "sources" ? "active" : ""}
+                onClick={() => setEvidenceTab("sources")}
+              >
+                资料
+              </button>
+            </div>
+            {evidenceTab === "process" && task ? (
+              <ProcessView task={task} dispatch={dispatch} compact />
+            ) : (
+              <SourceList
+                sources={task?.sources ?? []}
+                dispatch={dispatch}
+                onAdd={onAdd}
+              />
+            )}
           </>
         ) : task ? (
           <ArtifactList key={task.id} task={task} dispatch={dispatch} compact />

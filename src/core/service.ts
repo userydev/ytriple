@@ -18,7 +18,16 @@ import {
   ensureOwnedDirectory,
   writeArtifactData,
   hydrateArtifactSync,
+  readOwnedArtifactSync,
+  hash,
 } from "./files.js";
+import {
+  collectArtifact,
+  librarySource,
+  listLibrary,
+  recoverLibrary,
+  saveLibraryEntry,
+} from "./library.js";
 import { importFile, importURL } from "./sources.js";
 import { TeamRuntime, type RuntimeCheckpoint } from "./runtime.js";
 import { probeProfile } from "./models.js";
@@ -87,6 +96,16 @@ export class WorkbenchService {
         this.notify();
       },
       writeArtifact: async (id, input) => {
+        const task = this.store.task(id);
+        const selected = task.events.findLast(
+          (event) =>
+            event.type === "artifact.refine_requested" &&
+            event.goalVersion === input.goalVersion,
+        )?.data?.artifactId;
+        if (selected && input.artifactId !== selected)
+          throw new Error(
+            `本轮正在修订用户选定的成果 ${selected}；请先读取该成果，再用原 artifactId 保存，不要另建文档。`,
+          );
         const result = await writeArtifact(this.store, id, input);
         this.notify();
         return result;
@@ -105,6 +124,7 @@ export class WorkbenchService {
   }
   async initialize(): Promise<Snapshot> {
     await recoverArtifacts(this.store);
+    await recoverLibrary(this.store, this.store.settings().aiRoot);
     await this.refreshSystem();
     return this.snapshot();
   }
@@ -152,6 +172,7 @@ export class WorkbenchService {
       settings: this.store.settings(),
       system: this.system!,
       projects: this.projects,
+      library: listLibrary(this.store, this.store.settings().aiRoot),
     };
   }
   private start(id: string): void {
@@ -301,6 +322,97 @@ export class WorkbenchService {
         });
         break;
       }
+      case "artifact.refine": {
+        const instruction = requireText(command.instruction, 40000, "处理要求");
+        await this.runtime.stop(command.taskId);
+        const task = this.store.task(command.taskId);
+        const artifact = task.artifacts.find(
+          (item) => item.id === command.artifactId,
+        );
+        if (!artifact || !["md", "html"].includes(artifact.format))
+          throw new Error(
+            "请选择 Markdown 或 HTML 原文档继续处理；图片和 PPT 请修改源文档后重新导出。",
+          );
+        if (
+          hash(readOwnedArtifactSync(artifact, task.workspace)) !==
+          command.expectedHash
+        )
+          throw new Error("成果已经改变，请刷新后再提交处理要求。");
+        this.store.updateTask(task.id, (current) => {
+          current.goalVersion++;
+          current.status = "idle";
+          current.error = undefined;
+          current.messages.push({
+            id: uid(),
+            role: "user",
+            member: current.member,
+            createdAt: now(),
+            goalVersion: current.goalVersion,
+            content: `继续处理《${artifact.title}》：\n${instruction}`,
+          });
+          current.events.push({
+            id: uid(),
+            type: "artifact.refine_requested",
+            member: current.member,
+            summary: `继续处理《${artifact.title}》：${instruction.slice(0, 140)}`,
+            createdAt: now(),
+            goalVersion: current.goalVersion,
+            data: {
+              artifactId: artifact.id,
+              expectedHash: command.expectedHash,
+              artifactVersion: artifact.version,
+              instruction,
+            },
+          });
+        });
+        this.store.saveCheckpoint(task.id, null);
+        this.start(task.id);
+        break;
+      }
+      case "library.collect": {
+        const settings = this.store.settings();
+        if (this.system?.state === "missing") {
+          this.system = await bootstrapSystem(
+            settings.aiRoot,
+            settings.codeRoot,
+          );
+          if (this.system.state !== "ready")
+            throw new Error("本机 AI 规则尚未就绪，请在设置中检查。");
+        }
+        const entry = await collectArtifact(
+          this.store,
+          settings.aiRoot,
+          command,
+        );
+        this.store.event(command.taskId, {
+          type: "library.collected",
+          summary: `已收藏《${entry.title}》到本地 Lib，可作为可复用资产继续编辑。`,
+          goalVersion: this.store.task(command.taskId).goalVersion,
+          data: {
+            entryId: entry.id,
+            artifactId: command.artifactId,
+            path: entry.path,
+          },
+        });
+        break;
+      }
+      case "library.save":
+        await saveLibraryEntry(
+          this.store,
+          this.store.settings().aiRoot,
+          command,
+        );
+        break;
+      case "library.reuse":
+        await this.addSource(
+          command.taskId,
+          librarySource(
+            this.store,
+            this.store.settings().aiRoot,
+            command.entryId,
+          ),
+        );
+        break;
       case "artifact.export":
       case "artifact.exportPNG": {
         const task = this.runtimeTask(command.taskId);
@@ -370,6 +482,7 @@ export class WorkbenchService {
         await this.runtime.stopAll();
         const settings = validateSettings(command.settings);
         this.store.setConfig("settings", settings);
+        await recoverLibrary(this.store, settings.aiRoot);
         await this.refreshSystem();
         break;
       }

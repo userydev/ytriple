@@ -46,9 +46,13 @@ import {
   type Snapshot,
   type Task,
   type TaskKind,
+  type WindowKind,
 } from "../shared/types";
 import { ArtifactList, ContextPanel, SourceList } from "./Artifacts";
 import { Settings } from "./Settings";
+import { Library } from "./Library";
+import { ProcessView } from "./ProcessView";
+import { WindowControls } from "./WindowControls";
 import {
   Markdown,
   Modal,
@@ -223,7 +227,7 @@ function Sidebar({
           [
             { id: "work", label: "工作台", icon: Compass },
             { id: "projects", label: "项目", icon: Folder },
-            { id: "library", label: "资料与知识", icon: BookOpen },
+            { id: "library", label: "本地 Lib", icon: BookOpen },
           ] as const
         ).map((item) => (
           <button
@@ -505,6 +509,23 @@ function Composer({
   );
 }
 
+function userMessageText(
+  task: Task,
+  message: Task["messages"][number],
+): string {
+  if (!message.content.startsWith("继续处理已选成果")) return message.content;
+  const request = task.events.find(
+    (event) =>
+      event.type === "artifact.refine_requested" &&
+      event.goalVersion === message.goalVersion,
+  );
+  if (typeof request?.data?.instruction !== "string") return message.content;
+  const artifact = task.artifacts.find(
+    (item) => item.id === request.data?.artifactId,
+  );
+  return `继续处理《${artifact?.title ?? "选定成果"}》：\n${request.data.instruction}`;
+}
+
 function Conversation({ task, dispatch }: { task: Task; dispatch: Dispatch }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -613,7 +634,7 @@ function Conversation({ task, dispatch }: { task: Task; dispatch: Dispatch }) {
                 {message.role === "assistant" ? (
                   <Markdown dispatch={dispatch}>{message.content}</Markdown>
                 ) : (
-                  <p>{message.content}</p>
+                  <p>{userMessageText(task, message)}</p>
                 )}
               </div>
             </article>
@@ -1087,125 +1108,12 @@ function Projects({
   );
 }
 
-function Library({
-  snapshot,
-  dispatch,
-  onTask,
-  onAdd,
+export function App({
+  windowKind = AUXILIARY ?? "main",
 }: {
-  snapshot: Snapshot | null;
-  dispatch: Dispatch;
-  onTask: (id: string) => void;
-  onAdd: () => void;
+  windowKind?: WindowKind;
 }) {
-  const [search, setSearch] = useState("");
-  const sources =
-    snapshot?.tasks.flatMap((task) =>
-      task.sources.map((source) => ({ source, task })),
-    ) ?? [];
-  const filtered = sources.filter(({ source }) =>
-    `${source.title} ${source.text}`
-      .toLowerCase()
-      .includes(search.toLowerCase()),
-  );
-  return (
-    <div className="collection-page">
-      <div className="page-heading">
-        <span className="eyebrow">LIBRARY</span>
-        <div className="heading-with-action">
-          <h1>积累，可以接着用</h1>
-          <button className="button secondary" onClick={onAdd}>
-            <Plus size={15} />
-            添加资料
-          </button>
-        </div>
-        <p>回到原始材料，沿着已有工作继续理解。</p>
-      </div>
-      {sources.length ? (
-        <>
-          <label className="library-search">
-            <Search size={16} />
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="搜索材料名称或已取得的正文"
-              aria-label="搜索资料"
-            />
-            <span>{filtered.length} 项</span>
-          </label>
-          <div className="library-list">
-            {filtered.length ? (
-              filtered.map(({ source, task }) => (
-                <article
-                  className="library-row"
-                  key={`${task.id}-${source.id}`}
-                >
-                  <div className="library-row-heading">
-                    <FileText size={18} strokeWidth={1.5} />
-                    <h3>{source.title}</h3>
-                    <time>{formatDate(source.addedAt)}</time>
-                  </div>
-                  <p>{source.text.slice(0, 160) || "尚未取得可阅读的正文"}</p>
-                  <div className="library-row-foot">
-                    <span>{source.coverage}</span>
-                    <button
-                      className="text-button"
-                      onClick={() => onTask(task.id)}
-                    >
-                      回到「{task.title}」<ArrowUpRight size={13} />
-                    </button>
-                    {source.type === "url" ? (
-                      <button
-                        className="icon-button"
-                        title="打开原始链接"
-                        aria-label="打开原始链接"
-                        onClick={() =>
-                          void dispatch({
-                            type: "url.open",
-                            url: source.location,
-                          })
-                        }
-                      >
-                        <Link2 size={14} />
-                      </button>
-                    ) : null}
-                  </div>
-                </article>
-              ))
-            ) : (
-              <div className="section-empty">
-                <Search size={25} />
-                <h3>没有找到这份资料</h3>
-                <p>换个关键词试试。</p>
-              </div>
-            )}
-          </div>
-        </>
-      ) : (
-        <div className="collection-empty">
-          <div className="large-line-icon">
-            <BookOpen size={46} strokeWidth={1.1} />
-          </div>
-          <h2>有用的理解，从材料开始</h2>
-          <p>
-            导入文章、笔记或项目资料。
-            <br />
-            随着工作推进，它们会在这里积累。
-          </p>
-          <button className="button secondary" onClick={onAdd}>
-            加入一份材料
-            <Plus size={14} />
-          </button>
-          <p className="collection-footnote">
-            来源接入与验证状态，以真实导入结果为准。
-          </p>
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function App() {
+  const auxiliary = windowKind === "main" ? null : windowKind;
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [connection, setConnection] = useState<
     "loading" | "connected" | "unavailable" | "failed"
@@ -1218,7 +1126,12 @@ export function App() {
   const [contextTab, setContextTab] = useState<"artifact" | "evidence">(
     "artifact",
   );
-  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 760);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [evidenceTab, setEvidenceTab] = useState<"process" | "sources">(
+    "process",
+  );
+  const initialSelectionLoaded = useRef(false);
+  const composerDrafts = useRef(new Map<string, ComposerDraft>());
   const [dialog, setDialog] = useState<Dialog>(null);
   const [error, setError] = useState<string | null>(null);
   const [composerDraft, setComposerDraft] = useState<ComposerDraft>(() => ({
@@ -1229,46 +1142,86 @@ export function App() {
   const [newWorkRevision, setNewWorkRevision] = useState(0);
   useEffect(() => {
     document.title =
-      AUXILIARY === "artifact"
+      auxiliary === "artifact"
         ? "ytriple · 成果工作区"
-        : AUXILIARY === "evidence"
-          ? "ytriple · 资料与依据"
+        : auxiliary === "evidence"
+          ? "ytriple · Agent 协作过程"
           : "ytriple · 工作台";
-  }, []);
+  }, [auxiliary]);
   const connected = connection === "connected";
-  const task = snapshot?.tasks.find((item) => item.id === selectedTaskId);
-  const dispatch = useCallback<Dispatch>(async (command: Command) => {
-    if (!window.ytriple) {
-      setError("桌面连接未接入。请在 ytriple 桌面应用中执行这项操作。");
-      return null;
-    }
-    try {
-      const result = await window.ytriple.invoke(command);
-      setSnapshot(result);
+  const visibleTaskId = auxiliary
+    ? snapshot?.desktop
+      ? snapshot.desktop.taskId
+      : selectedTaskId
+    : selectedTaskId;
+  const task = snapshot?.tasks.find((item) => item.id === visibleTaskId);
+  const triple = snapshot?.desktop?.mode === "triple";
+  const collapsed = snapshot?.desktop?.collapsed[windowKind] ?? false;
+  const acceptSnapshot = useCallback(
+    (value: Snapshot) => {
+      setSnapshot((current) => {
+        const currentRevision = current?.desktop?.revision ?? -1;
+        const incomingRevision = value.desktop?.revision ?? -1;
+        return current && currentRevision > incomingRevision
+          ? { ...value, desktop: current.desktop }
+          : value;
+      });
+      if (!initialSelectionLoaded.current) {
+        initialSelectionLoaded.current = true;
+        if (value.desktop && !auxiliary) {
+          setSelectedTaskId(value.desktop.taskId);
+          const restored = value.tasks.find(
+            (item) => item.id === value.desktop?.taskId,
+          );
+          if (restored)
+            setComposerDraft((current) =>
+              current.text
+                ? current
+                : (composerDrafts.current.get(restored.id) ?? {
+                    text: "",
+                    kind: restored.kind,
+                    member: restored.member,
+                    profileId: restored.profileId ?? "",
+                  }),
+            );
+        }
+      }
       setConnection("connected");
-      return result;
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "操作未完成，请稍后重试。",
-      );
-      return null;
-    }
-  }, []);
+    },
+    [auxiliary],
+  );
+  const dispatch = useCallback<Dispatch>(
+    async (command: Command) => {
+      if (!window.ytriple) {
+        setError("桌面连接未接入。请在 ytriple 桌面应用中执行这项操作。");
+        return null;
+      }
+      try {
+        const result = await window.ytriple.invoke(command);
+        acceptSnapshot(result);
+        return result;
+      } catch (cause) {
+        setError(
+          cause instanceof Error ? cause.message : "操作未完成，请稍后重试。",
+        );
+        return null;
+      }
+    },
+    [acceptSnapshot],
+  );
   useEffect(() => {
     if (!window.ytriple) return;
     let active = true;
     const unsubscribe = window.ytriple.subscribe((value) => {
       if (active) {
-        setSnapshot(value);
-        setConnection("connected");
+        acceptSnapshot(value);
       }
     });
     void window.ytriple
       .invoke({ type: "snapshot" })
       .then((value) => {
         if (active) {
-          setSnapshot(value);
-          setConnection("connected");
+          acceptSnapshot(value);
         }
       })
       .catch((cause: unknown) => {
@@ -1283,24 +1236,27 @@ export function App() {
       active = false;
       unsubscribe();
     };
-  }, []);
+  }, [acceptSnapshot]);
   const closeDialog = useCallback(() => {
     setDialog(null);
     setSourceDraft(null);
   }, []);
   const newWork = useCallback(() => {
+    composerDrafts.current.set(selectedTaskId ?? "new", composerDraft);
     setSelectedTaskId(null);
+    void dispatch({ type: "window.select", taskId: null });
     setPage("work");
+    if (triple || window.innerWidth <= 760) setSidebarOpen(false);
     setComposerDraft({ ...EMPTY_DRAFT });
     setSeedRevision((value) => value + 1);
     setNewWorkRevision((value) => value + 1);
-  }, []);
+  }, [dispatch, composerDraft, selectedTaskId, triple]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
         (event.metaKey || event.ctrlKey) &&
         event.key.toLowerCase() === "n" &&
-        !AUXILIARY
+        !auxiliary
       ) {
         event.preventDefault();
         newWork();
@@ -1311,14 +1267,19 @@ export function App() {
   }, [newWork]);
   const selectTask = (id: string, created?: Task) => {
     const selected = created ?? snapshot?.tasks.find((item) => item.id === id);
+    composerDrafts.current.set(selectedTaskId ?? "new", composerDraft);
     setSelectedTaskId(id);
+    void dispatch({ type: "window.select", taskId: id });
     setPage("work");
-    setComposerDraft({
-      text: "",
-      kind: selected?.kind ?? "research",
-      member: selected?.member ?? "coordinator",
-      profileId: selected?.profileId ?? "",
-    });
+    if (triple || window.innerWidth <= 760) setSidebarOpen(false);
+    setComposerDraft(
+      composerDrafts.current.get(id) ?? {
+        text: "",
+        kind: selected?.kind ?? "research",
+        member: selected?.member ?? "coordinator",
+        profileId: selected?.profileId ?? "",
+      },
+    );
     setSeedRevision((value) => value + 1);
   };
   const createTask = async (
@@ -1362,7 +1323,10 @@ export function App() {
   };
   const addSource = () => {
     setSourceDraft(!selectedTaskId ? { ...composerDraft } : null);
-    if (page === "library" && !AUXILIARY) setSelectedTaskId(null);
+    if (page === "library" && !auxiliary) {
+      setSelectedTaskId(null);
+      void dispatch({ type: "window.select", taskId: null });
+    }
     setDialog("source");
   };
   const statusMessage =
@@ -1374,13 +1338,18 @@ export function App() {
           ? "正在读取本机工作空间…"
           : null;
   return (
-    <div className={`app-shell ${AUXILIARY ? "auxiliary-shell" : ""}`}>
-      {!AUXILIARY ? (
+    <div
+      className={`app-shell ${auxiliary ? "auxiliary-shell" : ""} ${triple ? "triple-layout" : "single-layout"} ${collapsed ? "window-collapsed" : ""}`}
+    >
+      {!auxiliary ? (
         <Sidebar
           snapshot={snapshot}
           page={page}
           selectedTaskId={selectedTaskId}
-          onPage={setPage}
+          onPage={(next) => {
+            setPage(next);
+            if (triple || window.innerWidth <= 760) setSidebarOpen(false);
+          }}
           onTask={selectTask}
           onNew={newWork}
           connected={connected}
@@ -1391,7 +1360,7 @@ export function App() {
       <main className="main-shell">
         <header className="topbar">
           <div className="topbar-location">
-            {!AUXILIARY ? (
+            {!auxiliary ? (
               <button
                 className="icon-button"
                 aria-label={sidebarOpen ? "收起侧栏" : "展开侧栏"}
@@ -1405,21 +1374,21 @@ export function App() {
               </span>
             )}
             <span className="breadcrumb">
-              {AUXILIARY
+              {auxiliary
                 ? (task?.title ?? "当前工作")
                 : {
                     work: "工作空间",
                     projects: "项目",
-                    library: "资料与知识",
+                    library: "本地 Lib",
                     settings: "设置",
                   }[page]}
             </span>
             <ChevronRight size={12} />
             <strong>
-              {AUXILIARY
-                ? AUXILIARY === "artifact"
+              {auxiliary
+                ? auxiliary === "artifact"
                   ? "成果工作区"
-                  : "资料与依据"
+                  : "Agent 协作过程"
                 : page === "work"
                   ? (task?.title ?? "新的开始")
                   : page === "settings"
@@ -1428,7 +1397,7 @@ export function App() {
             </strong>
           </div>
           <div className="topbar-actions">
-            {task && page === "work" && !AUXILIARY ? (
+            {task && page === "work" && !auxiliary ? (
               <>
                 <TaskControl key={task.id} task={task} dispatch={dispatch} />
                 <button
@@ -1441,7 +1410,7 @@ export function App() {
                 </button>
               </>
             ) : null}
-            {!AUXILIARY && page === "work" ? (
+            {!auxiliary && page === "work" && !triple ? (
               <button
                 className={`icon-button ${contextOpen ? "selected" : ""}`}
                 aria-label={contextOpen ? "收起成果与资料" : "展开成果与资料"}
@@ -1450,6 +1419,11 @@ export function App() {
                 <PanelRight size={17} />
               </button>
             ) : null}
+            <WindowControls
+              desktop={snapshot?.desktop}
+              kind={windowKind}
+              dispatch={dispatch}
+            />
             <span className="topbar-local">
               <span className={`tiny-dot ${connected ? "green" : ""}`} />
               {connected ? "本机工作台" : "未连接"}
@@ -1478,40 +1452,68 @@ export function App() {
             ) : null}
           </div>
         ) : null}
-        {AUXILIARY ? (
-          <div className="auxiliary-body">
+        {auxiliary ? (
+          <div
+            className={`auxiliary-body ${auxiliary === "evidence" ? "evidence-body" : "artifact-body"}`}
+          >
             {task ? (
-              AUXILIARY === "artifact" ? (
-                <ArtifactList key={task.id} task={task} dispatch={dispatch} />
+              auxiliary === "artifact" ? (
+                <ArtifactList
+                  key={`aux-artifacts:${task.id}`}
+                  task={task}
+                  dispatch={dispatch}
+                />
               ) : (
                 <>
-                  <div className="page-heading">
-                    <span className="eyebrow">EVIDENCE</span>
-                    <div className="heading-with-action">
-                      <h1>沿着依据，继续理解</h1>
-                      <button className="button secondary" onClick={addSource}>
-                        <Plus size={15} />
-                        添加资料
+                  <div className="evidence-toolbar">
+                    <div className="panel-tabs">
+                      <button
+                        className={evidenceTab === "process" ? "active" : ""}
+                        onClick={() => setEvidenceTab("process")}
+                      >
+                        Agent 过程
+                      </button>
+                      <button
+                        className={evidenceTab === "sources" ? "active" : ""}
+                        onClick={() => setEvidenceTab("sources")}
+                      >
+                        资料 <span>{task.sources.length}</span>
                       </button>
                     </div>
-                    <p>{task.goal}</p>
+                    <button className="text-button" onClick={addSource}>
+                      <Plus size={13} />
+                      添加资料
+                    </button>
                   </div>
-                  <SourceList
-                    sources={task.sources}
-                    dispatch={dispatch}
-                    onAdd={addSource}
-                  />
+                  {evidenceTab === "process" ? (
+                    <ProcessView task={task} dispatch={dispatch} />
+                  ) : (
+                    <SourceList
+                      key={`sources:${task.id}`}
+                      sources={task.sources}
+                      dispatch={dispatch}
+                      onAdd={addSource}
+                    />
+                  )}
                 </>
               )
             ) : (
-              <div className="collection-empty">
-                <FolderOpen size={36} strokeWidth={1.3} />
+              <div className="collection-empty auxiliary-empty">
+                {auxiliary === "evidence" ? (
+                  <Layers2 size={30} strokeWidth={1.3} />
+                ) : (
+                  <FileText size={30} strokeWidth={1.3} />
+                )}
                 <h2>
-                  {connection === "loading"
-                    ? "正在打开这项工作"
-                    : "暂时无法找到这项工作"}
+                  {auxiliary === "evidence"
+                    ? "看见团队怎样推进"
+                    : "成果可以接着做"}
                 </h2>
-                <p>回到主窗口，选择一项已保存的工作。</p>
+                <p>
+                  {auxiliary === "evidence"
+                    ? "选中一项工作，查看成员分工、依据与公开工作摘要。"
+                    : "选择工作后，可编辑、继续加工或收藏到本地 Lib。"}
+                </p>
               </div>
             )}
           </div>
@@ -1534,6 +1536,7 @@ export function App() {
             dispatch={dispatch}
             onTask={selectTask}
             onAdd={addSource}
+            selectedTaskId={selectedTaskId}
           />
         ) : (
           <div className="work-layout">
@@ -1602,7 +1605,7 @@ export function App() {
                 onConfigure={() => setPage("settings")}
               />
             </section>
-            {contextOpen ? (
+            {contextOpen && !triple ? (
               <ContextPanel
                 task={task}
                 tab={contextTab}

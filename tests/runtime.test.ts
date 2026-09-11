@@ -7,6 +7,7 @@ import {
   functionCall,
   modelResponder,
   modelStreamResponder,
+  modelError,
 } from "@openai/agents/testing";
 import type {
   Artifact,
@@ -19,6 +20,7 @@ import {
   type RuntimeCheckpoint,
   type RuntimeHooks,
 } from "../src/core/runtime.js";
+import { buildAgentProgress } from "../src/shared/progress.js";
 
 function fixture() {
   const task: Task = {
@@ -156,6 +158,21 @@ test("SDK executes member delegation, reads evidence, consumes returned results 
     ],
     modelResponder((call) => {
       assert.match(JSON.stringify(call.request.input), /ORCHID 42/);
+      return [
+        functionCall(
+          "report_progress",
+          {
+            stage: "finding",
+            summary: "资料 source-1 已核对，关键结果为 ORCHID 42。",
+            sourceIds: ["source-1"],
+            artifactIds: [],
+          },
+          { callId: "report-1" },
+        ),
+      ];
+    }),
+    modelResponder((call) => {
+      assert.match(JSON.stringify(call.request.input), /recorded/);
       return [assistantMessage("已从 source-1 核对：ORCHID 42。")];
     }),
   ]);
@@ -196,6 +213,50 @@ test("SDK executes member delegation, reads evidence, consumes returned results 
         e.type === "artifact_written" &&
         typeof e.data?.operationId === "string",
     ),
+  );
+  const delegation = f.task.events.find(
+    (event) => event.type === "delegation_started",
+  )!;
+  const read = f.task.events.find(
+    (event) =>
+      event.type === "tool_completed" && event.data?.tool === "read_source",
+  )!;
+  const report = f.task.events.find(
+    (event) => event.type === "progress_reported",
+  )!;
+  assert.equal(read.data?.sourceId, "source-1");
+  assert.equal(read.summary, "研究员已阅读资料");
+  assert.ok(
+    f.task.events
+      .filter((event) => /^(tool|delegation)_/.test(event.type))
+      .every(
+        (event) =>
+          !/read_source|read_artifact|write_artifact|report_progress|list_materials|consult_researcher/.test(
+            event.summary,
+          ),
+      ),
+    "public activity uses readable labels while data.tool preserves protocol names",
+  );
+  assert.equal(read.data?.invocationId, delegation.data?.childInvocationId);
+  assert.equal(read.data?.parentInvocationId, delegation.data?.invocationId);
+  assert.equal(report.data?.invocationId, read.data?.invocationId);
+  assert.deepEqual(report.data?.sourceIds, ["source-1"]);
+  assert.equal(report.data?.stage, "finding");
+  assert.ok(
+    !read.data?.result,
+    "source body must not be copied into the event log",
+  );
+  const lanes = buildAgentProgress(f.task);
+  assert.equal(lanes.length, 2);
+  assert.ok(lanes.every((lane) => lane.status === "completed"));
+  assert.equal(
+    lanes.find((lane) => lane.member === "researcher")?.tools.length,
+    2,
+  );
+  assert.equal(
+    f.task.events.filter((event) => event.type === "agent_started").length,
+    2,
+    "approval checkpoints do not create extra agent cards",
   );
   assert.equal(f.task.messages.at(-1)?.content, "已核查并保存报告。");
   assert.equal(f.checkpoint(), undefined);
@@ -299,6 +360,18 @@ test("a paused nested member resumes inside the original SDK delegation", async 
     ],
   ]);
   const child = new ScriptedModel([
+    [
+      functionCall(
+        "report_progress",
+        {
+          stage: "plan",
+          summary: "正在核对资料并保存一份报告。",
+          sourceIds: ["source-1"],
+          artifactIds: [],
+        },
+        { callId: "nested-report" },
+      ),
+    ],
     [functionCall("write_artifact", draft, { callId: "nested-write" })],
     modelStreamResponder(async () => {
       childWaiting.resolve();
@@ -317,6 +390,14 @@ test("a paused nested member resumes inside the original SDK delegation", async 
   await done;
   assert.equal(f.writes(), 1);
   assert.equal(f.task.status, "paused");
+  const pausedLanes = buildAgentProgress(f.task);
+  assert.equal(pausedLanes.length, 2);
+  assert.ok(pausedLanes.every((lane) => lane.status === "paused"));
+  assert.ok(f.task.events.some((event) => event.type === "delegation_paused"));
+  assert.equal(
+    f.task.events.filter((event) => event.type === "progress_reported").length,
+    1,
+  );
   const childAfter = new ScriptedModel([
     modelResponder((call) => {
       assert.match(JSON.stringify(call.request.input), /nested-write/);
@@ -338,6 +419,18 @@ test("a paused nested member resumes inside the original SDK delegation", async 
   }).run(f.task.id);
   assert.equal(f.task.status, "completed", f.task.error);
   assert.equal(f.writes(), 1);
+  const resumedLanes = buildAgentProgress(f.task);
+  assert.equal(resumedLanes.length, 2);
+  assert.ok(resumedLanes.every((lane) => lane.status === "completed"));
+  assert.equal(
+    f.task.events.filter((event) => event.type === "progress_reported").length,
+    1,
+  );
+  assert.equal(
+    f.task.events.filter((event) => event.type === "agent_started").length,
+    2,
+  );
+  assert.ok(f.task.events.some((event) => event.type === "agent_resumed"));
   childAfter.assertComplete();
   parentAfter.assertComplete();
 });
@@ -385,4 +478,226 @@ test("clarification pauses for a real user answer and bounded input omits old go
   await new TeamRuntime(f.hooks, { modelFactory: () => model }).run(f.task.id);
   assert.equal(f.task.status, "waiting", f.task.error);
   assert.equal(f.task.messages.at(-1)?.content, "这份报告面向谁？");
+});
+
+test("public progress rejects nonexistent references and can recover with an honest summary", async () => {
+  const f = fixture();
+  const model = new ScriptedModel([
+    [
+      functionCall(
+        "report_progress",
+        {
+          stage: "finding",
+          summary: "不能发布的虚构来源",
+          sourceIds: ["invented"],
+          artifactIds: [],
+        },
+        { callId: "bad-report" },
+      ),
+    ],
+    modelResponder((call) => {
+      assert.match(JSON.stringify(call.request.input), /不存在/);
+      return [
+        functionCall(
+          "report_progress",
+          {
+            stage: "decision",
+            summary: "当前没有这条依据，先标为待核查。",
+            sourceIds: [],
+            artifactIds: [],
+          },
+          { callId: "honest-report" },
+        ),
+      ];
+    }),
+    [assistantMessage("待核查项已标明。")],
+  ]);
+  await new TeamRuntime(f.hooks, { modelFactory: () => model }).run(f.task.id);
+  assert.equal(f.task.status, "completed", f.task.error);
+  assert.equal(
+    f.task.events.filter((event) => event.type === "progress_reported").length,
+    1,
+  );
+  assert.ok(
+    f.task.events.some(
+      (event) =>
+        event.type === "tool_failed" && event.data?.callId === "bad-report",
+    ),
+  );
+  assert.doesNotMatch(JSON.stringify(f.task.events), /不能发布的虚构来源/);
+});
+
+test("a nested provider failure closes both member activity and delegation with the same identities", async () => {
+  const f = fixture();
+  const parent = new ScriptedModel([
+    [
+      functionCall(
+        "consult_researcher",
+        { input: "核查资料" },
+        { callId: "failed-consult" },
+      ),
+    ],
+  ]);
+  const child = new ScriptedModel([
+    modelError(new Error("synthetic connection failure")),
+  ]);
+  await new TeamRuntime(f.hooks, {
+    modelFactory: (_profile, _key, member) =>
+      member === "researcher" ? child : parent,
+  }).run(f.task.id);
+  assert.equal(f.task.status, "failed");
+  const lanes = buildAgentProgress(f.task);
+  assert.equal(lanes.length, 2);
+  assert.ok(lanes.every((lane) => lane.status === "failed"));
+  const delegation = f.task.events.find(
+    (event) => event.type === "delegation_failed",
+  )!;
+  const childFailure = f.task.events.find(
+    (event) => event.type === "agent_failed" && event.member === "researcher",
+  )!;
+  assert.ok(delegation, JSON.stringify(f.task.events, null, 2));
+  assert.ok(childFailure, JSON.stringify(f.task.events, null, 2));
+  assert.equal(
+    childFailure.data?.invocationId,
+    delegation.data?.childInvocationId,
+  );
+});
+
+test("raw model reasoning events and provider metadata never enter public task events", async () => {
+  const f = fixture();
+  const secretReasoning = "PRIVATE_REASONING_SENTINEL_do_not_render";
+  const model = new ScriptedModel([
+    modelStreamResponder(() => [
+      { type: "response_started" },
+      {
+        type: "model",
+        event: { type: "reasoning-delta", delta: secretReasoning },
+      },
+      {
+        type: "model",
+        event: {
+          type: "response.reasoning_text.delta",
+          delta: secretReasoning,
+        },
+      },
+      {
+        type: "output_text_delta",
+        delta: "这是公开回复。",
+        providerData: { privateReasoning: secretReasoning },
+      },
+      {
+        type: "response_done",
+        response: {
+          id: "public-response",
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          output: [assistantMessage("这是公开回复。")],
+          providerData: { privateReasoning: secretReasoning },
+        },
+      },
+    ]),
+  ]);
+  await new TeamRuntime(f.hooks, { modelFactory: () => model }).run(f.task.id);
+  assert.equal(f.task.status, "completed", f.task.error);
+  assert.doesNotMatch(
+    JSON.stringify(f.task.events),
+    new RegExp(secretReasoning),
+  );
+  assert.equal(f.task.messages.at(-1)?.content, "这是公开回复。");
+  assert.ok(f.task.events.some((event) => event.type === "member_output"));
+  assert.ok(
+    !f.task.events.some((event) => event.type === "progress_reported"),
+    "a simple reply must not manufacture progress",
+  );
+});
+
+test("selected refinement stays in structured model context and revises the selected artifact", async () => {
+  const f = fixture();
+  const artifact = await f.hooks.writeArtifact(f.task.id, {
+    ...draft,
+    format: "md",
+    artifactId: undefined,
+    expectedHash: undefined,
+    goalVersion: 1,
+    operationId: "seed-refinement",
+  });
+  f.task.goalVersion = 2;
+  f.task.messages.push({
+    id: "refine-user",
+    role: "user",
+    member: "coordinator",
+    content: "继续处理《合成报告》：精简为一句话",
+    createdAt: "",
+    goalVersion: 2,
+  });
+  f.task.events.push({
+    id: "refine-target",
+    type: "artifact.refine_requested",
+    summary: "继续处理《合成报告》",
+    member: "coordinator",
+    createdAt: "",
+    goalVersion: 2,
+    data: {
+      artifactId: artifact.id,
+      expectedHash: artifact.hash,
+      instruction: "精简为一句话",
+    },
+  });
+  f.task.events.push({
+    id: "old-refine",
+    type: "artifact.refine_requested",
+    summary: "旧目标",
+    member: "coordinator",
+    createdAt: "",
+    goalVersion: 1,
+    data: {
+      artifactId: "OLD_REFINEMENT_SENTINEL",
+      expectedHash: "0".repeat(64),
+      instruction: "旧要求不能再进入上下文",
+    },
+  });
+  const model = new ScriptedModel([
+    modelResponder((call) => {
+      const raw = JSON.stringify(call.request.input);
+      assert.match(raw, /selectedRefinement/);
+      assert.match(raw, new RegExp(artifact.id));
+      assert.match(raw, new RegExp(artifact.hash));
+      assert.match(raw, /不要另建同名文档/);
+      assert.doesNotMatch(raw, /OLD_REFINEMENT_SENTINEL/);
+      return [
+        functionCall(
+          "read_artifact",
+          { artifactId: artifact.id, start: null, maxCharacters: null },
+          { callId: "read-selected" },
+        ),
+      ];
+    }),
+    [
+      functionCall(
+        "write_artifact",
+        {
+          title: artifact.title,
+          content: "ORCHID 42。",
+          format: "md",
+          artifactId: artifact.id,
+          expectedHash: artifact.hash,
+        },
+        { callId: "revise-selected" },
+      ),
+    ],
+    [assistantMessage("已精简这份报告。")],
+  ]);
+  await new TeamRuntime(f.hooks, { modelFactory: () => model }).run(f.task.id);
+  assert.equal(f.task.status, "completed", f.task.error);
+  assert.equal(f.task.artifacts.length, 1);
+  assert.equal(f.task.artifacts[0].id, artifact.id);
+  assert.equal(f.task.artifacts[0].version, 2);
+  assert.equal(
+    f.task.messages.find((message) => message.id === "refine-user")?.content,
+    "继续处理《合成报告》：精简为一句话",
+  );
+  assert.ok(
+    !f.task.messages.some((message) =>
+      /selectedRefinement|expectedHash|read_artifact/.test(message.content),
+    ),
+  );
 });

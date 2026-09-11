@@ -122,6 +122,37 @@ export interface ProjectInitResult {
   createdPaths: string[];
   checks: string[];
 }
+export interface LibraryEntry {
+  id: string;
+  title: string;
+  path: string;
+  format: Artifact["format"];
+  hash: string;
+  version: number;
+  savedAt: string;
+  updatedAt: string;
+  tags: string[];
+  note: string;
+  source: {
+    taskId: string;
+    taskTitle: string;
+    artifactId: string;
+    artifactVersion: number;
+    artifactHash: string;
+    goalVersion: number;
+  };
+  versions: ArtifactVersion[];
+  content?: string;
+  readError?: string;
+  previewURL?: string;
+}
+export interface DesktopState {
+  revision?: number;
+  mode: "single" | "triple";
+  taskId: string | null;
+  collapsed: Record<WindowKind, boolean>;
+  open: Record<WindowKind, boolean>;
+}
 export interface Snapshot {
   version: string;
   dataPath: string;
@@ -130,6 +161,8 @@ export interface Snapshot {
   settings: AppSettings;
   system: SystemStatus;
   projects: ProjectInfo[];
+  library?: LibraryEntry[];
+  desktop?: DesktopState;
 }
 export type Command =
   | { type: "snapshot" }
@@ -167,6 +200,36 @@ export type Command =
       artifactId: string;
       format: "pptx" | "png";
     }
+  | {
+      type: "library.collect";
+      taskId: string;
+      artifactId: string;
+      expectedHash: string;
+      title?: string;
+      tags?: string[];
+      note?: string;
+    }
+  | {
+      type: "library.save";
+      entryId: string;
+      content: string;
+      expectedHash: string;
+      title?: string;
+      tags?: string[];
+      note?: string;
+    }
+  | { type: "library.reuse"; entryId: string; taskId: string }
+  | {
+      type: "artifact.refine";
+      taskId: string;
+      artifactId: string;
+      instruction: string;
+      expectedHash: string;
+    }
+  | { type: "window.layout"; mode: "single" | "triple"; reset?: boolean }
+  | { type: "window.select"; taskId: string | null }
+  | { type: "window.collapse"; window: WindowKind; collapsed: boolean }
+  | { type: "window.focus"; window: WindowKind }
   | { type: "profile.save"; profile: ModelProfile; apiKey?: string }
   | { type: "profile.probe"; profileId: string }
   | { type: "settings.save"; settings: AppSettings }

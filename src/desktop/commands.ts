@@ -4,6 +4,13 @@ const text = z.string().min(1).max(40000);
 const id = z.string().min(1).max(100);
 const member = z.enum(["coordinator", "cto", "researcher"]);
 const task = { taskId: id };
+const windowKind = z.enum(["main", "evidence", "artifact"]);
+const hash = z.string().regex(/^[a-f0-9]{64}$/);
+const libraryMetadata = {
+  title: z.string().min(1).max(200).optional(),
+  tags: z.array(z.string().min(1).max(80)).max(30).optional(),
+  note: z.string().max(10000).optional(),
+};
 const profile = z.object({
   id,
   name: z.string().min(1).max(120),
@@ -67,6 +74,40 @@ const schemas = z.discriminatedUnion("type", [
     artifactId: id,
     format: z.enum(["png", "pptx"]),
   }),
+  z.object({
+    type: z.literal("artifact.refine"),
+    ...task,
+    artifactId: id,
+    instruction: text,
+    expectedHash: hash,
+  }),
+  z.object({
+    type: z.literal("library.collect"),
+    ...task,
+    artifactId: id,
+    expectedHash: hash,
+    ...libraryMetadata,
+  }),
+  z.object({
+    type: z.literal("library.save"),
+    entryId: id,
+    content: z.string().min(1).max(4_000_000),
+    expectedHash: hash,
+    ...libraryMetadata,
+  }),
+  z.object({ type: z.literal("library.reuse"), entryId: id, ...task }),
+  z.object({
+    type: z.literal("window.layout"),
+    mode: z.enum(["single", "triple"]),
+    reset: z.boolean().optional(),
+  }),
+  z.object({ type: z.literal("window.select"), taskId: id.nullable() }),
+  z.object({
+    type: z.literal("window.collapse"),
+    window: windowKind,
+    collapsed: z.boolean(),
+  }),
+  z.object({ type: z.literal("window.focus"), window: windowKind }),
   z.object({
     type: z.literal("profile.save"),
     profile,

@@ -105,10 +105,9 @@ test("switching tasks replaces the visible goal and conversation and keeps artif
   window.ytriple = {
     invoke: async (command: Command) => {
       commands.push(command);
-      assert.equal(
-        command.type,
-        "snapshot",
-        "switching tasks must not start work",
+      assert.ok(
+        command.type === "snapshot" || command.type === "window.select",
+        "switching tasks may synchronize windows but must not start work",
       );
       return structuredClone(snapshot);
     },
@@ -205,7 +204,14 @@ test("switching tasks replaces the visible goal and conversation and keeps artif
         assert.ok(!context.textContent?.includes(research.artifacts[0].title));
       }
     }
-    assert.equal(commands.length, 1);
+    assert.equal(
+      commands.filter((command) => command.type === "snapshot").length,
+      1,
+    );
+    assert.equal(
+      commands.filter((command) => command.type === "window.select").length,
+      4,
+    );
   } finally {
     await act(async () => root.unmount());
     for (const [key, descriptor] of originalGlobals) {
@@ -218,4 +224,507 @@ test("switching tasks replaces the visible goal and conversation and keeps artif
     0,
     "unmount must release the desktop subscription",
   );
+});
+
+function workbenchSnapshot(
+  tasks: Task[],
+  taskId: string | null = tasks[0]?.id ?? null,
+): Snapshot {
+  return {
+    version: "test",
+    dataPath: "/unused/test.sqlite",
+    tasks,
+    profiles: [],
+    projects: [],
+    library: [],
+    settings: {
+      aiRoot: "/unused/AI",
+      codeRoot: "/unused/Code",
+      workspaceRoot: "/unused/workspace",
+      defaultProfileId: "",
+      memberProfiles: { coordinator: "", researcher: "", cto: "" },
+    },
+    system: {
+      state: "ready",
+      aiRoot: "/unused/AI",
+      codeRoot: "/unused/Code",
+      policyPath: "/unused/AI/system/POLICY.md",
+      issues: [],
+    },
+    desktop: {
+      mode: "triple",
+      taskId,
+      revision: 1,
+      collapsed: { main: false, evidence: false, artifact: false },
+      open: { main: true, evidence: true, artifact: true },
+    },
+  };
+}
+async function withWorkbench(
+  snapshot: Snapshot,
+  windowKind: "main" | "evidence" | "artifact",
+  run: (context: {
+    document: Document;
+    window: Window & typeof globalThis;
+    commands: Command[];
+    emit: (snapshot: Snapshot) => void;
+    act: typeof import("react").act;
+  }) => Promise<void>,
+) {
+  const { window, document } = parseHTML(
+    "<!doctype html><html><body><div id='root'></div></body></html>",
+  );
+  Object.defineProperty(window, "innerWidth", {
+    value: 560,
+    configurable: true,
+  });
+  Object.defineProperty(window, "location", {
+    value: { search: "", href: "https://ytriple.test/" },
+    configurable: true,
+  });
+  Object.defineProperty(window.HTMLElement.prototype, "scrollIntoView", {
+    value: () => undefined,
+    configurable: true,
+  });
+  let current = snapshot;
+  const commands: Command[] = [];
+  const listeners = new Set<(snapshot: Snapshot) => void>();
+  window.ytriple = {
+    invoke: async (command) => {
+      commands.push(command);
+      if (command.type === "window.select")
+        current = {
+          ...current,
+          desktop: {
+            ...current.desktop!,
+            taskId: command.taskId,
+            revision: (current.desktop?.revision ?? 0) + 1,
+          },
+        };
+      return structuredClone(current);
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+  const replacements = {
+    window,
+    document,
+    HTMLElement: window.HTMLElement,
+    Node: window.Node,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  };
+  const originals = new Map(
+    Object.keys(replacements).map((key) => [
+      key,
+      Object.getOwnPropertyDescriptor(globalThis, key),
+    ]),
+  );
+  for (const [key, value] of Object.entries(replacements))
+    Object.defineProperty(globalThis, key, {
+      value,
+      configurable: true,
+      writable: true,
+    });
+  const { act, createElement } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { App } = await import("../src/workbench/App.js");
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () => root.render(createElement(App, { windowKind })));
+    await run({
+      document: document as unknown as Document,
+      window: window as unknown as Window & typeof globalThis,
+      commands,
+      emit: (value) => {
+        current = value;
+        listeners.forEach((listener) => listener(value));
+      },
+      act,
+    });
+  } finally {
+    await act(async () => root.unmount());
+    for (const [key, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  }
+  assert.equal(listeners.size, 0);
+}
+
+test("triple main pane is compact and selection broadcasts without starting work", async () => {
+  const first = taskFixture("triple-first", true),
+    second = taskFixture("triple-second", false);
+  await withWorkbench(
+    workbenchSnapshot([first, second]),
+    "main",
+    async ({ document, window, commands, act, emit }) => {
+      assert.equal(document.querySelectorAll(".context-panel").length, 0);
+      assert.ok(document.querySelector(".sidebar-hidden"));
+      assert.equal(
+        document.querySelector(".task-overview h1")?.textContent,
+        first.title,
+      );
+      await act(async () =>
+        document
+          .querySelector('[aria-label="展开侧栏"]')!
+          .dispatchEvent(new window.Event("click", { bubbles: true })),
+      );
+      assert.ok(!document.querySelector(".sidebar-hidden"));
+      const select = Array.from(document.querySelectorAll(".work-item")).find(
+        (element) => element.textContent?.includes(second.title),
+      )!;
+      await act(async () =>
+        select.dispatchEvent(new window.Event("click", { bubbles: true })),
+      );
+      assert.equal(
+        document.querySelector(".task-overview h1")?.textContent,
+        second.title,
+      );
+      assert.ok(
+        document.querySelector(".sidebar-hidden"),
+        "selecting a task dismisses the navigation overlay",
+      );
+      const old = workbenchSnapshot([first, second], first.id);
+      await act(async () => emit(old));
+      assert.equal(
+        document.querySelector(".task-overview h1")?.textContent,
+        second.title,
+        "old updates must not undo a local task selection",
+      );
+      assert.deepEqual(
+        commands.filter((command) => command.type !== "snapshot"),
+        [{ type: "window.select", taskId: second.id }],
+      );
+    },
+  );
+});
+
+test("auxiliary windows follow newest desktop selection and preserve editor text while folding", async () => {
+  const first = taskFixture("aux-first", false),
+    second = taskFixture("aux-second", true);
+  const original = workbenchSnapshot([first, second]);
+  await withWorkbench(
+    original,
+    "artifact",
+    async ({ document, window, act, emit }) => {
+      assert.equal(
+        document.querySelector(".artifact-heading h3")?.textContent,
+        first.artifacts[0].title,
+      );
+      const edit = Array.from(document.querySelectorAll("button")).find(
+        (button) => button.textContent === "编辑",
+      )!;
+      await act(async () =>
+        edit.dispatchEvent(new window.Event("click", { bubbles: true })),
+      );
+      const editor =
+        document.querySelector<HTMLTextAreaElement>(".artifact-editor")!;
+      // linkedom does not mirror textarea.defaultValue into value at mount.
+      assert.equal(
+        editor.value || editor.defaultValue,
+        first.artifacts[0].content,
+      );
+      const folded = structuredClone(original);
+      folded.desktop!.revision = 2;
+      folded.desktop!.collapsed.artifact = true;
+      await act(async () => emit(folded));
+      assert.ok(document.querySelector(".window-collapsed"));
+      assert.equal(
+        document.querySelector(".artifact-editor"),
+        editor,
+        "folding keeps the editor mounted",
+      );
+      const changed = structuredClone(folded);
+      changed.desktop!.revision = 3;
+      changed.desktop!.collapsed.artifact = false;
+      changed.tasks[0].artifacts[0].hash = "new-external-hash";
+      changed.tasks[0].artifacts[0].content = "其他窗口的新内容";
+      await act(async () => emit(changed));
+      assert.equal(
+        document.querySelector<HTMLTextAreaElement>(".artifact-editor")
+          ?.value ||
+          document.querySelector<HTMLTextAreaElement>(".artifact-editor")
+            ?.defaultValue,
+        first.artifacts[0].content,
+        "external snapshots do not replace the active draft",
+      );
+      assert.ok(
+        Array.from(document.querySelectorAll("button")).find((button) =>
+          button.textContent?.includes("保存修改"),
+        )?.disabled,
+      );
+      const selected = structuredClone(changed);
+      selected.desktop!.revision = 4;
+      selected.desktop!.taskId = second.id;
+      await act(async () => emit(selected));
+      assert.equal(document.querySelectorAll(".artifact-view").length, 0);
+      await act(async () => emit(original));
+      assert.equal(
+        document.querySelectorAll(".artifact-view").length,
+        0,
+        "a late older desktop revision cannot bring an old task back",
+      );
+      const back = structuredClone(changed);
+      back.desktop!.revision = 5;
+      await act(async () => emit(back));
+      assert.equal(
+        document.querySelector<HTMLTextAreaElement>(".artifact-editor")
+          ?.value ||
+          document.querySelector<HTMLTextAreaElement>(".artifact-editor")
+            ?.defaultValue,
+        first.artifacts[0].content,
+        "switching back restores unsaved editing state",
+      );
+    },
+  );
+});
+
+test("process view exposes real delegation and public summaries without raw reasoning payloads", async () => {
+  const task = taskFixture("process-fixture", false);
+  task.status = "running";
+  const now = task.createdAt;
+  task.events = [
+    {
+      id: "run",
+      type: "run_started",
+      summary: "开始工作",
+      createdAt: now,
+      goalVersion: 1,
+      data: { runId: "run-1" },
+    },
+    {
+      id: "coordinator",
+      type: "agent_started",
+      member: "coordinator",
+      summary: "统筹开始梳理任务",
+      createdAt: now,
+      goalVersion: 1,
+      data: { runId: "run-1", invocationId: "main", scope: "coordinator" },
+    },
+    {
+      id: "delegate",
+      type: "delegation_started",
+      member: "coordinator",
+      summary: "请研究员核查材料",
+      createdAt: now,
+      goalVersion: 1,
+      data: {
+        runId: "run-1",
+        invocationId: "main",
+        scope: "coordinator",
+        callId: "call-1",
+        receiver: "researcher",
+        childInvocationId: "research",
+      },
+    },
+    {
+      id: "research",
+      type: "agent_started",
+      member: "researcher",
+      summary: "研究员正在检查资料",
+      createdAt: now,
+      goalVersion: 1,
+      data: {
+        runId: "run-1",
+        invocationId: "research",
+        scope: "coordinator/researcher",
+        parentInvocationId: "main",
+      },
+    },
+    {
+      id: "finding",
+      type: "progress_reported",
+      member: "researcher",
+      summary: "两份资料的统计口径不同，需要分别比较。",
+      createdAt: now,
+      goalVersion: 1,
+      data: {
+        runId: "run-1",
+        invocationId: "research",
+        scope: "coordinator/researcher",
+        stage: "finding",
+        reasoning: "PRIVATE_INTERNAL_CHAIN_DO_NOT_DISPLAY",
+      },
+    },
+  ];
+  await withWorkbench(
+    workbenchSnapshot([task]),
+    "evidence",
+    async ({ document }) => {
+      assert.equal(document.querySelectorAll(".agent-lane").length, 2);
+      assert.ok(document.body.textContent?.includes("统筹 委派"));
+      assert.ok(
+        document.body.textContent?.includes(
+          "两份资料的统计口径不同，需要分别比较。",
+        ),
+      );
+      assert.ok(
+        !document.body.textContent?.includes(
+          "PRIVATE_INTERNAL_CHAIN_DO_NOT_DISPLAY",
+        ),
+      );
+      assert.ok(
+        !document.querySelector(".member-cto"),
+        "an unused member must not be shown working",
+      );
+    },
+  );
+});
+
+test("artifact collection captures the displayed version and offers real follow-up actions", async () => {
+  const task = taskFixture("collect-fixture", false);
+  await withWorkbench(
+    workbenchSnapshot([task]),
+    "artifact",
+    async ({ document, window, commands, act }) => {
+      const collect = Array.from(document.querySelectorAll("button")).find(
+        (button) => button.textContent === "收藏到 Lib",
+      )!;
+      await act(async () =>
+        collect.dispatchEvent(new window.Event("click", { bubbles: true })),
+      );
+      assert.deepEqual(
+        commands.find((command) => command.type === "library.collect"),
+        {
+          type: "library.collect",
+          taskId: task.id,
+          artifactId: task.artifacts[0].id,
+          expectedHash: task.artifacts[0].hash,
+        },
+      );
+      const refine = Array.from(document.querySelectorAll("button")).find(
+        (button) => button.textContent === "继续加工",
+      )!;
+      await act(async () =>
+        refine.dispatchEvent(new window.Event("click", { bubbles: true })),
+      );
+      assert.ok(document.querySelector(".refine-form textarea"));
+      assert.ok(
+        Array.from(document.querySelectorAll("button")).find((button) =>
+          button.textContent?.includes("开始加工"),
+        )?.disabled,
+        "an empty instruction cannot start AI work",
+      );
+    },
+  );
+});
+
+test("local Lib keeps provenance, exposes editing, and reuses the chosen entry as real task material", async () => {
+  const task = taskFixture("library-fixture", false);
+  const snapshot = workbenchSnapshot([task]);
+  snapshot.library = [
+    {
+      id: "saved-fixture",
+      title: "值得留下的研究结论",
+      path: "/unused/lib/saved.md",
+      format: "md",
+      hash: "lib-hash",
+      version: 1,
+      savedAt: task.createdAt,
+      updatedAt: task.updatedAt,
+      tags: ["能源"],
+      note: "用于下一轮研究",
+      source: {
+        taskId: task.id,
+        taskTitle: task.title,
+        artifactId: task.artifacts[0].id,
+        artifactVersion: 3,
+        artifactHash: "original-hash",
+        goalVersion: 1,
+      },
+      versions: [],
+      content: "# 收藏正文\n已有的依据和结论。",
+    },
+  ];
+  await withWorkbench(
+    snapshot,
+    "main",
+    async ({ document, window, commands, act }) => {
+      const nav = Array.from(
+        document.querySelectorAll(".primary-nav button"),
+      ).find((button) => button.textContent?.includes("本地 Lib"))!;
+      await act(async () =>
+        nav.dispatchEvent(new window.Event("click", { bubbles: true })),
+      );
+      assert.ok(document.querySelector(".sidebar-hidden"));
+      const card = document.querySelector(".saved-library-card")!;
+      await act(async () =>
+        card.dispatchEvent(new window.Event("click", { bubbles: true })),
+      );
+      assert.ok(
+        document
+          .querySelector(".library-provenance")
+          ?.textContent?.includes("成果 v3"),
+      );
+      assert.ok(
+        document
+          .querySelector(".library-document")
+          ?.textContent?.includes("已有的依据和结论。"),
+      );
+      assert.ok(
+        Array.from(document.querySelectorAll("button")).some(
+          (button) => button.textContent === "修改收藏",
+        ),
+      );
+      const reuse = Array.from(document.querySelectorAll("button")).find(
+        (button) => button.textContent === "加入工作",
+      )!;
+      await act(async () =>
+        reuse.dispatchEvent(new window.Event("click", { bubbles: true })),
+      );
+      assert.deepEqual(
+        commands.find((command) => command.type === "library.reuse"),
+        { type: "library.reuse", entryId: "saved-fixture", taskId: task.id },
+      );
+      assert.equal(
+        commands.filter(
+          (command) =>
+            command.type === "task.run" || command.type === "task.send",
+        ).length,
+        0,
+        "reusing material lets the user supply direction before model work starts",
+      );
+      assert.equal(
+        document.querySelector(".task-overview h1")?.textContent,
+        task.title,
+      );
+    },
+  );
+});
+
+test("initial restored work seeds the saved member and model without starting it again", async () => {
+  const task = taskFixture("restored-config-fixture", false);
+  task.member = "cto";
+  task.profileId = "saved-profile";
+  const snapshot = workbenchSnapshot([task]);
+  snapshot.profiles = [
+    {
+      id: "saved-profile",
+      name: "本次指定模型",
+      provider: "gemini",
+      protocol: "google",
+      baseURL: "",
+      modelId: "model-fixture",
+      apiKeyEnv: "FIXTURE_KEY",
+      hasKey: true,
+      status: "ready",
+    },
+  ];
+  await withWorkbench(snapshot, "main", async ({ document, commands }) => {
+    assert.equal(
+      document.querySelector<HTMLSelectElement>(".select-member select")?.value,
+      "cto",
+    );
+    assert.equal(
+      document.querySelector<HTMLSelectElement>(".select-model select")?.value,
+      "saved-profile",
+    );
+    assert.equal(
+      document.querySelector(".task-overview h1")?.textContent,
+      task.title,
+    );
+    assert.deepEqual(commands, [{ type: "snapshot" }]);
+  });
 });

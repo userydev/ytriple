@@ -7,18 +7,33 @@ import {
   shell,
   utilityProcess,
   protocol,
+  screen,
 } from "electron";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promises as fs } from "node:fs";
-import type { Command, Snapshot, WindowKind } from "../shared/types.js";
+import type {
+  Command,
+  Snapshot,
+  WindowKind,
+  DesktopState,
+} from "../shared/types.js";
 import { parseCommand } from "./commands.js";
 import { imageDocument } from "../core/exports.js";
 import { readOwnedArtifact } from "../core/files.js";
+import {
+  restoreLayout,
+  tileWindows,
+  foldedHeight,
+  windowKinds,
+  type WindowLayout,
+} from "./window-layout.js";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const uiPath = path.join(here, "ui/index.html");
 const trustedURL = pathToFileURL(uiPath).href;
 app.setName("ytriple");
+if (process.env.YTRIPLE_DATA_PATH)
+  app.setPath("userData", path.resolve(process.env.YTRIPLE_DATA_PATH));
 if (!app.requestSingleInstanceLock()) app.exit(0);
 app.on("second-instance", () => {
   const main = windows.get("main");
@@ -27,8 +42,6 @@ app.on("second-instance", () => {
     main.focus();
   }
 });
-if (process.env.YTRIPLE_DATA_PATH)
-  app.setPath("userData", path.resolve(process.env.YTRIPLE_DATA_PATH));
 protocol.registerSchemesAsPrivileged([
   {
     scheme: "ytriple-artifact",
@@ -40,7 +53,58 @@ let latest: Snapshot | undefined;
 let sequence = 0;
 let closing = false;
 let closed = false;
-const windows = new Map<string, BrowserWindow>();
+const windows = new Map<WindowKind, BrowserWindow>();
+const leavingFullScreen = new WeakSet<BrowserWindow>();
+let layout: WindowLayout;
+let desktopRevision = 0;
+let movingWindows = false;
+let layoutTimer: ReturnType<typeof setTimeout> | undefined;
+let layoutWrites = Promise.resolve();
+function desktopState(): DesktopState {
+  return {
+    mode: layout.mode,
+    taskId: layout.taskId,
+    revision: desktopRevision,
+    collapsed: { ...layout.collapsed },
+    open: {
+      main: !!windows.get("main")?.isVisible(),
+      evidence: !!windows.get("evidence")?.isVisible(),
+      artifact: !!windows.get("artifact")?.isVisible(),
+    },
+  };
+}
+function persistLayout(): void {
+  clearTimeout(layoutTimer);
+  layoutTimer = setTimeout(() => {
+    void writeLayout();
+  }, 200);
+}
+function writeLayout(): Promise<void> {
+  const data = JSON.stringify(layout);
+  const root = app.getPath("userData");
+  layoutWrites = layoutWrites
+    .catch(() => {})
+    .then(async () => {
+      await fs.mkdir(root, { recursive: true, mode: 0o700 });
+      const temp = path.join(root, `.window-layout-${process.pid}.tmp`);
+      await fs.writeFile(temp, data, { mode: 0o600 });
+      await fs.rename(temp, path.join(root, "window-layout.json"));
+    });
+  return layoutWrites.catch(() => {});
+}
+function desktopChanged(): void {
+  desktopRevision++;
+  persistLayout();
+  if (latest) publish(latest);
+}
+function selectTask(taskId: string | null): void {
+  if (taskId && !latest?.tasks.some((t) => t.id === taskId))
+    throw new Error("任务不存在。");
+  if (layout.taskId !== taskId) {
+    layout.taskId = taskId;
+    desktopChanged();
+  }
+}
 const pending = new Map<
   number,
   { resolve: (value: unknown) => void; reject: (reason: Error) => void }
@@ -58,6 +122,12 @@ function request<T = Snapshot>(payload: Record<string, unknown>): Promise<T> {
 function decorate(snapshot: Snapshot): Snapshot {
   return {
     ...snapshot,
+    desktop: desktopState(),
+    library: snapshot.library?.map((entry) =>
+      entry.format === "png"
+        ? { ...entry, previewURL: `ytriple-artifact://library/${entry.id}` }
+        : entry,
+    ),
     tasks: snapshot.tasks.map((task) => ({
       ...task,
       artifacts: task.artifacts.map((artifact) =>
@@ -113,24 +183,59 @@ async function saveKey(profileId: string, value: string): Promise<void> {
   vault = next;
   await request({ type: "key", profileId, apiKey: value.trim() });
 }
-function openWindow(kind: WindowKind = "main", taskId = ""): BrowserWindow {
-  const key = kind === "main" ? "main" : `${kind}:${taskId}`;
-  const existing = windows.get(key);
+function applyBounds(kind: WindowKind): void {
+  const win = windows.get(kind);
+  if (!win || win.isDestroyed()) return;
+  if (win.isFullScreen()) {
+    if (!leavingFullScreen.has(win)) {
+      leavingFullScreen.add(win);
+      win.once("leave-full-screen", () => {
+        leavingFullScreen.delete(win);
+        applyBounds(kind);
+      });
+      win.setFullScreen(false);
+    }
+    return;
+  }
+  const b = layout.bounds[kind];
+  const collapsed = layout.collapsed[kind];
+  movingWindows = true;
+  try {
+    win.setMinimumSize(
+      Math.min(b.width, kind === "main" ? 480 : 340),
+      collapsed
+        ? foldedHeight
+        : Math.min(b.height, kind === "main" ? 400 : 240),
+    );
+    if (win.isMaximized()) win.unmaximize();
+    win.setBounds({ ...b, ...(collapsed ? { height: foldedHeight } : {}) });
+  } finally {
+    movingWindows = false;
+  }
+}
+function openWindow(kind: WindowKind = "main", focus = true): BrowserWindow {
+  const existing = windows.get(kind);
   if (existing && !existing.isDestroyed()) {
-    existing.show();
-    existing.focus();
+    if (focus) existing.show();
+    else existing.showInactive();
+    if (existing.isMinimized()) existing.restore();
+    if (focus) existing.focus();
+    desktopChanged();
     return existing;
   }
   const win = new BrowserWindow({
-    width: kind === "main" ? 1400 : 1060,
-    height: 940,
-    minWidth: 780,
-    minHeight: 600,
+    ...layout.bounds[kind],
+    ...(layout.collapsed[kind] ? { height: foldedHeight } : {}),
+    minWidth: Math.min(layout.bounds[kind].width, kind === "main" ? 480 : 340),
+    minHeight: layout.collapsed[kind]
+      ? foldedHeight
+      : Math.min(layout.bounds[kind].height, kind === "main" ? 400 : 240),
+    show: false,
     title:
       kind === "main"
         ? "ytriple"
         : kind === "evidence"
-          ? "ytriple · 依据与过程"
+          ? "ytriple · Agent 过程"
           : "ytriple · 工作成果",
     backgroundColor: "#F5F6F3",
     webPreferences: {
@@ -141,21 +246,64 @@ function openWindow(kind: WindowKind = "main", taskId = ""): BrowserWindow {
       webSecurity: true,
     },
   });
-  windows.set(key, win);
+  windows.set(kind, win);
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
   win.webContents.on("will-attach-webview", (event) => event.preventDefault());
   win.webContents.session.setPermissionRequestHandler(
     (_contents, _permission, callback) => callback(false),
   );
+  const remember = () => {
+    if (movingWindows || win.isDestroyed() || win.isMinimized()) return;
+    const b = win.getNormalBounds();
+    layout.bounds[kind] = layout.collapsed[kind]
+      ? { ...layout.bounds[kind], x: b.x, y: b.y, width: b.width }
+      : b;
+    persistLayout();
+  };
+  win.on("resize", remember);
+  win.on("move", remember);
+  // Hiding preserves text drafts when a pane is closed or single-window mode is chosen.
+  win.on("close", (event) => {
+    if (kind !== "main" && !closing) {
+      event.preventDefault();
+      win.hide();
+      desktopChanged();
+    }
+  });
   win.on("closed", () => {
-    windows.delete(key);
+    windows.delete(kind);
     if (kind === "main" && !closing) app.quit();
   });
-  void win.loadFile(uiPath, {
-    query: { window: kind, ...(taskId ? { taskId } : {}) },
+  win.once("ready-to-show", () => {
+    if (kind === "main" || layout.mode === "triple") {
+      if (focus || kind === "main") win.show();
+      else win.showInactive();
+      desktopChanged();
+    }
   });
+  void win.loadFile(uiPath, { query: { window: kind } });
   return win;
+}
+function setLayout(mode: DesktopState["mode"], reset = false): void {
+  layout.mode = mode;
+  if (reset) {
+    const main = windows.get("main");
+    const area = main
+      ? screen.getDisplayMatching(main.getBounds()).workArea
+      : screen.getPrimaryDisplay().workArea;
+    layout.bounds = tileWindows(area);
+    layout.collapsed = { main: false, evidence: false, artifact: false };
+  }
+  openWindow("main", false);
+  if (mode === "triple")
+    for (const kind of ["evidence", "artifact"] as const)
+      openWindow(kind, false);
+  else
+    for (const kind of ["evidence", "artifact"] as const)
+      windows.get(kind)?.hide();
+  for (const kind of windowKinds) applyBounds(kind);
+  desktopChanged();
 }
 async function renderPNG(
   command: Extract<Command, { type: "artifact.export" }>,
@@ -220,7 +368,31 @@ async function command(input: Command): Promise<Snapshot> {
   if (input.type === "window.open") {
     if (!latest?.tasks.some((t) => t.id === input.taskId))
       throw new Error("任务不存在。");
-    openWindow(input.window, input.taskId);
+    selectTask(input.taskId);
+    if (input.window !== "main") layout.mode = "triple";
+    openWindow(input.window);
+    return latest!;
+  }
+  if (input.type === "window.select") {
+    selectTask(input.taskId);
+    return latest!;
+  }
+  if (input.type === "window.layout") {
+    setLayout(input.mode, input.reset);
+    return latest!;
+  }
+  if (input.type === "window.collapse") {
+    layout.collapsed[input.window] = input.collapsed;
+    applyBounds(input.window);
+    desktopChanged();
+    return latest!;
+  }
+  if (input.type === "window.focus") {
+    if (input.window !== "main") layout.mode = "triple";
+    layout.collapsed[input.window] = false;
+    openWindow(input.window);
+    applyBounds(input.window);
+    desktopChanged();
     return latest!;
   }
   if (input.type === "url.open") {
@@ -241,6 +413,10 @@ async function command(input: Command): Promise<Snapshot> {
       latest.system.policyPath,
       latest.settings.codeRoot,
       latest.settings.workspaceRoot,
+      ...(latest.library ?? []).flatMap((entry) => [
+        entry.path,
+        ...entry.versions.map((v) => v.path),
+      ]),
       ...latest.projects.flatMap((p) => [
         p.root,
         p.devPath,
@@ -297,28 +473,58 @@ async function command(input: Command): Promise<Snapshot> {
 app
   .whenReady()
   .then(async () => {
+    let savedLayout: unknown;
+    try {
+      savedLayout = JSON.parse(
+        await fs.readFile(
+          path.join(app.getPath("userData"), "window-layout.json"),
+          "utf8",
+        ),
+      );
+    } catch {
+      /* Missing or invalid geometry uses the current display. */
+    }
+    layout = restoreLayout(
+      savedLayout,
+      screen.getAllDisplays().map((d) => d.workArea),
+      screen.getPrimaryDisplay().workArea,
+    );
     const keys = await loadVault();
     protocol.handle("ytriple-artifact", async (request) => {
       try {
         const url = new URL(request.url);
-        const [, taskId, artifactId] = url.pathname.split("/");
-        if (url.hostname !== "local" || url.search || url.hash)
-          return new Response(null, { status: 404 });
-        const task = latest?.tasks.find((t) => t.id === taskId);
-        const artifact = task?.artifacts.find(
-          (a) => a.id === artifactId && a.format === "png",
-        );
-        if (!task || !artifact) return new Response(null, { status: 404 });
-        return new Response(
-          new Uint8Array(await readOwnedArtifact(artifact, task.workspace)),
-          {
-            headers: {
-              "Content-Type": "image/png",
-              "Cache-Control": "no-store",
-              "X-Content-Type-Options": "nosniff",
-            },
+        if (url.search || url.hash) return new Response(null, { status: 404 });
+        let bytes: Buffer;
+        if (url.hostname === "library") {
+          const parts = url.pathname.split("/");
+          const entry =
+            parts.length === 2 &&
+            latest?.library?.find(
+              (e) => e.id === parts[1] && e.format === "png",
+            );
+          if (!entry || !latest) return new Response(null, { status: 404 });
+          bytes = await readOwnedArtifact(
+            { ...entry, goalVersion: entry.source.goalVersion },
+            path.join(latest.settings.aiRoot, "knowledge", "lib"),
+          );
+        } else {
+          const parts = url.pathname.split("/");
+          if (url.hostname !== "local" || parts.length !== 3)
+            return new Response(null, { status: 404 });
+          const task = latest?.tasks.find((t) => t.id === parts[1]);
+          const artifact = task?.artifacts.find(
+            (a) => a.id === parts[2] && a.format === "png",
+          );
+          if (!task || !artifact) return new Response(null, { status: 404 });
+          bytes = await readOwnedArtifact(artifact, task.workspace);
+        }
+        return new Response(new Uint8Array(bytes), {
+          headers: {
+            "Content-Type": "image/png",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
           },
-        );
+        });
       } catch {
         return new Response(null, { status: 404 });
       }
@@ -370,7 +576,22 @@ app
         throw new Error("无效的工作台连接。");
       return publish(await command(parseCommand(input)));
     });
-    openWindow();
+    if (layout.taskId && !latest?.tasks.some((t) => t.id === layout.taskId))
+      layout.taskId = null;
+    if (savedLayout === undefined && latest?.tasks.length)
+      layout.taskId = latest.tasks[0].id;
+    setLayout(layout.mode);
+    const recoverDisplays = () => {
+      layout = restoreLayout(
+        layout,
+        screen.getAllDisplays().map((d) => d.workArea),
+        screen.getPrimaryDisplay().workArea,
+      );
+      for (const kind of windowKinds) applyBounds(kind);
+      desktopChanged();
+    };
+    screen.on("display-removed", recoverDisplays);
+    screen.on("display-metrics-changed", recoverDisplays);
   })
   .catch((error) => {
     dialog.showErrorBox(
@@ -384,9 +605,11 @@ app.on("before-quit", (event) => {
   event.preventDefault();
   if (closing) return;
   closing = true;
-  void (
-    engine ? request({ type: "close" }).catch(() => {}) : Promise.resolve()
-  ).finally(() => {
+  clearTimeout(layoutTimer);
+  void Promise.all([
+    engine ? request({ type: "close" }).catch(() => {}) : Promise.resolve(),
+    writeLayout(),
+  ]).finally(() => {
     closed = true;
     engine?.kill();
     app.quit();

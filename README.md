@@ -12,7 +12,7 @@ ytriple 是以用户为中心的 Local-first Personal AI Workbench。Y 与真正
 
 ## 本地运行
 
-当前已有可运行的 **0.1 开发版**：真实团队协作、工作台、MD 修订、常用文档文字导入、PNG/PPTX 导出，以及本机 AI 体系与项目初始化。平台收藏采集、Radar、跨任务资产复用和 Google 专项 Deep Research 尚未完成；这不是完整首版发布。
+当前已有可运行的 **0.1 开发版**：真实团队协作、三窗联动工作台、MD/HTML 修订与继续加工、本地 Lib 收藏和跨任务复用、常用文档文字导入、PNG/PPTX 导出，以及本机 AI 体系与项目初始化。平台收藏采集、Radar 和 Google 专项 Deep Research 尚未完成；这不是完整首版发布。
 
 使用 Node.js 24 或更新版本：
 
@@ -23,7 +23,9 @@ npm run dev
 
 `npm run dev` 构建并打开 Electron 工作台；修改代码后重新启动。`npm run build` 构建，`npm start` 启动已有构建。首轮使用已实测的 Gemini；在“设置与连接”中可以配置多个渠道、分配成员模型并独立验证。
 
-任务状态与会话保存在系统应用数据目录（macOS 为 `~/Library/Application Support/ytriple`），成果默认在 `~/AI/knowledge/workspaces`。AI/Code/成果根目录可以配置；项目正式文档在对应项目的 main/dev 目录。界面输入的密钥由系统凭据保护能力加密保存，也可使用已有环境变量，密钥不进入仓库或任务快照。
+默认左侧是对话与决策，右侧上下分别是 Agent 过程与成果；可拖动边缘调整大小、折叠/展开、切换单窗并恢复默认布局。三窗跟随同一任务，过程展示真实委派、工具活动、资料引用和公开进展摘要。成果可直接修改或交给团队继续修订，收藏到 Lib 后可编辑并作为另一项工作的资料。
+
+任务状态与会话保存在系统应用数据目录（macOS 为 `~/Library/Application Support/ytriple`），成果默认在 `~/AI/knowledge/workspaces`，明确收藏的可复用副本保存在 `~/AI/knowledge/lib`，保留原成果来源和各自版本。AI/Code/成果根目录可以配置；项目正式文档在对应项目的 main/dev 目录。界面输入的密钥由系统凭据保护能力加密保存，也可使用已有环境变量，密钥不进入仓库或任务快照。
 
 ```sh
 npm run typecheck
