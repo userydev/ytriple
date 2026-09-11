@@ -285,6 +285,15 @@ async function withWorkbench(
     value: () => undefined,
     configurable: true,
   });
+  const navigationStorage = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    value: {
+      getItem: (key: string) => navigationStorage.get(key) ?? null,
+      setItem: (key: string, value: string) =>
+        navigationStorage.set(key, value),
+    },
+    configurable: true,
+  });
   let current = snapshot;
   const commands: Command[] = [];
   const listeners = new Set<(snapshot: Snapshot) => void>();
@@ -292,6 +301,20 @@ async function withWorkbench(
   window.ytriple = {
     invoke: async (command) => {
       commands.push(command);
+      if (command.type === "task.create") {
+        const created = {
+          ...taskFixture("project-created", true),
+          kind: command.kind ?? "research",
+          member: command.member ?? "coordinator",
+          title: command.title ?? command.goal,
+          goal: command.goal,
+          projectId: command.projectId,
+          messages: [],
+          sources: [],
+          artifacts: [],
+        };
+        current = { ...current, tasks: [created, ...current.tasks] };
+      }
       if (command.type === "window.select")
         current = {
           ...current,
@@ -517,7 +540,7 @@ test("folding, maximizing and page navigation keep the same artifact editor moun
     await act(async () =>
       backToWork.dispatchEvent(new window.Event("click", { bubbles: true })),
     );
-    assert.ok(!document.querySelector(".workspace-hidden"));
+    assert.ok(!document.querySelector(".workspace-panels.workspace-hidden"));
     const selectSecond = Array.from(
       document.querySelectorAll(".work-item"),
     ).find((button) => button.textContent?.includes(second.title))!;
@@ -992,4 +1015,246 @@ test("releasing away from a divider clears the shield on pointerup or mouseup an
       "the first click after releasing can open the editor",
     );
   });
+});
+
+test("pinned navigation remains open across independent configuration pages and project selection does not run work", async () => {
+  const snap = workbenchSnapshot([taskFixture("pin-work", true)]);
+  await withWorkbench(snap, async ({ document, window, act, commands }) => {
+    const click = async (selector: string) => {
+      const element = document.querySelector(selector);
+      assert.ok(element, selector);
+      await act(async () =>
+        element.dispatchEvent(new window.Event("click", { bubbles: true })),
+      );
+    };
+    await click('.topbar [aria-label="展开侧栏"]');
+    await click('[aria-label="固定侧栏"]');
+    assert.equal(
+      JSON.parse(window.localStorage.getItem("ytriple.navigation.v1")!).pinned,
+      true,
+    );
+    await click(".configuration-nav button:nth-of-type(1)");
+    assert.ok(
+      !document.querySelector(".sidebar")!.classList.contains("sidebar-hidden"),
+    );
+    assert.equal(
+      document.querySelector(".settings-page h1")?.textContent,
+      "多 Agent 团队",
+    );
+    assert.equal(document.querySelector(".settings-page .page-tabs"), null);
+    await click(".configuration-nav button:nth-of-type(2)");
+    assert.equal(
+      document.querySelector(".settings-page h1")?.textContent,
+      "AI 模型",
+    );
+    await click(".configuration-nav button:nth-of-type(3)");
+    assert.equal(
+      document.querySelector(".settings-page h1")?.textContent,
+      "本机环境",
+    );
+    await click('[aria-label="取消固定侧栏"]');
+    await click(".primary-nav button:nth-child(1)");
+    assert.ok(
+      document.querySelector(".sidebar")!.classList.contains("sidebar-hidden"),
+    );
+    assert.ok(
+      !commands.some((command) =>
+        ["task.create", "task.run", "settings.save"].includes(command.type),
+      ),
+    );
+  });
+});
+
+test("project discussions keep separate drafts, attach a project on send, and leave the workbench task intact", async () => {
+  const original = taskFixture("original-decision", true);
+  const snap = workbenchSnapshot([original]);
+  snap.projects = ["alpha", "beta"].map((id) => ({
+    id,
+    name: id,
+    series: "y",
+    root: `/unused/Code/y/${id}`,
+    devPath: `/unused/Code/y/${id}/${id}-dev`,
+    documents: {},
+  }));
+  await withWorkbench(snap, async ({ document, window, act, commands }) => {
+    const click = async (selector: string) => {
+      const element = document.querySelector(selector);
+      assert.ok(element, selector);
+      await act(async () =>
+        element.dispatchEvent(new window.Event("click", { bubbles: true })),
+      );
+    };
+    await click(".primary-nav button:nth-child(2)");
+    await click(".local-project-card:nth-child(1) .local-project-title");
+    assert.equal(
+      document.querySelector(".project-decision-header h2")?.textContent,
+      "alpha",
+    );
+    await click(".project-discussion-seeds button:nth-child(1)");
+    const draftA = document.querySelector<HTMLTextAreaElement>(
+      ".project-decision textarea",
+    )!.value;
+    await click(".local-project-card:nth-child(2) .local-project-title");
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>(".project-decision textarea")!
+        .value,
+      "",
+    );
+    await click(".project-discussion-seeds button:nth-child(2)");
+    await click(".local-project-card:nth-child(1) .local-project-title");
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>(".project-decision textarea")!
+        .value ||
+        document.querySelector<HTMLTextAreaElement>(
+          ".project-decision textarea",
+        )!.defaultValue,
+      draftA,
+    );
+    assert.ok(
+      !commands.some(
+        (command) =>
+          command.type === "task.create" || command.type === "task.run",
+      ),
+    );
+    await act(async () =>
+      document
+        .querySelector(".project-decision .composer")!
+        .dispatchEvent(
+          new window.Event("submit", { bubbles: true, cancelable: true }),
+        ),
+    );
+    const created = commands.find((command) => command.type === "task.create");
+    assert.ok(created?.type === "task.create");
+    assert.equal(created.projectId, "alpha");
+    assert.ok(created.goal.includes("/unused/Code/y/alpha"));
+    assert.ok(created.goal.includes(draftA));
+    assert.ok(!created.goal.includes("/unused/Code/y/beta"));
+    assert.deepEqual(
+      commands.filter((command) => command.type === "task.run"),
+      [{ type: "task.run", taskId: "project-created" }],
+    );
+    assert.equal(
+      document.querySelector(".pane-main .task-overview h1")?.textContent,
+      original.title,
+    );
+    assert.ok(document.querySelector(".workspace-panels.workspace-hidden"));
+    assert.ok(
+      !document
+        .querySelector(".projects-layout")!
+        .classList.contains("workspace-hidden"),
+    );
+    assert.equal(
+      document.querySelector<HTMLTextAreaElement>(".project-decision textarea")!
+        .value,
+      "",
+    );
+  });
+});
+
+test("a delayed project creation preserves a newer returned-to-project draft and runs only the matching task", async () => {
+  const snap = workbenchSnapshot([taskFixture("original-before-delay", true)]);
+  snap.projects = ["alpha", "beta"].map((id) => ({
+    id,
+    name: id,
+    series: "y",
+    root: `/unused/Code/y/${id}`,
+    devPath: `/unused/Code/y/${id}/${id}-dev`,
+    documents: {},
+  }));
+  await withWorkbench(
+    snap,
+    async ({ document, window, act, commands, emit }) => {
+      const click = async (selector: string) => {
+        const element = document.querySelector(selector);
+        assert.ok(element, selector);
+        await act(async () =>
+          element.dispatchEvent(new window.Event("click", { bubbles: true })),
+        );
+      };
+      const text = () => {
+        const element = document.querySelector<HTMLTextAreaElement>(
+          ".project-decision textarea",
+        )!;
+        return element.value || element.defaultValue;
+      };
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let pending: Extract<Command, { type: "task.create" }> | undefined;
+      const invoke = window.ytriple!.invoke;
+      window.ytriple!.invoke = async (command) => {
+        if (command.type !== "task.create") return invoke(command);
+        pending = command;
+        await gate;
+        const result = await invoke(command);
+        const otherProject = {
+          ...taskFixture("other-project-created", true),
+          projectId: "beta",
+          goal: command.goal,
+        };
+        const otherGoal = {
+          ...taskFixture("other-alpha-created", true),
+          projectId: "alpha",
+          goal: "另一条同时创建的项目讨论",
+        };
+        const concurrent = {
+          ...result,
+          tasks: [otherProject, otherGoal, ...result.tasks],
+        };
+        emit(concurrent);
+        return concurrent;
+      };
+      await click(".primary-nav button:nth-child(2)");
+      await click(".local-project-card:nth-child(1) .local-project-title");
+      await click(".project-discussion-seeds button:nth-child(1)");
+      const submittedText = text();
+      await act(async () =>
+        document
+          .querySelector(".project-decision .composer")!
+          .dispatchEvent(
+            new window.Event("submit", { bubbles: true, cancelable: true }),
+          ),
+      );
+      assert.equal(pending?.projectId, "alpha");
+      assert.ok(pending?.goal.includes(submittedText));
+      assert.equal(
+        commands.filter((command) => command.type === "task.run").length,
+        0,
+      );
+      await click(".local-project-card:nth-child(2) .local-project-title");
+      await click(".local-project-card:nth-child(1) .local-project-title");
+      await click(".project-discussion-seeds button:nth-child(2)");
+      const newerText = text();
+      assert.notEqual(newerText, submittedText);
+      await act(async () => release());
+      assert.equal(
+        text(),
+        newerText,
+        "the old component cannot replace the newer mounted draft",
+      );
+      await click(".local-project-card:nth-child(2) .local-project-title");
+      await click(".local-project-card:nth-child(1) .local-project-title");
+      assert.equal(
+        text(),
+        newerText,
+        "the old request cannot erase the newer shared draft when it completes",
+      );
+      assert.equal(
+        document.querySelector<HTMLSelectElement>(
+          '[aria-label="项目讨论记录"]',
+        )!.value,
+        "",
+        "a newer unsent project draft takes precedence over the newly returned task",
+      );
+      assert.deepEqual(
+        commands.filter((command) => command.type === "task.run"),
+        [{ type: "task.run", taskId: "project-created" }],
+      );
+      assert.equal(
+        commands.filter((command) => command.type === "task.create").length,
+        1,
+      );
+    },
+  );
 });

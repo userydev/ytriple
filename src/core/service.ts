@@ -291,6 +291,13 @@ export class WorkbenchService {
         break;
       }
       case "task.create": {
+        if (
+          command.projectId &&
+          !this.projectScanner.snapshot.projects.some(
+            (project) => project.id === command.projectId,
+          )
+        )
+          throw new Error("项目列表已变化，请刷新并重新选择项目。");
         const goal = requireText(command.goal, 40000, "工作目标");
         const settings = this.store.settings();
         if (
@@ -316,6 +323,7 @@ export class WorkbenchService {
           kind: command.kind ?? "research",
           member: command.member ?? "coordinator",
           profileId: command.profileId,
+          projectId: command.projectId,
           workspace,
           status: "idle",
           createdAt: now(),

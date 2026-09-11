@@ -29,6 +29,10 @@ import {
   Menu,
   MessageSquare,
   Pause,
+  Pin,
+  PinOff,
+  Bot,
+  Cpu,
   Plus,
   Search,
   Settings2,
@@ -42,6 +46,7 @@ import {
   type Command,
   type MemberId,
   type ProjectInput,
+  type ProjectInfo,
   type Snapshot,
   type Task,
   type TaskKind,
@@ -64,7 +69,20 @@ import {
   type Dispatch,
 } from "./common";
 
-type Page = "work" | "projects" | "library" | "settings";
+type Page = "work" | "projects" | "library" | "models" | "team" | "environment";
+const isSettingsPage = (page: Page) =>
+  ["models", "team", "environment"].includes(page);
+const UI_PREFERENCES_KEY = "ytriple.navigation.v1";
+function readPinnedSidebar() {
+  try {
+    return (
+      JSON.parse(window.localStorage.getItem(UI_PREFERENCES_KEY) ?? "{}")
+        .pinned === true
+    );
+  } catch {
+    return false;
+  }
+}
 type Dialog = "source" | "project" | null;
 type ComposerDraft = {
   text: string;
@@ -190,6 +208,8 @@ function Sidebar({
   connected,
   collapsed,
   onClose,
+  pinned,
+  onPin,
 }: {
   snapshot: Snapshot | null;
   page: Page;
@@ -200,11 +220,22 @@ function Sidebar({
   connected: boolean;
   collapsed: boolean;
   onClose: () => void;
+  pinned: boolean;
+  onPin: () => void;
 }) {
   return (
     <aside className={`sidebar ${collapsed ? "sidebar-hidden" : ""}`}>
       <div className="sidebar-brand">
         <Logo />
+        <button
+          className="icon-button sidebar-pin"
+          aria-label={pinned ? "取消固定侧栏" : "固定侧栏"}
+          title={pinned ? "取消固定侧栏" : "固定侧栏"}
+          aria-pressed={pinned}
+          onClick={onPin}
+        >
+          {pinned ? <PinOff size={15} /> : <Pin size={15} />}
+        </button>
         <button
           className="icon-button sidebar-close"
           onClick={onClose}
@@ -278,14 +309,26 @@ function Sidebar({
             </span>
           </div>
         </div>
-        <button
-          className={`settings-nav ${page === "settings" ? "active" : ""}`}
-          onClick={() => onPage("settings")}
-        >
-          <Settings2 size={16} />
-          设置与连接
-          <ChevronRight size={14} />
-        </button>
+        <nav className="configuration-nav" aria-label="工作台配置">
+          <span className="nav-section-label">配置</span>
+          {(
+            [
+              { id: "team", label: "Agent 团队", icon: Bot },
+              { id: "models", label: "AI 模型", icon: Cpu },
+              { id: "environment", label: "本机设置", icon: Settings2 },
+            ] as const
+          ).map((item) => (
+            <button
+              key={item.id}
+              className={`settings-nav ${page === item.id ? "active" : ""}`}
+              onClick={() => onPage(item.id)}
+            >
+              <item.icon size={16} />
+              {item.label}
+              <ChevronRight size={14} />
+            </button>
+          ))}
+        </nav>
       </div>
     </aside>
   );
@@ -501,6 +544,265 @@ function Composer({
         </span>
       </div>
     </div>
+  );
+}
+
+function ProjectDecision({
+  project,
+  snapshot,
+  dispatch,
+  connected,
+  drafts,
+  onOpenTask,
+  onConfigure,
+}: {
+  project?: ProjectInfo;
+  snapshot: Snapshot | null;
+  dispatch: Dispatch;
+  connected: boolean;
+  drafts: Map<string, ComposerDraft>;
+  onOpenTask: (id: string) => void;
+  onConfigure: () => void;
+}) {
+  const related =
+    snapshot?.tasks.filter(
+      (task) =>
+        (project && task.projectId === project.id) ||
+        (project &&
+          task.events.some(
+            (event) =>
+              event.type === "project.initialized" &&
+              event.data?.projectId === project.id,
+          )),
+    ) ?? [];
+  const [chosenTaskId, setChosenTaskId] = useState<string | null>(() =>
+    drafts.get(`project:${project?.id}:new`)?.text
+      ? null
+      : (related[0]?.id ?? null),
+  );
+  const task = related.find((item) => item.id === chosenTaskId);
+  const draftKey = task?.id ?? `project:${project?.id ?? "none"}:new`;
+  const [draft, updateDraft] = useState<ComposerDraft>(
+    () =>
+      drafts.get(draftKey) ?? {
+        ...EMPTY_DRAFT,
+        kind: "project",
+        member: task?.member ?? "coordinator",
+        profileId: task?.profileId ?? "",
+      },
+  );
+  const mounted = useRef(true);
+  const selectionVersion = useRef(0);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const setDraft: ReactDispatch<SetStateAction<ComposerDraft>> = (next) =>
+    updateDraft((current) => {
+      const value = typeof next === "function" ? next(current) : next;
+      draftRef.current = value;
+      drafts.set(draftKey, value);
+      return value;
+    });
+  const [adding, setAdding] = useState(false);
+  const selectDiscussion = (
+    id: string | null,
+    created?: Task,
+    preserveDraft = true,
+  ) => {
+    selectionVersion.current += 1;
+    if (preserveDraft) drafts.set(draftKey, draft);
+    const selected = created ?? related.find((item) => item.id === id);
+    setChosenTaskId(id);
+    updateDraft(
+      drafts.get(id ?? `project:${project?.id}:new`) ?? {
+        ...EMPTY_DRAFT,
+        kind: "project",
+        member: selected?.member ?? "coordinator",
+        profileId: selected?.profileId ?? "",
+      },
+    );
+  };
+  const create = async (
+    text: string,
+    _kind: TaskKind,
+    member: MemberId,
+    profileId?: string,
+    run = true,
+  ) => {
+    if (!project) return null;
+    const submittedDraft = draftRef.current;
+    const submittedSelection = selectionVersion.current;
+    const existing = new Set(snapshot?.tasks.map((item) => item.id));
+    const context = [
+      `围绕本机项目「${project.name}」讨论。`,
+      `项目 ID：${project.id}；目录：${project.root}`,
+      `以下仅为本地扫描概况，尚未读取项目文件正文。`,
+      ...(project.observation?.issues ?? []).map(
+        (issue) => `状态提示：${issue}`,
+      ),
+      ...(project.observation?.worktrees ?? []).map(
+        (tree) =>
+          `工作目录：${tree.path}；分支：${tree.branch ?? "未知"}；改动文件：${tree.changedFiles ?? "未知"}`,
+      ),
+      `我的问题：${text}`,
+    ].join("\n");
+    const result = await dispatch({
+      type: "task.create",
+      projectId: project.id,
+      title: `${project.name} · ${text.slice(0, 35)}`,
+      goal: context,
+      kind: "project",
+      member,
+      ...(profileId ? { profileId } : {}),
+    });
+    const created = result?.tasks.find(
+      (item) =>
+        !existing.has(item.id) &&
+        item.projectId === project.id &&
+        item.goal === context,
+    );
+    if (!created) return null;
+    if (drafts.get(draftKey) === submittedDraft) drafts.delete(draftKey);
+    if (
+      mounted.current &&
+      selectionVersion.current === submittedSelection &&
+      draftRef.current === submittedDraft
+    )
+      selectDiscussion(created.id, created, false);
+    if (run) await dispatch({ type: "task.run", taskId: created.id });
+    return created;
+  };
+  return (
+    <aside className="project-decision" aria-label="项目决策与讨论">
+      <header className="project-decision-header">
+        <div>
+          <span className="eyebrow">决策与讨论</span>
+          <h2>{project?.name ?? "一起推进项目"}</h2>
+        </div>
+        <MessageSquare size={18} />
+      </header>
+      {project ? (
+        <>
+          <div className="project-discussion-controls">
+            <label>
+              <span className="sr-only">项目讨论记录</span>
+              <select
+                aria-label="项目讨论记录"
+                value={chosenTaskId ?? ""}
+                onChange={(event) =>
+                  selectDiscussion(event.target.value || null)
+                }
+              >
+                <option value="">新的项目讨论</option>
+                {related.map((item) => (
+                  <option value={item.id} key={item.id}>
+                    {item.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {task ? (
+              <button
+                className="text-button"
+                onClick={() => selectDiscussion(null)}
+              >
+                <Plus size={13} />
+                新讨论
+              </button>
+            ) : null}
+          </div>
+          {task ? (
+            <>
+              <div className="decision-task-actions">
+                <TaskControl task={task} dispatch={dispatch} />
+                <button
+                  className="text-button"
+                  onClick={() => onOpenTask(task.id)}
+                >
+                  查看过程与成果
+                  <ArrowUpRight size={13} />
+                </button>
+              </div>
+              <Conversation key={task.id} task={task} dispatch={dispatch} />
+            </>
+          ) : (
+            <div className="project-discussion-intro">
+              <span className="project-discussion-mark">
+                <MessageSquare size={23} />
+              </span>
+              <h3>围绕这个项目，直接讨论</h3>
+              <p>梳理进展、讨论取舍，或确定下一步。</p>
+              <div className="project-discussion-seeds">
+                {[
+                  "梳理当前项目状态与待处理事项",
+                  "一起讨论这个项目下一步的优先级",
+                ].map((text) => (
+                  <button
+                    key={text}
+                    onClick={() =>
+                      setDraft((current) => ({ ...current, text }))
+                    }
+                  >
+                    {text}
+                    <ArrowUpRight size={13} />
+                  </button>
+                ))}
+              </div>
+              <small>发送时带入当前项目概况；可添加文档补充背景。</small>
+            </div>
+          )}
+          <Composer
+            key={draftKey}
+            task={task}
+            snapshot={snapshot}
+            connected={connected}
+            dispatch={dispatch}
+            draft={draft}
+            setDraft={setDraft}
+            seedRevision={0}
+            onCreate={async (...args) => {
+              await create(...args);
+            }}
+            onAdd={() => setAdding(true)}
+            onConfigure={onConfigure}
+          />
+          {adding ? (
+            <SourceDialog
+              connected={connected}
+              dispatch={dispatch}
+              ensureTask={async () =>
+                task ??
+                create(
+                  draft.text.trim() || "理解项目资料，讨论后续工作",
+                  "project",
+                  draft.member,
+                  draft.profileId || undefined,
+                  false,
+                )
+              }
+              onClose={() => setAdding(false)}
+            />
+          ) : null}
+        </>
+      ) : (
+        <div className="project-discussion-intro unselected">
+          <span className="project-discussion-mark">
+            <MessageSquare size={25} />
+          </span>
+          <h3>选一个项目，开始交流</h3>
+          <p>
+            从左侧项目卡片进入。
+            <br />
+            这里保留决策与讨论，过程和成果可随时回到工作台查看。
+          </p>
+        </div>
+      )}
+    </aside>
   );
 }
 
@@ -1007,7 +1309,30 @@ export function App() {
   >(() => (window.ytriple ? "loading" : "unavailable"));
   const [page, setPage] = useState<Page>("work");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarPinned, setSidebarPinned] = useState(readPinnedSidebar);
+  const [sidebarOpen, setSidebarOpen] = useState(readPinnedSidebar);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
+    null,
+  );
+  const selectedProject = snapshot?.projects.find(
+    (item) => item.id === selectedProjectId,
+  );
+  const closeTransientSidebar = () => {
+    if (!sidebarPinned) setSidebarOpen(false);
+  };
+  const togglePin = () => {
+    const pinned = !sidebarPinned;
+    setSidebarPinned(pinned);
+    setSidebarOpen(true);
+    try {
+      window.localStorage.setItem(
+        UI_PREFERENCES_KEY,
+        JSON.stringify({ pinned }),
+      );
+    } catch {
+      /* Navigation remains usable without storage. */
+    }
+  };
   const [focusRequest, setFocusRequest] = useState<{
     panel: WindowKind;
     sequence: number;
@@ -1022,6 +1347,17 @@ export function App() {
   const [composerDraft, setComposerDraft] = useState<ComposerDraft>(() => ({
     ...EMPTY_DRAFT,
   }));
+  useEffect(() => {
+    composerDrafts.current.set(selectedTaskId ?? "new", composerDraft);
+  }, [selectedTaskId, composerDraft]);
+  const navigate = (next: Page) => {
+    if (next === "work")
+      setComposerDraft(
+        composerDrafts.current.get(selectedTaskId ?? "new") ?? composerDraft,
+      );
+    setPage(next);
+    closeTransientSidebar();
+  };
   const [sourceDraft, setSourceDraft] = useState<ComposerDraft | null>(null);
   const [seedRevision, setSeedRevision] = useState(0);
   const [newWorkRevision, setNewWorkRevision] = useState(0);
@@ -1127,15 +1463,16 @@ export function App() {
     setSourceDraft(null);
   }, []);
   const newWork = useCallback(() => {
-    composerDrafts.current.set(selectedTaskId ?? "new", composerDraft);
+    if (page === "work")
+      composerDrafts.current.set(selectedTaskId ?? "new", composerDraft);
     setSelectedTaskId(null);
     void dispatch({ type: "window.select", taskId: null });
     setPage("work");
-    if (triple || window.innerWidth <= 760) setSidebarOpen(false);
+    if (!sidebarPinned) setSidebarOpen(false);
     setComposerDraft({ ...EMPTY_DRAFT });
     setSeedRevision((value) => value + 1);
     setNewWorkRevision((value) => value + 1);
-  }, [dispatch, composerDraft, selectedTaskId, triple]);
+  }, [dispatch, composerDraft, selectedTaskId, sidebarPinned, page]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
@@ -1148,11 +1485,12 @@ export function App() {
   }, [newWork]);
   const selectTask = (id: string, created?: Task) => {
     const selected = created ?? snapshot?.tasks.find((item) => item.id === id);
-    composerDrafts.current.set(selectedTaskId ?? "new", composerDraft);
+    if (page === "work")
+      composerDrafts.current.set(selectedTaskId ?? "new", composerDraft);
     setSelectedTaskId(id);
     void dispatch({ type: "window.select", taskId: id });
     setPage("work");
-    if (triple || window.innerWidth <= 760) setSidebarOpen(false);
+    if (!sidebarPinned) setSidebarOpen(false);
     setComposerDraft(
       composerDrafts.current.get(id) ?? {
         text: "",
@@ -1220,20 +1558,19 @@ export function App() {
           : null;
   return (
     <div
-      className={`app-shell integrated-shell ${triple ? "three-panel-layout" : "focused-layout"}`}
+      className={`app-shell integrated-shell ${triple ? "three-panel-layout" : "focused-layout"} ${sidebarOpen ? "sidebar-is-open" : ""} ${sidebarPinned ? "sidebar-is-pinned" : ""}`}
     >
       <Sidebar
         snapshot={snapshot}
         page={page}
         selectedTaskId={selectedTaskId}
-        onPage={(next) => {
-          setPage(next);
-          setSidebarOpen(false);
-        }}
+        onPage={navigate}
         onTask={selectTask}
         onNew={newWork}
         connected={connected}
         collapsed={!sidebarOpen}
+        pinned={sidebarPinned}
+        onPin={togglePin}
         onClose={() => setSidebarOpen(false)}
       />
       <main className="main-shell">
@@ -1252,7 +1589,9 @@ export function App() {
                   work: "工作空间",
                   projects: "项目",
                   library: "本地 Lib",
-                  settings: "设置",
+                  models: "AI 模型",
+                  team: "Agent 团队",
+                  environment: "本机设置",
                 }[page]
               }
             </span>
@@ -1260,36 +1599,25 @@ export function App() {
             <strong>
               {page === "work"
                 ? (task?.title ?? "新的开始")
-                : page === "settings"
-                  ? "工作台配置"
+                : isSettingsPage(page)
+                  ? (
+                      {
+                        models: "连接与能力",
+                        team: "角色与协作",
+                        environment: "目录与规则",
+                      } as const
+                    )[page as "models" | "team" | "environment"]
                   : "我的工作"}
             </strong>
           </div>
           <div className="topbar-actions">
-            {task && page === "work" ? (
-              <>
-                <TaskControl
-                  key={`control:${task.id}`}
-                  task={task}
-                  dispatch={dispatch}
-                />
-                <button
-                  className="icon-button"
-                  aria-label="将当前工作初始化为项目"
-                  title="将讨论初始化为项目"
-                  onClick={() => setDialog("project")}
-                >
-                  <FilePlus2 size={16} />
-                </button>
-              </>
-            ) : null}
             {page === "work" ? (
               <WorkspaceControls
                 desktop={snapshot?.desktop}
                 dispatch={dispatch}
               />
             ) : (
-              <button className="text-button" onClick={() => setPage("work")}>
+              <button className="text-button" onClick={() => navigate("work")}>
                 回到工作区
                 <ArrowUpRight size={13} />
               </button>
@@ -1331,6 +1659,27 @@ export function App() {
             <section
               className={`decision-pane ${task ? "has-task" : "is-new"}`}
             >
+              {task ? (
+                <div
+                  className="decision-task-actions"
+                  role="group"
+                  aria-label="当前工作操作"
+                >
+                  <TaskControl
+                    key={`control:${task.id}`}
+                    task={task}
+                    dispatch={dispatch}
+                  />
+                  <button
+                    className="text-button"
+                    aria-label="将当前工作初始化为项目"
+                    onClick={() => setDialog("project")}
+                  >
+                    <FilePlus2 size={14} />
+                    初始化项目
+                  </button>
+                </div>
+              ) : null}
               {task ? (
                 <Conversation
                   key={`conversation:${task.id}`}
@@ -1390,7 +1739,7 @@ export function App() {
                 draft={composerDraft}
                 setDraft={setComposerDraft}
                 seedRevision={seedRevision}
-                onConfigure={() => setPage("settings")}
+                onConfigure={() => setPage("models")}
               />
             </section>
           }
@@ -1464,20 +1813,56 @@ export function App() {
             )
           }
         />
-        {page === "settings" ? (
+        <div
+          className={`settings-host ${!isSettingsPage(page) ? "workspace-hidden" : ""}`}
+        >
           <Settings
             snapshot={snapshot}
             dispatch={dispatch}
             connected={connected}
+            section={
+              isSettingsPage(page)
+                ? (page as "models" | "team" | "environment")
+                : "models"
+            }
+            onOpenModels={() => setPage("models")}
           />
-        ) : page === "projects" ? (
+        </div>
+        <div
+          className={`projects-layout ${page !== "projects" ? "workspace-hidden" : ""}`}
+        >
           <Projects
             snapshot={snapshot}
             dispatch={dispatch}
             onInitialize={() => setDialog("project")}
             onTask={selectTask}
+            selectedProjectId={selectedProjectId}
+            onSelectProject={(project) => setSelectedProjectId(project.id)}
+            onDiscussProject={(project) => {
+              setSelectedProjectId(project.id);
+              requestAnimationFrame(() =>
+                document
+                  .querySelector<HTMLTextAreaElement>(
+                    ".project-decision textarea",
+                  )
+                  ?.focus(),
+              );
+            }}
           />
-        ) : page === "library" ? (
+          {page === "projects" ? (
+            <ProjectDecision
+              key={selectedProject?.id ?? "none"}
+              project={selectedProject}
+              snapshot={snapshot}
+              dispatch={dispatch}
+              connected={connected}
+              drafts={composerDrafts.current}
+              onOpenTask={selectTask}
+              onConfigure={() => setPage("models")}
+            />
+          ) : null}
+        </div>
+        {page === "library" ? (
           <Library
             snapshot={snapshot}
             dispatch={dispatch}

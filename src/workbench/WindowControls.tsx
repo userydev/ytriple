@@ -29,47 +29,27 @@ export function WorkspaceControls({
   const triple = desktop?.mode !== "single";
   return (
     <div className="workspace-controls">
-      <nav className="panel-switcher" aria-label="工作面板">
-        {(["main", "evidence", "artifact"] as const).map((kind) => (
-          <button
-            className={`text-button ${desktop?.expanded === kind ? "selected" : ""}`}
-            key={kind}
-            title={`展开并前往${labels[kind]}面板`}
-            aria-label={`前往${labels[kind]}面板`}
-            onClick={() =>
-              void dispatch({ type: "window.focus", window: kind })
-            }
-          >
-            <span className={`window-position position-${kind}`} />
-            {labels[kind]}
-            {desktop?.collapsed[kind] ? (
-              <span className="collapsed-indicator" />
-            ) : null}
-          </button>
-        ))}
-      </nav>
-      <details className="layout-menu" ref={menu}>
+      <details
+        className="layout-menu"
+        ref={menu}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            menu.current?.removeAttribute("open");
+            menu.current?.querySelector("summary")?.focus();
+          }
+        }}
+        onBlur={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget))
+            menu.current?.removeAttribute("open");
+        }}
+      >
         <summary title="调整面板布局" aria-label="调整面板布局">
           <Columns3 size={16} />
+          <span>布局</span>
         </summary>
         <div className="layout-popover">
           <span>工作区布局</span>
-          {RIGHT_MODES.map((item) => (
-            <button
-              key={item.id}
-              onClick={() =>
-                changeLayout({ type: "window.rightMode", mode: item.id })
-              }
-            >
-              <item.icon size={15} />
-              {item.description}
-              {triple &&
-              !desktop?.expanded &&
-              (desktop?.rightMode ?? "split") === item.id ? (
-                <span>✓</span>
-              ) : null}
-            </button>
-          ))}
           <button
             onClick={() =>
               changeLayout({ type: "window.layout", mode: "single" })
@@ -90,6 +70,26 @@ export function WorkspaceControls({
             <RotateCcw size={15} />
             还原默认布局
           </button>
+          <span className="layout-menu-section">展开面板</span>
+          <nav className="panel-switcher" aria-label="工作面板">
+            {(["main", "evidence", "artifact"] as const).map((kind) => (
+              <button
+                className={`text-button ${desktop?.expanded === kind ? "selected" : ""}`}
+                key={kind}
+                title={`展开并前往${labels[kind]}面板`}
+                aria-label={`前往${labels[kind]}面板`}
+                onClick={() =>
+                  changeLayout({ type: "window.focus", window: kind })
+                }
+              >
+                <span className={`window-position position-${kind}`} />
+                {labels[kind]}
+                {desktop?.collapsed[kind] ? (
+                  <span className="collapsed-indicator" />
+                ) : null}
+              </button>
+            ))}
+          </nav>
           <p>拖动分隔线调整大小。选中分隔线后也可用方向键微调。</p>
         </div>
       </details>

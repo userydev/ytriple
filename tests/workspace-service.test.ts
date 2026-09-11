@@ -191,3 +191,70 @@ test("closing the service cancels an active Google connection probe before closi
   assert.equal(calls.length, 2);
   assert.ok(calls.at(-1)?.endsWith("/probe_remote_id/cancel"));
 });
+
+test("project discussion association is validated and survives reopening without altering project files", async (t) => {
+  const dir = await fs.mkdtemp(
+    path.join(os.tmpdir(), "ytriple-project-discussion-"),
+  );
+  let service = new WorkbenchService(path.join(dir, "data"), () => undefined);
+  t.after(async () => {
+    await service.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+  service.store.setConfig("settings", {
+    ...service.store.settings(),
+    aiRoot: path.join(dir, "AI"),
+    codeRoot: path.join(dir, "Code"),
+    workspaceRoot: path.join(dir, "work"),
+    projectMonitoring: false,
+  });
+  await service.initialize();
+  await service.execute({ type: "system.bootstrap" });
+  let snap = await service.execute({
+    type: "project.initialize",
+    input: {
+      id: "discussion-fixture",
+      name: "合成讨论项目",
+      series: "y",
+      description: "用于验证项目关联",
+    },
+  });
+  const project = snap.projects.find(
+    (project) => project.id === "discussion-fixture",
+  )!;
+  assert.ok(project);
+  const readme = await fs.readFile(
+    path.join(project.devPath, "README.md"),
+    "utf8",
+  );
+  await assert.rejects(
+    service.execute({
+      type: "task.create",
+      projectId: "missing-project",
+      goal: "不创建未知关联",
+    }),
+    /项目列表已变化/,
+  );
+  snap = await service.execute(
+    parseCommand({
+      type: "task.create",
+      projectId: project.id,
+      kind: "project",
+      goal: "只建立关联，不启动模型",
+    }),
+  );
+  const task = snap.tasks[0]!;
+  assert.equal(task.projectId, project.id);
+  assert.equal(task.status, "idle");
+  await service.close();
+  service = new WorkbenchService(path.join(dir, "data"), () => undefined);
+  snap = await service.initialize();
+  assert.equal(
+    snap.tasks.find((item) => item.id === task.id)?.projectId,
+    project.id,
+  );
+  assert.equal(
+    await fs.readFile(path.join(project.devPath, "README.md"), "utf8"),
+    readme,
+  );
+});

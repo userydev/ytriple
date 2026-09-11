@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  Archive,
   ArrowUpRight,
   BookOpen,
   BookmarkPlus,
@@ -7,6 +8,7 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
+  Download,
   FileText,
   FolderOpen,
   History,
@@ -106,6 +108,56 @@ export function SourceList({
         </article>
       ))}
     </div>
+  );
+}
+
+function ArtifactActionMenu({
+  label,
+  accessibleLabel,
+  icon,
+  children,
+}: {
+  label: string;
+  accessibleLabel: string;
+  icon: ReactNode;
+  children: ReactNode;
+}) {
+  const details = useRef<HTMLDetailsElement>(null);
+  const close = (restoreFocus = false) => {
+    if (!details.current) return;
+    details.current.open = false;
+    if (restoreFocus) details.current.querySelector("summary")?.focus();
+  };
+  return (
+    <details
+      ref={details}
+      className="artifact-action-menu"
+      onKeyDown={(event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          close(true);
+        }
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) close();
+      }}
+    >
+      <summary aria-label={accessibleLabel}>
+        {icon}
+        {label}
+        <ChevronDown size={12} />
+      </summary>
+      <div
+        className="artifact-action-options"
+        onClick={(event) => {
+          const button = (event.target as HTMLElement).closest("button");
+          if (button && !button.disabled) close(true);
+        }}
+      >
+        {children}
+      </div>
+    </details>
   );
 }
 
@@ -221,116 +273,147 @@ export function ArtifactView({
           </span>
           <h3>{artifact.title}</h3>
         </div>
-        <button
-          className="icon-button"
-          title="在访达显示"
-          aria-label="在访达显示成果"
-          onClick={() =>
-            void dispatch({ type: "path.reveal", path: artifact.path })
-          }
-        >
-          <FolderOpen size={16} />
-        </button>
       </div>
-      <div className="artifact-actions">
-        {artifact.format === "md" || artifact.format === "html" ? (
-          editing ? (
-            <>
-              <button
-                className="button primary small"
-                disabled={saving || changedExternally}
-                onClick={() => void save()}
-              >
-                <Save size={13} />
-                {saving ? "保存中" : "保存修改"}
-              </button>
-              <button className="text-button" onClick={() => setEditing(false)}>
-                <X size={13} />
-                取消
-              </button>
-            </>
-          ) : (
-            <button
-              className="button secondary small"
-              disabled={
-                Boolean(artifact.readError) || artifact.content === undefined
-              }
-              onClick={beginEdit}
-            >
-              <Pencil size={13} />
-              编辑
-            </button>
-          )
-        ) : null}
-        {!editing &&
-        (artifact.format === "md" || artifact.format === "html") ? (
-          <>
-            <button
-              className="text-button"
-              title="导出可编辑 PPTX"
-              disabled={exporting !== null}
-              onClick={() => void exportArtifact("pptx")}
-            >
-              <Presentation size={14} />
-              {exporting === "pptx" ? "导出中…" : "PPT"}
-            </button>
-            <button
-              className="text-button"
-              title="导出 PNG 信息图"
-              disabled={exporting !== null}
-              onClick={() => void exportArtifact("png")}
-            >
-              <Image size={14} />
-              {exporting === "png" ? "导出中…" : "图片"}
-            </button>
-          </>
-        ) : null}
-        {!editing ? (
-          <>
-            {artifact.format === "md" || artifact.format === "html" ? (
-              <button
-                className={`button secondary small ${refining ? "selected" : ""}`}
-                disabled={Boolean(artifact.readError)}
-                onClick={() => {
-                  if (!refining) setRefineHash(artifact.hash);
-                  setRefining(!refining);
-                }}
-              >
-                <Sparkles size={13} />
-                继续加工
-              </button>
-            ) : null}
-            <button
-              className="text-button"
-              disabled={collecting || Boolean(artifact.readError)}
-              onClick={() => void collect()}
-            >
-              <BookmarkPlus size={14} />
-              {collecting
-                ? "收藏中…"
-                : collectedHash === artifact.hash
-                  ? "已收藏到 Lib"
-                  : "收藏到 Lib"}
-            </button>
-          </>
-        ) : null}
-        <button
-          className={`icon-button ${history ? "selected" : ""}`}
-          title="查看版本记录"
-          aria-label="查看版本记录"
-          onClick={() => setHistory(!history)}
+      <div className="artifact-actions grouped-artifact-actions">
+        <div
+          className="artifact-edit-actions"
+          role="group"
+          aria-label="编辑与加工"
         >
-          <History size={15} />
-        </button>
-        {saved ? (
-          <span className="saved-label" role="status">
-            <Check size={13} />
-            已保存
-          </span>
-        ) : null}
+          {artifact.format === "md" || artifact.format === "html" ? (
+            editing ? (
+              <>
+                <button
+                  className="button primary small"
+                  disabled={saving || changedExternally}
+                  onClick={() => void save()}
+                >
+                  <Save size={13} />
+                  {saving ? "保存中" : "保存修改"}
+                </button>
+                <button
+                  className="text-button"
+                  onClick={() => setEditing(false)}
+                >
+                  <X size={13} />
+                  取消
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  className="button secondary small"
+                  disabled={
+                    Boolean(artifact.readError) ||
+                    artifact.content === undefined
+                  }
+                  onClick={beginEdit}
+                >
+                  <Pencil size={13} />
+                  编辑
+                </button>
+                <button
+                  className={`button secondary small ${refining ? "selected" : ""}`}
+                  aria-expanded={refining}
+                  aria-controls={`refine-form-${artifact.id}`}
+                  disabled={
+                    Boolean(artifact.readError) ||
+                    artifact.content === undefined
+                  }
+                  onClick={() => {
+                    if (!refining) setRefineHash(artifact.hash);
+                    setRefining(!refining);
+                  }}
+                >
+                  <Sparkles size={13} />
+                  继续加工
+                </button>
+              </>
+            )
+          ) : null}
+          {saved ? (
+            <span className="saved-label" role="status">
+              <Check size={13} />
+              已保存
+            </span>
+          ) : null}
+        </div>
+        <div
+          className="artifact-secondary-actions"
+          role="group"
+          aria-label="导出与管理"
+        >
+          {!editing &&
+          (artifact.format === "md" || artifact.format === "html") ? (
+            <ArtifactActionMenu
+              label={exporting ? "导出中…" : "导出"}
+              accessibleLabel="导出成果"
+              icon={<Download size={14} />}
+            >
+              <span className="action-menu-label">生成其他格式</span>
+              <button
+                disabled={exporting !== null || Boolean(artifact.readError)}
+                onClick={() => void exportArtifact("pptx")}
+              >
+                <Presentation size={14} />
+                演示文稿 · PPTX
+              </button>
+              <button
+                disabled={exporting !== null || Boolean(artifact.readError)}
+                onClick={() => void exportArtifact("png")}
+              >
+                <Image size={14} />
+                信息图 · PNG
+              </button>
+            </ArtifactActionMenu>
+          ) : null}
+          <ArtifactActionMenu
+            label="管理"
+            accessibleLabel="管理成果"
+            icon={<Archive size={14} />}
+          >
+            {!editing ? (
+              <>
+                <span className="action-menu-label">本地资产</span>
+                <button
+                  disabled={collecting || Boolean(artifact.readError)}
+                  onClick={() => void collect()}
+                >
+                  <BookmarkPlus size={14} />
+                  {collecting
+                    ? "收藏中…"
+                    : collectedHash === artifact.hash
+                      ? "已收藏到 Lib"
+                      : "收藏到 Lib"}
+                </button>
+              </>
+            ) : null}
+            <span className="action-menu-label">版本与文件</span>
+            <button
+              className={history ? "selected" : ""}
+              aria-label="查看版本记录"
+              aria-expanded={history}
+              aria-controls={`artifact-versions-${artifact.id}`}
+              onClick={() => setHistory(!history)}
+            >
+              <History size={14} />
+              {history ? "收起版本记录" : "查看版本记录"}
+            </button>
+            <button
+              aria-label="在访达显示成果"
+              onClick={() =>
+                void dispatch({ type: "path.reveal", path: artifact.path })
+              }
+            >
+              <FolderOpen size={14} />
+              在访达显示
+            </button>
+          </ArtifactActionMenu>
+        </div>
       </div>
       {refining && !editing ? (
         <form
+          id={`refine-form-${artifact.id}`}
           className="refine-form"
           onSubmit={(event) => {
             event.preventDefault();
@@ -378,7 +461,7 @@ export function ArtifactView({
         <div className="inline-notice warning">{artifact.readError}</div>
       ) : null}
       {history ? (
-        <ol className="version-list">
+        <ol id={`artifact-versions-${artifact.id}`} className="version-list">
           {artifact.versions.map((version) => (
             <li key={`${version.version}-${version.hash}-${version.path}`}>
               <span className="version-badge">v{version.version}</span>

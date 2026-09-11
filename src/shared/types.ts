@@ -78,6 +78,7 @@ export interface TaskEvent {
 }
 export interface Task {
   id: string;
+  projectId?: string;
   title: string;
   goal: string;
   goalVersion: number;
@@ -186,6 +187,7 @@ export type Command =
   | { type: "snapshot" }
   | {
       type: "task.create";
+      projectId?: string;
       goal: string;
       title?: string;
       kind?: TaskKind;

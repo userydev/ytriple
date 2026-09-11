@@ -122,3 +122,70 @@
     gap: 8px;
   }
 }
+
+.settings-page-heading {
+  margin-bottom: 28px;
+}
+.default-model-settings {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 18px;
+  padding: 18px 20px;
+  margin-bottom: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcf7;
+}
+.default-model-settings h3 {
+  font-size: 13px;
+  font-weight: 550;
+}
+.default-model-settings p,
+.team-model-reference p {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.7;
+  margin: 6px 0 0;
+}
+.default-model-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  max-width: 100%;
+}
+.default-model-actions .field {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.default-model-actions select {
+  max-width: 100%;
+}
+.team-model-reference {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 16px 18px;
+  margin-bottom: 24px;
+  background: #f4f8ef;
+  border: 1px solid #dfe8d8;
+  border-radius: 8px;
+}
+.team-model-reference strong {
+  font-size: 12px;
+  font-weight: 550;
+}
+.member-model-assignment {
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+.member-model-assignment .field-hint {
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.7;
+}

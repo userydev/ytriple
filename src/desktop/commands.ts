@@ -67,6 +67,7 @@ const schemas = z.discriminatedUnion("type", [
   z.object({ type: z.literal("snapshot") }),
   z.object({
     type: z.literal("task.create"),
+    projectId: z.string().min(1).max(200).optional(),
     goal: text,
     title: text.optional(),
     kind: z.enum(["research", "project", "learning", "brainstorm"]).optional(),

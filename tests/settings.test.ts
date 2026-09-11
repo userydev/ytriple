@@ -6,6 +6,7 @@ import {
   normalizeTeamSettings,
   defaultMemberSettings,
 } from "../src/shared/member-settings.js";
+import type { SettingsSection } from "../src/workbench/Settings.js";
 import { parseCommand } from "../src/desktop/commands.js";
 
 function fixture(): Snapshot {
@@ -68,9 +69,12 @@ async function withSettings(
     commands: Command[];
     current: () => Snapshot;
     emit: (snapshot: Snapshot) => void;
+    navigate: (section: SettingsSection) => void;
     act: typeof import("react").act;
   }) => Promise<void>,
   initial = fixture(),
+  initialSection?: SettingsSection,
+  initiallyLoaded = true,
 ) {
   const { window, document } = parseHTML(
     "<!doctype html><html><body><div id='root'></div></body></html>",
@@ -97,10 +101,15 @@ async function withSettings(
   let current = initial;
   const commands: Command[] = [];
   let emit!: (value: Snapshot) => void;
+  let navigate!: (value: SettingsSection) => void;
   function Harness() {
-    const [snapshot, setSnapshot] = useState(current);
-    const ref = useRef(snapshot);
-    ref.current = snapshot;
+    const [snapshot, setSnapshot] = useState<Snapshot | null>(
+      initiallyLoaded ? current : null,
+    );
+    const [section, setSection] = useState(initialSection);
+    navigate = setSection;
+    const ref = useRef(current);
+    if (snapshot) ref.current = snapshot;
     emit = (value) => {
       current = value;
       ref.current = value;
@@ -128,7 +137,14 @@ async function withSettings(
       setSnapshot(next);
       return next;
     }, []);
-    return createElement(Settings, { snapshot, dispatch, connected: true });
+    return createElement(Settings, {
+      snapshot,
+      dispatch,
+      connected: true,
+      section,
+      onOpenModels:
+        initialSection === undefined ? undefined : () => setSection("models"),
+    });
   }
   const root = createRoot(document.getElementById("root")!);
   try {
@@ -139,6 +155,7 @@ async function withSettings(
       commands,
       current: () => current,
       emit: (value) => emit(value),
+      navigate: (value) => navigate(value),
       act,
     });
   } finally {
@@ -232,7 +249,7 @@ test("member inputs retain empty and trailing text, reset only the prompt, and s
       await act(async () =>
         select(
           window,
-          document.querySelector('[aria-label="研究员的默认模型"]'),
+          document.querySelector('[aria-label="研究员使用的模型"]'),
           "deepseek",
         ),
       );
@@ -473,4 +490,201 @@ test("an existing Google connection can save and verify with the default API add
       profileId: "gemini",
     });
   }, initial);
+});
+
+test("dedicated settings pages keep model, team and environment drafts separate while navigation preserves them", async () => {
+  await withSettings(
+    async ({ document, window, commands, current, navigate, act }) => {
+      assert.equal(document.querySelector(".page-tabs"), null);
+      assert.equal(document.querySelector("h1")!.textContent, "多 Agent 团队");
+      assert.ok(
+        document
+          .querySelector(".profile-form")!
+          .closest(".settings-tab-hidden"),
+      );
+      assert.equal(
+        document.querySelector(
+          ".team-settings-section .default-model-settings",
+        ),
+        null,
+      );
+      assert.equal(
+        document.querySelector(".team-settings-section input[type=password]"),
+        null,
+      );
+      const prompt = () =>
+        document.querySelector<HTMLTextAreaElement>(
+          '[aria-label="研究员的提示词"]',
+        )!;
+      await act(async () => input(window, prompt(), "先核查来源，再总结。\n"));
+      await act(async () =>
+        click(window, document.querySelector(".team-model-reference button")),
+      );
+      assert.equal(document.querySelector("h1")!.textContent, "AI 模型");
+      assert.equal(
+        document
+          .querySelector(".profile-form")!
+          .closest(".settings-tab-hidden"),
+        null,
+      );
+      assert.ok(
+        document
+          .querySelector(".environment-settings")!
+          .closest(".settings-tab-hidden"),
+      );
+      await act(async () =>
+        input(
+          window,
+          field(document, "连接名称", ".profile-form"),
+          "尚未保存的模型名称",
+        ),
+      );
+      await act(async () =>
+        select(
+          window,
+          document.querySelector('[aria-label="工作台默认模型"]'),
+          "deepseek",
+        ),
+      );
+      await act(async () => navigate("environment"));
+      assert.equal(document.querySelector("h1")!.textContent, "本机环境");
+      await act(async () =>
+        input(window, field(document, "AI 根目录"), "/draft/AI"),
+      );
+      await act(async () => navigate("team"));
+      assert.equal(
+        prompt().value || prompt().defaultValue,
+        "先核查来源，再总结。\n",
+      );
+      await act(async () =>
+        click(
+          window,
+          document.querySelector(
+            ".environment-settings > fieldset > .form-actions .primary",
+          ),
+        ),
+      );
+      assert.equal(
+        current().settings.memberSettings!.researcher.prompt,
+        "先核查来源，再总结。",
+      );
+      assert.equal(
+        current().settings.defaultProfileId,
+        "gemini",
+        "saving team settings must not commit the model default draft",
+      );
+      assert.equal(
+        current().settings.aiRoot,
+        "/unused/AI",
+        "saving team settings must not commit the environment draft",
+      );
+      assert.equal(
+        commands.filter((command) => command.type === "profile.save").length,
+        0,
+      );
+      await act(async () => navigate("models"));
+      assert.equal(
+        (field(document, "连接名称", ".profile-form") as HTMLInputElement)
+          .value,
+        "尚未保存的模型名称",
+      );
+      assert.equal(
+        document.querySelector<HTMLSelectElement>(
+          '[aria-label="工作台默认模型"]',
+        )!.value,
+        "deepseek",
+      );
+      await act(async () =>
+        click(window, document.querySelector(".default-model-actions button")),
+      );
+      assert.equal(current().settings.defaultProfileId, "deepseek");
+      assert.equal(
+        current().settings.memberSettings!.researcher.prompt,
+        "先核查来源，再总结。",
+      );
+      assert.equal(current().settings.aiRoot, "/unused/AI");
+      await act(async () => navigate("environment"));
+      assert.equal(
+        (field(document, "AI 根目录") as HTMLInputElement).value,
+        "/draft/AI",
+      );
+      await act(async () =>
+        click(
+          window,
+          document.querySelector(
+            ".environment-settings > fieldset > .form-actions .primary",
+          ),
+        ),
+      );
+      assert.equal(current().settings.aiRoot, "/draft/AI");
+      assert.equal(current().settings.defaultProfileId, "deepseek");
+      assert.equal(
+        current().settings.memberSettings!.researcher.prompt,
+        "先核查来源，再总结。",
+      );
+    },
+    fixture(),
+    "team",
+  );
+});
+
+test("settings mounted before the first snapshot selects an existing connection only once", async () => {
+  await withSettings(
+    async ({ document, window, current, emit, act }) => {
+      assert.equal(document.querySelector(".profile-item.active"), null);
+      await act(async () => emit(current()));
+      assert.equal(
+        (field(document, "连接名称", ".profile-form") as HTMLInputElement)
+          .value,
+        "日常 Gemini",
+      );
+      await act(async () =>
+        click(window, document.querySelector(".add-profile")),
+      );
+      await act(async () =>
+        input(
+          window,
+          field(document, "连接名称", ".profile-form"),
+          "准备添加的连接",
+        ),
+      );
+      await act(async () => emit(structuredClone(current())));
+      assert.equal(
+        (field(document, "连接名称", ".profile-form") as HTMLInputElement)
+          .value,
+        "准备添加的连接",
+      );
+      assert.equal(document.querySelector(".profile-item.active"), null);
+    },
+    fixture(),
+    "models",
+    false,
+  );
+});
+
+test("an explicitly started new connection is preserved when the first snapshot arrives", async () => {
+  await withSettings(
+    async ({ document, window, current, emit, act }) => {
+      await act(async () =>
+        click(window, document.querySelector(".add-profile")),
+      );
+      await act(async () =>
+        input(
+          window,
+          field(document, "连接名称", ".profile-form"),
+          "我的新连接",
+        ),
+      );
+      await act(async () => emit(current()));
+      assert.equal(
+        (field(document, "连接名称", ".profile-form") as HTMLInputElement)
+          .value,
+        "我的新连接",
+      );
+      assert.equal(document.querySelector(".profile-item.active"), null);
+    },
+    fixture(),
+    "models",
+    false,
+  );
 });

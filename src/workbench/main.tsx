@@ -13,3 +13,5 @@ createRoot(root).render(
 
 import "./projects.css";
 import "./settings-extra.css";
+
+import "./panel-actions.css";

@@ -10,7 +10,6 @@ import {
   LoaderCircle,
   Pause,
   Search,
-  Save,
   Wrench,
 } from "lucide-react";
 import { buildAgentProgress, type ProgressStatus } from "../shared/progress";
@@ -117,20 +116,27 @@ export function ProcessView({
       </div>
       {lanes.length ? (
         <>
-          <div className="process-timeline-heading">
-            <span>把当前公开进展整理为可继续编辑的文档</span>
+          <div
+            className="process-document-actions"
+            role="group"
+            aria-label="过程整理"
+          >
+            <div>
+              <strong>过程整理</strong>
+              <span>留下公开进展，继续编辑和复用</span>
+            </div>
             <button
-              className="text-button"
-              aria-label="保存团队过程摘要"
+              className="button secondary small"
+              aria-label="整理团队过程为文档"
               disabled={saving !== null}
               onClick={() => void saveSummary()}
             >
               {saving === "team" ? (
                 <LoaderCircle size={13} className="spin" />
               ) : (
-                <Save size={13} />
+                <FileText size={13} />
               )}
-              保存摘要
+              {saving === "team" ? "整理中…" : "整理为文档"}
             </button>
           </div>
           <div className="agent-lanes">
@@ -175,20 +181,6 @@ export function ProcessView({
                     </div>
                   ) : null}
                   <p className="agent-summary">{lane.latestSummary}</p>
-                  <button
-                    className="text-button"
-                    aria-label={`保存${memberName(lane.member)}过程摘要`}
-                    title={`整理当前目标版本中${memberName(lane.member)}的公开记录`}
-                    disabled={saving !== null}
-                    onClick={() => void saveSummary(lane.member)}
-                  >
-                    {saving === lane.member ? (
-                      <LoaderCircle size={12} className="spin" />
-                    ) : (
-                      <Save size={12} />
-                    )}
-                    保存成员摘要
-                  </button>
                   {activeTools.length ? (
                     <div className="active-tools">
                       {activeTools.map((tool) => (
@@ -270,19 +262,40 @@ export function ProcessView({
                       ))}
                     </details>
                   ) : null}
+                  <div className="agent-lane-actions">
+                    <button
+                      className="text-button"
+                      aria-label={`整理${memberName(lane.member)}过程为文档`}
+                      title={`整理当前目标版本中${memberName(lane.member)}的公开记录`}
+                      disabled={saving !== null}
+                      onClick={() => void saveSummary(lane.member)}
+                    >
+                      {saving === lane.member ? (
+                        <LoaderCircle size={12} className="spin" />
+                      ) : (
+                        <FileText size={12} />
+                      )}
+                      整理成员文档
+                    </button>
+                  </div>
                 </article>
               );
             })}
           </div>
-          <div className="process-timeline-heading">
-            <strong>{history ? "完整执行记录" : "工作摘要"}</strong>
-            <button
-              className="text-button"
-              onClick={() => setHistory(!history)}
+          <div className="process-timeline-heading process-record-heading">
+            <strong>过程记录</strong>
+            <div
+              className="process-record-switcher"
+              role="group"
+              aria-label="记录范围"
             >
-              {history ? "只看摘要" : "查看工具与记录"}
-              <ChevronDown size={12} />
-            </button>
+              <button aria-pressed={!history} onClick={() => setHistory(false)}>
+                工作摘要
+              </button>
+              <button aria-pressed={history} onClick={() => setHistory(true)}>
+                执行记录
+              </button>
+            </div>
           </div>
           <ol className="process-timeline">
             {events

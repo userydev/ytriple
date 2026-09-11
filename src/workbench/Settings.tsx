@@ -65,6 +65,8 @@ const PROVIDERS: Record<
     keyEnv: "",
   },
 };
+export type SettingsSection = "models" | "team" | "environment";
+
 const PROFILE_STATUS: Record<ModelProfile["status"], string> = {
   ready: "已验证",
   untested: "待验证",
@@ -523,13 +525,10 @@ function combinePatches(
 }
 function scopedPatch(
   patch: SettingsPatch,
-  mode: "environment" | "members",
+  mode: "environment" | "team",
 ): SettingsPatch {
-  if (mode === "members")
+  if (mode === "team")
     return {
-      ...(patch.defaultProfileId !== undefined
-        ? { defaultProfileId: patch.defaultProfileId }
-        : {}),
       ...(patch.memberProfiles ? { memberProfiles: patch.memberProfiles } : {}),
       ...(patch.memberSettings ? { memberSettings: patch.memberSettings } : {}),
     };
@@ -541,11 +540,10 @@ function scopedPatch(
 }
 function clearPatch(
   patch: SettingsPatch,
-  mode: "environment" | "members",
+  mode: "environment" | "team",
 ): SettingsPatch {
   const next = { ...patch };
-  if (mode === "members") {
-    delete next.defaultProfileId;
+  if (mode === "team") {
     delete next.memberProfiles;
     delete next.memberSettings;
   } else for (const key of environmentKeys) delete next[key];
@@ -557,11 +555,13 @@ function EnvironmentSettings({
   dispatch,
   mode = "environment",
   connected,
+  onOpenModels,
 }: {
   snapshot: Snapshot;
   dispatch: Dispatch;
-  mode?: "environment" | "members";
+  mode?: "environment" | "team";
   connected: boolean;
+  onOpenModels?: () => void;
 }) {
   const [patch, setPatch] = useState<SettingsPatch>({});
   const settings = mergeSettings(snapshot.settings, patch);
@@ -574,7 +574,7 @@ function EnvironmentSettings({
   const [bootstrapping, setBootstrapping] = useState(false);
   const system = snapshot.system;
   const team = settings.memberSettings as MemberSettingsMap;
-  const [savedMode, setSavedMode] = useState<"members" | "environment" | null>(
+  const [savedMode, setSavedMode] = useState<"team" | "environment" | null>(
     null,
   );
   const save = async () => {
@@ -739,34 +739,33 @@ function EnvironmentSettings({
             </section>
           </>
         ) : null}
-        {mode === "members" ? (
-          <section className="settings-section">
+        {mode === "team" ? (
+          <section className="settings-section team-settings-section">
             <div className="section-heading">
-              <h3>常驻成员</h3>
+              <h3>成员与协作方式</h3>
               <SlidersHorizontal size={18} />
             </div>
             <p className="section-description">
-              为每位成员设置角色、模型和工作方式。保存时会暂停正在进行的工作，继续后采用新配置。
+              定义每位成员的职责、回答详略和协作方式。保存后，继续工作时采用新配置。
             </p>
-            <label className="field">
-              工作台默认连接
-              <select
-                value={settings.defaultProfileId}
-                onChange={(event) =>
-                  setSettings({
-                    ...settings,
-                    defaultProfileId: event.currentTarget.value,
-                  })
-                }
-              >
-                <option value="">尚未指定</option>
-                {snapshot.profiles.map((profile) => (
-                  <option value={profile.id} key={profile.id}>
-                    {profile.name} · {PROFILE_STATUS[profile.status]}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <div className="team-model-reference">
+              <div>
+                <strong>团队使用已配置的 AI 模型</strong>
+                <p>
+                  为成员分配连接；新增模型、密钥与连接验证统一在「AI
+                  模型」中管理。
+                </p>
+              </div>
+              {onOpenModels ? (
+                <button
+                  type="button"
+                  className="button secondary small"
+                  onClick={onOpenModels}
+                >
+                  管理 AI 模型 <ChevronRight size={13} />
+                </button>
+              ) : null}
+            </div>
             <div className="member-configs">
               {MEMBERS.map((member) => (
                 <section className="member-settings-card" key={member.id}>
@@ -795,10 +794,10 @@ function EnvironmentSettings({
                       恢复默认提示词
                     </button>
                   </div>
-                  <label className="field">
-                    默认模型
+                  <label className="field member-model-assignment">
+                    使用的模型
                     <select
-                      aria-label={`${member.shortName}的默认模型`}
+                      aria-label={`${member.shortName}使用的模型`}
                       value={settings.memberProfiles[member.id] ?? ""}
                       onChange={(event) =>
                         setSettings({
@@ -820,6 +819,10 @@ function EnvironmentSettings({
                         </option>
                       ))}
                     </select>
+                    <span className="field-hint">
+                      从已保存的连接中分配，跟随默认时使用 AI
+                      模型页的工作台默认模型。
+                    </span>
                   </label>
                   <label className="field">
                     角色提示词
@@ -906,18 +909,88 @@ function EnvironmentSettings({
               ? "正在保存"
               : savedMode === mode
                 ? "已保存"
-                : mode === "members"
-                  ? "保存成员设置"
+                : mode === "team"
+                  ? "保存团队设置"
                   : "保存本机环境"}
             <ArrowRight size={14} />
           </button>
-          <span className="small-text muted">下次工作使用更新后的配置</span>
+          <span className="small-text muted">
+            {mode === "team"
+              ? "保存会暂停正在进行的工作，继续后生效"
+              : "目录与规则用于资料保存和项目发现"}
+          </span>
         </div>
-        <div className="settings-storage">
-          工作台数据 <code>{snapshot.dataPath}</code>
-        </div>
+        {mode === "environment" ? (
+          <div className="settings-storage">
+            工作台数据 <code>{snapshot.dataPath}</code>
+          </div>
+        ) : null}
       </fieldset>
     </div>
+  );
+}
+
+function DefaultModelSettings({
+  snapshot,
+  dispatch,
+  connected,
+}: {
+  snapshot: Snapshot;
+  dispatch: Dispatch;
+  connected: boolean;
+}) {
+  const [draft, setDraft] = useState<string>();
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const save = async () => {
+    if (!connected || saving || draft === undefined) return;
+    setSaving(true);
+    const result = await dispatch({
+      type: "settings.save",
+      settings: { ...snapshot.settings, defaultProfileId: draft },
+    });
+    if (result) {
+      setDraft(undefined);
+      setSaved(true);
+    }
+    setSaving(false);
+  };
+  return (
+    <section className="default-model-settings">
+      <div>
+        <h3>工作台默认模型</h3>
+        <p>新工作和选择「跟随工作台默认」的成员使用此连接。</p>
+      </div>
+      <div className="default-model-actions">
+        <label className="field">
+          <span className="sr-only">工作台默认模型</span>
+          <select
+            aria-label="工作台默认模型"
+            value={draft ?? snapshot.settings.defaultProfileId}
+            disabled={!connected || saving}
+            onChange={(event) => {
+              setDraft(event.currentTarget.value);
+              setSaved(false);
+            }}
+          >
+            <option value="">尚未指定</option>
+            {snapshot.profiles.map((profile) => (
+              <option value={profile.id} key={profile.id}>
+                {profile.name} · {PROFILE_STATUS[profile.status]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button
+          type="button"
+          className="button secondary small"
+          disabled={!connected || saving || draft === undefined}
+          onClick={() => void save()}
+        >
+          {saving ? "正在保存" : saved ? "已保存" : "保存默认模型"}
+        </button>
+      </div>
+    </section>
   );
 }
 
@@ -925,21 +998,31 @@ export function Settings({
   snapshot,
   dispatch,
   connected,
+  section,
+  onOpenModels,
 }: {
   snapshot: Snapshot | null;
   dispatch: Dispatch;
   connected: boolean;
+  section?: SettingsSection;
+  onOpenModels?: () => void;
 }) {
-  const [tab, setTab] = useState<"models" | "environment" | "members">(
-    "models",
-  );
+  const [localSection, setLocalSection] = useState<SettingsSection>("models");
+  const tab = section ?? localSection;
+  const openModels =
+    onOpenModels ??
+    (section === undefined ? () => setLocalSection("models") : undefined);
   const [selected, setSelected] = useState<string | null>(
     snapshot?.profiles[0]?.id ?? null,
+  );
+  const [selectionInitialized, setSelectionInitialized] = useState(
+    snapshot !== null,
   );
   const [newProfile, setNewProfile] = useState<ModelProfile>();
   const [catalogChoice, setCatalogChoice] = useState("");
   const [profileBusy, setProfileBusy] = useState(false);
   const addConnection = (presetId?: string) => {
+    setSelectionInitialized(true);
     const preset = GOOGLE_CATALOG.find((item) => item.id === presetId);
     const google = snapshot?.profiles.find(
       (item) => item.provider === "gemini" && item.protocol === "google",
@@ -959,131 +1042,166 @@ export function Settings({
     setSelected(null);
     setCatalogChoice("");
   };
+  if (!selectionInitialized && snapshot) {
+    setSelectionInitialized(true);
+    setSelected(snapshot.profiles[0]?.id ?? null);
+  }
   const original = snapshot?.profiles.find(
     (profile) => profile.id === selected,
   );
   return (
     <div className="settings-page">
-      <div className="page-heading">
-        <span className="eyebrow">PREFERENCES</span>
-        <h1>把工作台准备好</h1>
-        <p>连接你的模型，找到本机资料，让团队开始工作。</p>
+      <div className="page-heading settings-page-heading">
+        <span className="eyebrow">
+          {tab === "models"
+            ? "AI CONNECTIONS"
+            : tab === "team"
+              ? "AGENT TEAM"
+              : "LOCAL WORKSPACE"}
+        </span>
+        <h1>
+          {tab === "models"
+            ? "AI 模型"
+            : tab === "team"
+              ? "多 Agent 团队"
+              : "本机环境"}
+        </h1>
+        <p>
+          {tab === "models"
+            ? "管理模型连接、密钥和能力验证，选择工作台默认模型。"
+            : tab === "team"
+              ? "定义谁来工作，以及成员各自的职责与协作方式。"
+              : "管理规则、资料与项目目录，让本机工作有序延续。"}
+        </p>
       </div>
-      <div className="page-tabs">
-        <button
-          className={tab === "models" ? "active" : ""}
-          onClick={() => setTab("models")}
-        >
-          模型连接
-        </button>
-        <button
-          className={tab === "environment" ? "active" : ""}
-          onClick={() => setTab("environment")}
-        >
-          本机环境
-        </button>
-        <button
-          className={tab === "members" ? "active" : ""}
-          onClick={() => setTab("members")}
-        >
-          常驻成员
-        </button>
-      </div>
-      <div
-        className={`models-layout ${tab === "models" ? "" : "settings-tab-hidden"}`}
-      >
-        <aside className="profile-list">
-          {snapshot?.profiles.map((profile) => (
-            <button
-              className={`profile-item ${profile.id === selected ? "active" : ""}`}
-              key={profile.id}
-              disabled={profileBusy}
-              onClick={() => setSelected(profile.id)}
-            >
-              <span className={`provider-mark ${profile.provider}`}>
-                {profile.provider === "gemini"
-                  ? "G"
-                  : profile.provider === "deepseek"
-                    ? "D"
-                    : profile.provider === "ark"
-                      ? "A"
-                      : "↗"}
-              </span>
-              <span>
-                <strong>{profile.name}</strong>
-                <small>{PROFILE_STATUS[profile.status]}</small>
-              </span>
-              <ChevronRight size={14} />
-            </button>
-          ))}
+      {section === undefined ? (
+        <div className="page-tabs">
           <button
-            className={`add-profile ${selected === null ? "active" : ""}`}
-            disabled={!connected || profileBusy}
-            onClick={() => addConnection()}
+            className={tab === "models" ? "active" : ""}
+            onClick={() => setLocalSection("models")}
           >
-            <Plus size={15} />
-            添加模型连接
+            模型连接
           </button>
-          <p className="profile-note">
-            有密钥不代表已验证。
-            <br />
-            请测试文本与工具调用能力。
-          </p>
-        </aside>
-        <div className="profile-workspace">
-          <section className="catalog-new-connection">
-            <div>
-              <h3>从 Google 目录添加连接</h3>
-              <p>为通用模型或专项 Agent 单独配置，保留现有连接。</p>
-            </div>
-            <div className="catalog-add-actions">
-              <select
-                aria-label="用于新连接的 Google 模型目录"
-                value={catalogChoice}
-                disabled={!connected || profileBusy}
-                onChange={(event) =>
-                  setCatalogChoice(event.currentTarget.value)
-                }
-              >
-                <option value="">选择模型或专项 Agent</option>
-                <optgroup label="通用模型">
-                  {GOOGLE_CATALOG.filter(
-                    (item) => item.execution === "model",
-                  ).map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </optgroup>
-                <optgroup label="Google 专项 Agent">
-                  {GOOGLE_CATALOG.filter(
-                    (item) => item.execution === "google-agent",
-                  ).map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-                </optgroup>
-              </select>
-              <button
-                className="button secondary small"
-                disabled={!connected || profileBusy || !catalogChoice}
-                onClick={() => addConnection(catalogChoice)}
-              >
-                <Plus size={13} />
-                添加为新连接
-              </button>
-            </div>
-          </section>
-          <ProfileEditor
-            key={original?.id ?? newProfile?.id ?? "new"}
-            original={original}
-            initial={newProfile}
+          <button
+            className={tab === "environment" ? "active" : ""}
+            onClick={() => setLocalSection("environment")}
+          >
+            本机环境
+          </button>
+          <button
+            className={tab === "team" ? "active" : ""}
+            onClick={() => setLocalSection("team")}
+          >
+            常驻成员
+          </button>
+        </div>
+      ) : null}
+      <div
+        className={
+          tab === "models" ? "models-page-content" : "settings-tab-hidden"
+        }
+      >
+        {snapshot ? (
+          <DefaultModelSettings
+            snapshot={snapshot}
             dispatch={dispatch}
-            onSaved={setSelected}
-            onBusy={setProfileBusy}
             connected={connected}
           />
+        ) : null}
+        <div className="models-layout">
+          <aside className="profile-list">
+            {snapshot?.profiles.map((profile) => (
+              <button
+                className={`profile-item ${profile.id === selected ? "active" : ""}`}
+                key={profile.id}
+                disabled={profileBusy}
+                onClick={() => setSelected(profile.id)}
+              >
+                <span className={`provider-mark ${profile.provider}`}>
+                  {profile.provider === "gemini"
+                    ? "G"
+                    : profile.provider === "deepseek"
+                      ? "D"
+                      : profile.provider === "ark"
+                        ? "A"
+                        : "↗"}
+                </span>
+                <span>
+                  <strong>{profile.name}</strong>
+                  <small>{PROFILE_STATUS[profile.status]}</small>
+                </span>
+                <ChevronRight size={14} />
+              </button>
+            ))}
+            <button
+              className={`add-profile ${selected === null ? "active" : ""}`}
+              disabled={!connected || profileBusy}
+              onClick={() => addConnection()}
+            >
+              <Plus size={15} />
+              添加模型连接
+            </button>
+            <p className="profile-note">
+              有密钥不代表已验证。
+              <br />
+              请测试文本与工具调用能力。
+            </p>
+          </aside>
+          <div className="profile-workspace">
+            <section className="catalog-new-connection">
+              <div>
+                <h3>从 Google 目录添加连接</h3>
+                <p>为通用模型或专项 Agent 单独配置，保留现有连接。</p>
+              </div>
+              <div className="catalog-add-actions">
+                <select
+                  aria-label="用于新连接的 Google 模型目录"
+                  value={catalogChoice}
+                  disabled={!connected || profileBusy}
+                  onChange={(event) =>
+                    setCatalogChoice(event.currentTarget.value)
+                  }
+                >
+                  <option value="">选择模型或专项 Agent</option>
+                  <optgroup label="通用模型">
+                    {GOOGLE_CATALOG.filter(
+                      (item) => item.execution === "model",
+                    ).map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Google 专项 Agent">
+                    {GOOGLE_CATALOG.filter(
+                      (item) => item.execution === "google-agent",
+                    ).map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                </select>
+                <button
+                  className="button secondary small"
+                  disabled={!connected || profileBusy || !catalogChoice}
+                  onClick={() => addConnection(catalogChoice)}
+                >
+                  <Plus size={13} />
+                  添加为新连接
+                </button>
+              </div>
+            </section>
+            <ProfileEditor
+              key={original?.id ?? newProfile?.id ?? "new"}
+              original={original}
+              initial={newProfile}
+              dispatch={dispatch}
+              onSaved={setSelected}
+              onBusy={setProfileBusy}
+              connected={connected}
+            />
+          </div>
         </div>
       </div>
       {snapshot ? (
@@ -1092,7 +1210,8 @@ export function Settings({
             snapshot={snapshot}
             dispatch={dispatch}
             connected={connected}
-            mode={tab === "members" ? "members" : "environment"}
+            mode={tab === "team" ? "team" : "environment"}
+            onOpenModels={openModels}
           />
         </div>
       ) : tab !== "models" ? (

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -42,30 +42,42 @@ const clock = (value?: string) =>
 function ProjectCard({
   project,
   dispatch,
+  selected,
+  onSelect,
+  onDiscuss,
 }: {
   project: ProjectInfo;
   dispatch: Dispatch;
+  selected: boolean;
+  onSelect?: (project: ProjectInfo) => void;
+  onDiscuss?: (project: ProjectInfo) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const detailId = useId();
   const observation = project.observation;
   const changed =
     observation?.worktrees.reduce(
       (sum, item) => sum + (item.changedFiles ?? 0),
       0,
     ) ?? 0;
+  const gitComplete = Boolean(
+    observation?.worktrees.length &&
+    observation.worktrees.every((worktree) => worktree.state === "ready"),
+  );
+  const readableDocuments =
+    observation?.documents.filter((document) => document.state === "present")
+      .length ?? 0;
   return (
-    <article className="local-project-card">
+    <article
+      className={`local-project-card ${selected ? "selected" : ""}`}
+      aria-label={`项目 ${project.name}`}
+    >
       <div className="local-project-top">
         <div className="local-project-symbol">
           <Folder size={21} strokeWidth={1.5} />
         </div>
-        <button
-          className="local-project-title"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((value) => !value)}
-        >
-          <span>
-            <strong>{project.name}</strong>
+        <div className="local-project-identity">
+          <span className="local-project-category">
             <span className="series-label">{project.series}</span>
             <span
               className={`project-registration ${project.registered ? "registered" : "discovered"}`}
@@ -73,10 +85,60 @@ function ProjectCard({
               {project.registered ? "已登记" : "本地发现"}
             </span>
           </span>
-          <code>{project.root}</code>
-        </button>
+          <button
+            className="local-project-title"
+            aria-label={`选择项目 ${project.name}`}
+            aria-pressed={onSelect ? selected : undefined}
+            aria-expanded={onSelect ? undefined : expanded}
+            onClick={() =>
+              onSelect ? onSelect(project) : setExpanded((value) => !value)
+            }
+          >
+            {project.name}
+          </button>
+        </div>
+        <span className={`project-health ${observation?.state ?? "unknown"}`}>
+          {observation ? STATE_NAMES[observation.state] : "尚未观察"}
+        </span>
+      </div>
+      <code className="local-project-path" title={project.root}>
+        {project.root}
+      </code>
+      <div className="local-project-summary">
+        <span>
+          <GitBranch size={12} />
+          {observation?.worktrees.length ?? 0} 个工作目录
+        </span>
+        <span>
+          <FileText size={12} />
+          {readableDocuments} 份项目文档
+        </span>
+      </div>
+      <p className={`local-project-git ${changed ? "has-changes" : ""}`}>
+        {!gitComplete
+          ? "Git 状态尚未完整读取"
+          : changed
+            ? `${changed} 项未提交变更`
+            : "暂无未提交变更"}
+      </p>
+      <div
+        className="local-project-actions"
+        aria-label={`${project.name} 项目操作`}
+      >
+        {onDiscuss ? (
+          <button
+            className="project-discuss-button"
+            onClick={() => {
+              onSelect?.(project);
+              onDiscuss(project);
+            }}
+          >
+            <MessageSquare size={13} />
+            讨论项目
+          </button>
+        ) : null}
         <button
-          className="icon-button"
+          className="text-button project-open-directory"
           aria-label={`打开 ${project.name} 开发目录`}
           disabled={
             observation?.state === "missing" || observation?.state === "error"
@@ -85,36 +147,21 @@ function ProjectCard({
             void dispatch({ type: "path.reveal", path: project.devPath })
           }
         >
-          <ArrowUpRight size={17} />
+          <Folder size={13} />
+          目录
         </button>
-      </div>
-      <div className="local-project-summary">
-        <span className={`project-health ${observation?.state ?? "unknown"}`}>
-          {observation ? STATE_NAMES[observation.state] : "尚未观察"}
-        </span>
-        <span>
-          <GitBranch size={12} />
-          {observation?.worktrees.length ?? 0} 个工作目录
-        </span>
-        <span>
-          {!observation?.worktrees.length ||
-          observation.worktrees.some((worktree) => worktree.state !== "ready")
-            ? "Git 状态尚未完整读取"
-            : changed
-              ? `${changed} 项未提交变更`
-              : "暂无未提交变更"}
-        </span>
         <button
-          className="text-button"
+          className="text-button project-state-button"
           onClick={() => setExpanded((value) => !value)}
           aria-expanded={expanded}
+          aria-controls={detailId}
         >
-          {expanded ? "收起" : "查看状态"}
+          {expanded ? "收起状态" : "查看状态"}
           <ChevronDown size={13} className={expanded ? "rotate" : ""} />
         </button>
       </div>
       {expanded ? (
-        <div className="local-project-details">
+        <div className="local-project-details" id={detailId}>
           {observation?.issues.length ? (
             <div className="project-issues">
               {observation.issues.map((item, index) => (
@@ -123,59 +170,69 @@ function ProjectCard({
             </div>
           ) : null}
           {observation?.worktrees.length ? (
-            <div className="project-worktrees">
-              {observation.worktrees.map((worktree) => (
-                <div key={worktree.path}>
-                  <div>
-                    <GitBranch size={13} />
-                    <strong>
-                      {worktree.branch ?? worktree.expectedBranch ?? "分支未知"}
-                    </strong>
-                    <span>
-                      {worktree.head && worktree.head !== "(initial)"
-                        ? worktree.head.slice(0, 8)
-                        : ""}
-                    </span>
+            <section className="project-detail-group" aria-label="工作目录状态">
+              <h3>工作目录</h3>
+              <div className="project-worktrees">
+                {observation.worktrees.map((worktree) => (
+                  <div key={worktree.path}>
+                    <div>
+                      <GitBranch size={13} />
+                      <strong>
+                        {worktree.branch ??
+                          worktree.expectedBranch ??
+                          "分支未知"}
+                      </strong>
+                      <span>
+                        {worktree.head && worktree.head !== "(initial)"
+                          ? worktree.head.slice(0, 8)
+                          : ""}
+                      </span>
+                    </div>
+                    <code>{worktree.path}</code>
+                    <small>
+                      {worktree.state === "ready"
+                        ? `${worktree.changedFiles ?? 0} 项变更${worktree.expectedBranch && worktree.branch !== worktree.expectedBranch ? ` · 登记分支 ${worktree.expectedBranch}` : ""}`
+                        : worktree.error}
+                    </small>
                   </div>
-                  <code>{worktree.path}</code>
-                  <small>
-                    {worktree.state === "ready"
-                      ? `${worktree.changedFiles ?? 0} 项变更${worktree.expectedBranch && worktree.branch !== worktree.expectedBranch ? ` · 登记分支 ${worktree.expectedBranch}` : ""}`
-                      : worktree.error}
-                  </small>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <div className="project-doc-observations">
-            {observation?.documents.map((document) => (
-              <div key={`${document.name}:${document.path}`}>
-                <FileText size={13} />
-                <span>{DOC_NAMES[document.name] ?? document.name}</span>
-                {document.state === "present" ? (
-                  <button
-                    className="text-button"
-                    onClick={() =>
-                      void dispatch({
-                        type: "path.reveal",
-                        path: document.path,
-                      })
-                    }
-                  >
-                    查看
-                    <ArrowUpRight size={12} />
-                  </button>
-                ) : (
-                  <small>
-                    {document.state === "missing" ? "未找到" : "不可读取"}
-                  </small>
-                )}
+                ))}
               </div>
-            ))}
-          </div>
+            </section>
+          ) : null}
+          {observation?.documents.length ? (
+            <section className="project-detail-group" aria-label="项目文档状态">
+              <h3>项目文档</h3>
+              <div className="project-doc-observations">
+                {observation.documents.map((document) => (
+                  <div key={`${document.name}:${document.path}`}>
+                    <FileText size={13} />
+                    <span>{DOC_NAMES[document.name] ?? document.name}</span>
+                    {document.state === "present" ? (
+                      <button
+                        className="text-button"
+                        aria-label={`查看 ${project.name} ${DOC_NAMES[document.name] ?? document.name}`}
+                        onClick={() =>
+                          void dispatch({
+                            type: "path.reveal",
+                            path: document.path,
+                          })
+                        }
+                      >
+                        查看
+                        <ArrowUpRight size={12} />
+                      </button>
+                    ) : (
+                      <small>
+                        {document.state === "missing" ? "未找到" : "不可读取"}
+                      </small>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
           <p className="project-observed-at">
-            本地观察于 {clock(observation?.checkedAt)} · Git
-            与文档信息只在刷新时更新
+            本地观察于 {clock(observation?.checkedAt)} · 刷新后更新
           </p>
         </div>
       ) : null}
@@ -358,11 +415,17 @@ export function Projects({
   dispatch,
   onInitialize,
   onTask,
+  selectedProjectId,
+  onSelectProject,
+  onDiscussProject,
 }: {
   snapshot: Snapshot | null;
   dispatch: Dispatch;
   onInitialize?: () => void;
   onTask?: (id: string) => void;
+  selectedProjectId?: string | null;
+  onSelectProject?: (project: ProjectInfo) => void;
+  onDiscussProject?: (project: ProjectInfo) => void;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "registered" | "discovered">(
@@ -407,7 +470,7 @@ export function Projects({
       <div className="page-heading">
         <span className="eyebrow">LOCAL PROJECTS</span>
         <div className="heading-with-action">
-          <h1>本机项目，一处掌握</h1>
+          <h1>本机项目</h1>
           <button
             className="button primary"
             onClick={() => {
@@ -419,9 +482,9 @@ export function Projects({
             {initializing ? "收起初始化" : "新项目"}
           </button>
         </div>
-        <p>读取 Code 下的本地项目，结合中央登记，持续留意开发状态。</p>
+        <p>查看本地状态，选择项目后与团队讨论下一步。</p>
       </div>
-      <section className="project-monitor-bar">
+      <section className="project-monitor-bar" aria-label="项目监控">
         <div>
           <span
             className={`project-monitor-light ${monitoring ? "enabled" : ""}`}
@@ -489,7 +552,7 @@ export function Projects({
           onTask={onTask}
         />
       ) : null}
-      <div className="project-toolbar">
+      <div className="project-toolbar" role="search" aria-label="筛选项目">
         <label className="project-search">
           <Search size={15} />
           <input
@@ -520,12 +583,15 @@ export function Projects({
         <span>{visible.length} 个项目</span>
       </div>
       {visible.length ? (
-        <div className="local-project-list">
+        <div className="local-project-grid">
           {visible.map((project) => (
             <ProjectCard
               key={`${project.id}:${project.root}`}
               project={project}
               dispatch={dispatch}
+              selected={selectedProjectId === project.id}
+              onSelect={onSelectProject}
+              onDiscuss={onDiscussProject}
             />
           ))}
         </div>
