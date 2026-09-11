@@ -22,3 +22,11 @@
 - docs/开发计划.md 由 Codex 维护；网页 ChatGPT 维护讨论总结、产品与能力调研及参考，不另建工程路线。
 - 第一交付是实际模型与成员协作完成资料到 MD、修订保存及重开接续；四块首版范围继续以产品正文为准。
 - 本机 AI 规则体系的识别与创建属于首版项目初始化：当前读取 `/Users/Admin/AI/system/system.json`；新环境缺失时实际建立目录及完整规则，已有环境保留。通用初始化器支持当前用户目录和配置根路径，不能依赖开发机预装体系才可工作。
+
+## 当前工程
+
+- Node.js >= 24，Electron + React + TypeScript；依赖版本由 package-lock.json 固定。
+- `npm run dev` 构建并启动桌面；`npm run typecheck`、`npm test`、`npm run smoke` 为本地检查；`npm run probe -- gemini --team` 为真实模型合成验收，须区分测试替身和真实调用证据。
+- desktop 只暴露校验后的 IPC，运行时与解析位于 utility process；渲染层不读取本机文件或密钥。关闭 SDK 远端追踪，凭据不得写入日志、仓库或 task snapshot。
+- 初始化/恢复/冲突测试仅在临时根目录运行。不得把开发用合成项目登记到用户真实 AI 体系，不得覆盖已有规则或不明文件。
+- 状态和剩余范围维护在 docs/开发计划.md；不把“可配置”标成真实能力已验证，不把当前开发版当作完整首版发布。

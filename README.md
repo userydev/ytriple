@@ -10,6 +10,30 @@ ytriple 是以用户为中心的 Local-first Personal AI Workbench。Y 与真正
 
 按用户 2026-09-11 确认，从零、从当前产品文档重新设计与开发。旧项目的代码、架构、流程和规格均不作为参考或兼容基线；当前正文已经明确的长期产品思想继续保留，不依赖读取旧项目。
 
+## 本地运行
+
+当前已有可运行的 **0.1 开发版**：真实团队协作、工作台、MD 修订、常用文档文字导入、PNG/PPTX 导出，以及本机 AI 体系与项目初始化。平台收藏采集、Radar、跨任务资产复用和 Google 专项 Deep Research 尚未完成；这不是完整首版发布。
+
+使用 Node.js 24 或更新版本：
+
+```sh
+npm ci
+npm run dev
+```
+
+`npm run dev` 构建并打开 Electron 工作台；修改代码后重新启动。`npm run build` 构建，`npm start` 启动已有构建。首轮使用已实测的 Gemini；在“设置与连接”中可以配置多个渠道、分配成员模型并独立验证。
+
+任务状态与会话保存在系统应用数据目录（macOS 为 `~/Library/Application Support/ytriple`），成果默认在 `~/AI/knowledge/workspaces`。AI/Code/成果根目录可以配置；项目正式文档在对应项目的 main/dev 目录。界面输入的密钥由系统凭据保护能力加密保存，也可使用已有环境变量，密钥不进入仓库或任务快照。
+
+```sh
+npm run typecheck
+npm test
+npm run smoke
+npm run probe -- gemini --team
+```
+
+前三项为本地验证，`smoke` 只写临时目录。`probe` 会使用指定渠道做少量真实模型调用；`--team` 追加合成团队任务。实际状态、验收范围和待办见 [开发计划](docs/开发计划.md)。
+
 ## 两份主要正文
 
 - [讨论总结](docs/讨论总结.md)：已确认的吸收与产出主线、两类说明书、Lib、团队、项目反馈、七层成熟度和长期目标。

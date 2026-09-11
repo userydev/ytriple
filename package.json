@@ -1,0 +1,53 @@
+{
+  "name": "ytriple",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.js",
+  "description": "Local-first personal AI workbench",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "probe": "tsx scripts/probe.ts",
+    "format": "prettier --write src tests scripts index.html tsconfig.json vite.config.ts package.json",
+    "format:check": "prettier --check src tests scripts index.html tsconfig.json vite.config.ts package.json"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "4.0.67",
+    "@mozilla/readability": "0.6.0",
+    "@openai/agents": "0.18.0",
+    "@openai/agents-extensions": "0.18.0",
+    "ai": "7.0.97",
+    "linkedom": "0.18.13",
+    "lucide-react": "1.45.0",
+    "mammoth": "1.12.2",
+    "openai": "7.15.0",
+    "pdfjs-dist": "6.3.289",
+    "pptxgenjs": "4.0.1",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "zod": "4.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "electron": "44.3.0",
+    "esbuild": "0.28.2",
+    "jszip": "3.10.2",
+    "prettier": "3.9.6",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "vite": "8.3.0"
+  }
+}
