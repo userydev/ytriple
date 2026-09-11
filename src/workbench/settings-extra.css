@@ -1,0 +1,124 @@
+.settings-fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.settings-tab-hidden {
+  display: none !important;
+}
+.profile-workspace {
+  flex: 1;
+  min-width: 0;
+  max-width: 800px;
+}
+.profile-workspace .profile-form {
+  width: 100%;
+  max-width: none;
+}
+.catalog-new-connection {
+  padding: 16px;
+  margin-bottom: 26px;
+  border: 1px solid #dfe8d8;
+  border-radius: 8px;
+  background: #f4f8ef;
+}
+.catalog-new-connection h3 {
+  font-size: 12px;
+  font-weight: 550;
+}
+.catalog-new-connection p {
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.7;
+  margin-top: 6px;
+}
+.catalog-add-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 13px;
+}
+.catalog-add-actions select {
+  flex: 1;
+  min-width: 0;
+  padding: 8px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 11px;
+}
+.catalog-add-actions .button {
+  flex-shrink: 0;
+}
+.google-catalog {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 16px 0;
+  background: #fbfcf7;
+}
+.google-catalog .field:last-of-type {
+  margin-bottom: 0;
+}
+.google-catalog > .field-hint {
+  display: block;
+  margin-top: 10px;
+  line-height: 1.8;
+}
+.member-settings-card {
+  width: 100%;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffefa;
+}
+.member-settings-card h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 550;
+}
+.member-settings-card .field {
+  margin-top: 14px;
+}
+.member-settings-card .section-heading {
+  align-items: start;
+  gap: 18px;
+}
+.member-settings-card .section-heading > .text-button {
+  flex-shrink: 0;
+  font-size: 10px;
+}
+.member-configs:has(.member-settings-card) {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+.member-settings-card textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 110px;
+  font-size: 12px;
+  line-height: 1.8;
+}
+.member-settings-card .form-grid {
+  margin-bottom: 0;
+}
+@media (max-width: 800px) {
+  .profile-workspace {
+    width: 100%;
+  }
+  .catalog-add-actions {
+    flex-wrap: wrap;
+  }
+  .catalog-add-actions select {
+    flex-basis: 100%;
+  }
+  .member-settings-card {
+    padding: 16px;
+  }
+  .member-settings-card .section-heading {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}

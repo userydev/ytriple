@@ -158,6 +158,12 @@ export function buildAgentProgress(
           ? task.status
           : "stale");
     }
+    if (
+      lane.status === "completed" &&
+      lane.reports.length &&
+      lane.reports.every((report) => report.data?.stage === "plan")
+    )
+      lane.latestSummary = "本次处理已完成。";
     for (const activity of lane.tools) {
       if (activity.status === "running" && lane.status !== "running") {
         // A final answer does not prove a tool whose completion event is missing succeeded.

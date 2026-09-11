@@ -16,20 +16,48 @@ const profile = z.object({
   name: z.string().min(1).max(120),
   provider: z.enum(["gemini", "deepseek", "ark", "compatible"]),
   protocol: z.enum(["google", "openai"]),
+  execution: z.enum(["model", "google-agent"]).optional(),
   baseURL: z.string().max(2000),
   modelId: z.string().max(300),
   apiKeyEnv: z.string().max(150),
   hasKey: z.boolean(),
   status: z.enum(["unconfigured", "untested", "ready", "failed"]),
 });
+const memberSettings = z.object({
+  prompt: z.string().max(12000),
+  responseStyle: z.enum(["concise", "balanced", "detailed"]),
+  delegation: z.enum(["auto", "off"]),
+});
 const settings = z.object({
   aiRoot: text,
   codeRoot: text,
   workspaceRoot: text,
-  defaultProfileId: id,
-  memberProfiles: z.object({ coordinator: id, cto: id, researcher: id }),
+  defaultProfileId: z.string().max(100),
+  memberProfiles: z.object({
+    coordinator: z.string().max(100),
+    cto: z.string().max(100),
+    researcher: z.string().max(100),
+  }),
+  projectMonitoring: z.boolean().optional(),
+  memberSettings: z
+    .object({
+      coordinator: memberSettings,
+      cto: memberSettings,
+      researcher: memberSettings,
+    })
+    .optional(),
 });
 const schemas = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("window.rightMode"),
+    mode: z.enum(["split", "evidence", "artifact"]),
+  }),
+  z.object({ type: z.literal("project.refresh") }),
+  z.object({
+    type: z.literal("process.save"),
+    ...task,
+    member: member.optional(),
+  }),
   z.object({
     type: z.literal("window.resize"),
     main: z.number().min(0.2).max(0.8),

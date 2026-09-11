@@ -1,5 +1,12 @@
 import { useRef } from "react";
-import { Columns3, LayoutGrid, PanelLeft, RotateCcw } from "lucide-react";
+import {
+  Columns3,
+  Rows2,
+  Layers2,
+  FileText,
+  PanelLeft,
+  RotateCcw,
+} from "lucide-react";
 import type { Command, DesktopState, WindowKind } from "../shared/types";
 import type { Dispatch } from "./common";
 const labels: Record<WindowKind, string> = {
@@ -47,15 +54,22 @@ export function WorkspaceControls({
         </summary>
         <div className="layout-popover">
           <span>工作区布局</span>
-          <button
-            onClick={() =>
-              changeLayout({ type: "window.layout", mode: "triple" })
-            }
-          >
-            <LayoutGrid size={15} />
-            左侧决策 · 右侧过程与成果
-            {triple && !desktop?.expanded ? <span>✓</span> : null}
-          </button>
+          {RIGHT_MODES.map((item) => (
+            <button
+              key={item.id}
+              onClick={() =>
+                changeLayout({ type: "window.rightMode", mode: item.id })
+              }
+            >
+              <item.icon size={15} />
+              {item.description}
+              {triple &&
+              !desktop?.expanded &&
+              (desktop?.rightMode ?? "split") === item.id ? (
+                <span>✓</span>
+              ) : null}
+            </button>
+          ))}
           <button
             onClick={() =>
               changeLayout({ type: "window.layout", mode: "single" })
@@ -79,6 +93,49 @@ export function WorkspaceControls({
           <p>拖动分隔线调整大小。选中分隔线后也可用方向键微调。</p>
         </div>
       </details>
+    </div>
+  );
+}
+
+const RIGHT_MODES = [
+  { id: "split", label: "上下", description: "右侧上下分割", icon: Rows2 },
+  { id: "evidence", label: "过程", description: "右侧只看过程", icon: Layers2 },
+  {
+    id: "artifact",
+    label: "成果",
+    description: "右侧只看成果",
+    icon: FileText,
+  },
+] as const;
+export function RightModeControls({
+  desktop,
+  dispatch,
+}: {
+  desktop?: DesktopState;
+  dispatch: Dispatch;
+}) {
+  const mode = desktop?.rightMode ?? "split";
+  return (
+    <div
+      className="right-mode-controls"
+      role="group"
+      aria-label="右侧工作区显示方式"
+    >
+      {RIGHT_MODES.map((item) => (
+        <button
+          key={item.id}
+          className={mode === item.id ? "active" : ""}
+          aria-label={item.description}
+          aria-pressed={mode === item.id}
+          title={item.description}
+          onClick={() =>
+            void dispatch({ type: "window.rightMode", mode: item.id })
+          }
+        >
+          <item.icon size={12} />
+          <span>{item.label}</span>
+        </button>
+      ))}
     </div>
   );
 }

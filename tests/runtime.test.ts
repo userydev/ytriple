@@ -21,6 +21,7 @@ import {
   type RuntimeHooks,
 } from "../src/core/runtime.js";
 import { buildAgentProgress } from "../src/shared/progress.js";
+import { createGoogleAgentModel } from "../src/core/google-agents.js";
 
 function fixture() {
   const task: Task = {
@@ -701,3 +702,614 @@ test("selected refinement stays in structured model context and revises the sele
     ),
   );
 });
+
+test("custom member prompt and response style reach actual model requests; independent mode removes delegation tools", async () => {
+  const f = fixture();
+  f.task.member = "cto";
+  f.hooks.getMemberSettings = (member) => ({
+    prompt:
+      member === "cto"
+        ? "CUSTOM_CTO_PROMPT: 用产品成本来评价所有建议。"
+        : "OTHER_MEMBER_PROMPT",
+    responseStyle: "detailed",
+    delegation: "off",
+  });
+  const model = new ScriptedModel([
+    modelResponder((call) => {
+      assert.match(call.request.systemInstructions!, /CUSTOM_CTO_PROMPT/);
+      assert.match(call.request.systemInstructions!, /充分说明依据/);
+      assert.doesNotMatch(
+        call.request.systemInstructions!,
+        /OTHER_MEMBER_PROMPT/,
+      );
+      const names = call.request.tools.map((entry) => entry.name);
+      assert.ok(names.includes("read_artifact"));
+      assert.ok(
+        !names.some(
+          (name) => name.startsWith("consult_") || name === "specialist",
+        ),
+      );
+      return [assistantMessage("已按成本维度整理。")];
+    }),
+  ]);
+  await new TeamRuntime(f.hooks, { modelFactory: () => model }).run(f.task.id);
+  assert.equal(f.task.status, "completed", f.task.error);
+  assert.ok(
+    !f.task.events.some((event) => event.type === "delegation_started"),
+  );
+});
+
+test("a changed member setting invalidates the old SDK checkpoint before resuming work", async () => {
+  const f = fixture();
+  const blocked = deferred<void>();
+  let prompt = "OLD_MEMBER_PROMPT";
+  f.hooks.getMemberSettings = () => ({
+    prompt,
+    responseStyle: "concise",
+    delegation: "auto",
+  });
+  const firstModel = new ScriptedModel([
+    [functionCall("write_artifact", draft, { callId: "settings-write" })],
+    modelStreamResponder(() => {
+      blocked.resolve();
+      return (async function* () {
+        await new Promise(() => undefined);
+      })();
+    }),
+  ]);
+  const first = new TeamRuntime(f.hooks, { modelFactory: () => firstModel });
+  const running = first.run(f.task.id);
+  await blocked.promise;
+  await first.stop(f.task.id);
+  await running;
+  assert.ok(f.checkpoint());
+  prompt = "NEW_MEMBER_PROMPT";
+  const nextModel = new ScriptedModel([
+    modelResponder((call) => {
+      assert.match(call.request.systemInstructions!, /NEW_MEMBER_PROMPT/);
+      assert.doesNotMatch(
+        call.request.systemInstructions!,
+        /OLD_MEMBER_PROMPT/,
+      );
+      assert.doesNotMatch(JSON.stringify(call.request.input), /settings-write/);
+      return [assistantMessage("已使用更新后的成员设置继续。")];
+    }),
+  ]);
+  await new TeamRuntime(f.hooks, { modelFactory: () => nextModel }).run(
+    f.task.id,
+  );
+  assert.equal(f.task.status, "completed", f.task.error);
+  assert.equal(f.writes(), 1);
+  assert.ok(
+    f.task.events.some((event) => event.type === "checkpoint_invalidated"),
+  );
+  assert.ok(!f.task.events.some((event) => event.type === "run_resumed"));
+});
+
+function hostedProfile(f: ReturnType<typeof fixture>, member: MemberId) {
+  Object.assign(f.profiles[member], {
+    provider: "gemini",
+    protocol: "google",
+    execution: "google-agent",
+    baseURL: "https://generativelanguage.googleapis.com/v1beta",
+    modelId: "synthetic-research-agent",
+    capabilities: { text: true, tools: false, streaming: false },
+  });
+}
+test("hosted execution uses actual adapter callbacks, receives material text, saves a full report and keeps main reply short", async () => {
+  const f = fixture();
+  hostedProfile(f, "coordinator");
+  const report =
+    "# 合成报告\n\n" +
+    "这是公开成果，需要保存在右侧供用户继续编辑。".repeat(180);
+  let posts = 0;
+  const runtime = new TeamRuntime(f.hooks, {
+    requestTimeoutMs: 1,
+    googleAgentFactory: (profile, key, options) =>
+      createGoogleAgentModel(profile, key, {
+        ...options,
+        pollMs: 0,
+        fetch: (async (_url, init) => {
+          posts++;
+          const body = JSON.parse(String(init?.body));
+          assert.ok(!("tools" in body));
+          assert.match(body.input, /synthetic evidence: ORCHID 42/);
+          await new Promise((resolve) => setTimeout(resolve, 8));
+          return new Response(
+            JSON.stringify({
+              id: "interaction-first",
+              status: "completed",
+              outputs: [{ type: "text", text: report }],
+            }),
+            { status: 200 },
+          );
+        }) as typeof fetch,
+      }),
+  });
+  await runtime.run(f.task.id);
+  assert.equal(f.task.status, "completed", f.task.error);
+  assert.equal(posts, 1);
+  assert.equal(f.task.artifacts[0].content, report);
+  assert.ok(f.task.messages.at(-1)!.content.length < 700);
+  assert.match(f.task.messages.at(-1)!.content, /已保存/);
+  assert.ok(!f.task.events.some((event) => event.type === "tool_started"));
+  assert.ok(
+    f.task.events.some(
+      (event) => event.type === "artifact_written" && event.data?.hosted,
+    ),
+  );
+});
+
+test("parallel hosted consultations preserve separate invocation identity and full results for the parent", async () => {
+  const f = fixture();
+  hostedProfile(f, "researcher");
+  const parent = new ScriptedModel([
+    [
+      functionCall(
+        "consult_researcher",
+        { input: "核查第一项" },
+        { callId: "hosted-child-a" },
+      ),
+      functionCall(
+        "consult_researcher",
+        { input: "核查第二项" },
+        { callId: "hosted-child-b" },
+      ),
+    ],
+    modelResponder((call) => {
+      assert.match(JSON.stringify(call.request.input), /HOSTED_RESULT_1/);
+      assert.match(JSON.stringify(call.request.input), /HOSTED_RESULT_2/);
+      return [assistantMessage("已综合两项结果。")];
+    }),
+  ]);
+  let factories = 0;
+  await new TeamRuntime(f.hooks, {
+    modelFactory: () => parent,
+    googleAgentFactory: (_profile, _key, options) => {
+      const index = ++factories;
+      return new ScriptedModel([
+        modelResponder(async (call) => {
+          assert.deepEqual(call.request.tools, []);
+          options.onProgress?.(`正在处理合成子任务 ${index}`);
+          await new Promise((resolve) =>
+            setTimeout(resolve, index === 1 ? 12 : 2),
+          );
+          await options.onReport?.(
+            `HOSTED_RESULT_${index}`,
+            `interaction-${index}`,
+          );
+          return [assistantMessage(`HOSTED_RESULT_${index}`)];
+        }),
+      ]);
+    },
+  }).run(f.task.id);
+  assert.equal(f.task.status, "completed", f.task.error);
+  assert.equal(factories, 2);
+  assert.equal(f.task.artifacts.length, 2);
+  const delegations = f.task.events.filter(
+    (event) => event.type === "delegation_started",
+  );
+  const reports = f.task.events.filter(
+    (event) => event.type === "artifact_written",
+  );
+  assert.equal(
+    new Set(reports.map((event) => event.data?.invocationId)).size,
+    2,
+  );
+  for (const event of reports)
+    assert.ok(
+      delegations.some(
+        (delegation) =>
+          delegation.data?.childInvocationId === event.data?.invocationId,
+      ),
+    );
+});
+
+test("hosted interaction identity survives pause and resumes without creating another remote interaction", async () => {
+  const f = fixture();
+  hostedProfile(f, "coordinator");
+  const started = deferred<void>();
+  const first = new TeamRuntime(f.hooks, {
+    googleAgentFactory: (_profile, _key, options) =>
+      new ScriptedModel([
+        modelStreamResponder((call) => {
+          options.saveInteraction?.(
+            "persisted-interaction",
+            "input-fingerprint",
+          );
+          options.onProgress?.("正在核查公开资料");
+          started.resolve();
+          return (async function* () {
+            await new Promise((_resolve, reject) =>
+              call.request.signal?.addEventListener(
+                "abort",
+                () => reject(call.request.signal!.reason),
+                { once: true },
+              ),
+            );
+          })();
+        }),
+      ]),
+  });
+  const running = first.run(f.task.id);
+  await started.promise;
+  await first.stop(f.task.id);
+  await running;
+  assert.equal(f.task.status, "paused");
+  assert.ok(
+    Object.values(f.checkpoint()?.hostedInteractions ?? {}).some(
+      (entry) => entry.id === "persisted-interaction",
+    ),
+  );
+  const resumed = new TeamRuntime(f.hooks, {
+    googleAgentFactory: (_profile, _key, options) => {
+      assert.equal(
+        options.loadInteraction?.("input-fingerprint"),
+        "persisted-interaction",
+      );
+      assert.equal(options.loadInteraction?.("another-input"), undefined);
+      return new ScriptedModel([
+        modelResponder(async () => {
+          options.onProgress?.("正在核查公开资料");
+          await options.onReport?.(
+            "恢复后的公开成果。",
+            "persisted-interaction",
+          );
+          return [assistantMessage("恢复后的公开成果。")];
+        }),
+      ]);
+    },
+  });
+  await resumed.run(f.task.id);
+  assert.equal(f.task.status, "completed", f.task.error);
+  assert.equal(f.writes(), 1);
+  assert.equal(
+    f.task.events.filter(
+      (event) =>
+        event.type === "progress_reported" &&
+        event.summary === "正在核查公开资料",
+    ).length,
+    1,
+  );
+  assert.match(
+    buildAgentProgress(f.task)[0].latestSummary,
+    /已保存，可继续查看和编辑/,
+  );
+  assert.ok(f.task.events.some((event) => event.type === "run_resumed"));
+});
+
+test("a hosted report committed before pause is reused without repeating its write or public event", async () => {
+  const f = fixture();
+  hostedProfile(f, "coordinator");
+  const reportSaved = deferred<void>();
+  const first = new TeamRuntime(f.hooks, {
+    googleAgentFactory: (_profile, _key, options) =>
+      new ScriptedModel([
+        modelStreamResponder(async (call) => {
+          options.saveInteraction?.("completed-remote", "original-input");
+          await options.onReport?.("已经持久保存的成果。", "completed-remote");
+          reportSaved.resolve();
+          return (async function* () {
+            await new Promise((_resolve, reject) =>
+              call.request.signal?.addEventListener(
+                "abort",
+                () => reject(call.request.signal!.reason),
+                { once: true },
+              ),
+            );
+          })();
+        }),
+      ]),
+  });
+  const run = first.run(f.task.id);
+  await reportSaved.promise;
+  await first.stop(f.task.id);
+  await run;
+  assert.equal(f.writes(), 1);
+  assert.ok(
+    Object.values(f.checkpoint()?.hostedInteractions ?? {}).some(
+      (entry) => entry.completedArtifact?.id === f.task.artifacts[0].id,
+    ),
+  );
+  await new TeamRuntime(f.hooks, {
+    googleAgentFactory: (_profile, _key, options) => {
+      assert.equal(
+        options.loadInteraction?.("input-now-includes-our-own-artifact"),
+        "completed-remote",
+      );
+      return new ScriptedModel([
+        modelResponder(async () => {
+          await options.onReport?.("已经持久保存的成果。", "completed-remote");
+          return [assistantMessage("已经持久保存的成果。")];
+        }),
+      ]);
+    },
+  }).run(f.task.id);
+  assert.equal(f.task.status, "completed", f.task.error);
+  assert.equal(f.writes(), 1);
+  assert.equal(
+    f.task.events.filter((event) => event.type === "artifact_written").length,
+    1,
+  );
+  assert.equal(
+    f.task.events.filter(
+      (event) =>
+        event.type === "progress_reported" && event.data?.stage === "finding",
+    ).length,
+    1,
+  );
+  assert.match(
+    buildAgentProgress(f.task)[0].latestSummary,
+    /已保存，可继续查看和编辑/,
+  );
+});
+
+test("hosted refinement rejects a changed selected version before remote submission", async () => {
+  const f = fixture();
+  hostedProfile(f, "coordinator");
+  const original = await f.hooks.writeArtifact(f.task.id, {
+    title: "原始资料",
+    content: "原始版本",
+    format: "md",
+    goalVersion: 1,
+    operationId: "seed-hosted-original",
+  });
+  f.task.events.push({
+    id: "hosted-refine",
+    type: "artifact.refine_requested",
+    summary: "继续修改",
+    goalVersion: 1,
+    createdAt: "",
+    data: {
+      artifactId: original.id,
+      expectedHash: original.hash,
+      instruction: "精简内容",
+    },
+  });
+  await f.hooks.writeArtifact(f.task.id, {
+    title: "原始资料",
+    content: "用户稍后手改的版本",
+    format: "md",
+    goalVersion: 1,
+    operationId: "manual-new-version",
+    artifactId: original.id,
+    expectedHash: original.hash,
+  });
+  let remoteCreated = false;
+  await new TeamRuntime(f.hooks, {
+    googleAgentFactory: () => {
+      remoteCreated = true;
+      return new ScriptedModel([[assistantMessage("must not run")]]);
+    },
+  }).run(f.task.id);
+  assert.equal(f.task.status, "failed");
+  assert.match(f.task.error!, /选定成果已被修改/);
+  assert.equal(remoteCreated, false);
+  assert.equal(f.task.artifacts[0].content, "用户稍后手改的版本");
+});
+
+test("remote cancellation uncertainty remains visible after local pause", async () => {
+  const f = fixture();
+  hostedProfile(f, "coordinator");
+  const started = deferred<void>();
+  const runtime = new TeamRuntime(f.hooks, {
+    googleAgentFactory: (_profile, _key, options) =>
+      new ScriptedModel([
+        modelStreamResponder((call) => {
+          const blocked = new Promise((_resolve, reject) =>
+            call.request.signal?.addEventListener(
+              "abort",
+              () => {
+                options.onCancel?.(false);
+                reject(call.request.signal!.reason);
+              },
+              { once: true },
+            ),
+          );
+          void blocked.catch(() => undefined);
+          started.resolve();
+          return (async function* () {
+            await blocked;
+          })();
+        }),
+      ]),
+  });
+  const run = runtime.run(f.task.id);
+  await started.promise;
+  await runtime.stop(f.task.id);
+  await run;
+  assert.equal(f.task.status, "paused");
+  assert.ok(
+    f.task.events.some(
+      (event) =>
+        event.type === "progress_reported" &&
+        event.data?.cancelConfirmed === false &&
+        /远端取消尚未确认/.test(event.summary),
+    ),
+  );
+});
+
+test("pausing during a local hosted commit waits for storage and retains its remote identity", async () => {
+  const f = fixture();
+  hostedProfile(f, "coordinator");
+  const writing = deferred<void>();
+  const finishWrite = deferred<void>();
+  const write = f.hooks.writeArtifact;
+  f.hooks.writeArtifact = async (id, input) => {
+    writing.resolve();
+    await finishWrite.promise;
+    return write(id, input);
+  };
+  const runtime = new TeamRuntime(f.hooks, {
+    googleAgentFactory: (_profile, _key, options) =>
+      new ScriptedModel([
+        modelResponder(async () => {
+          options.saveInteraction?.("committing-remote", "committing-input");
+          await options.onReport?.("安全保存的完整成果。", "committing-remote");
+          return [assistantMessage("安全保存的完整成果。")];
+        }),
+      ]),
+  });
+  const run = runtime.run(f.task.id);
+  await writing.promise;
+  let stopped = false;
+  const stopping = runtime.stop(f.task.id).then(() => {
+    stopped = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(
+    stopped,
+    false,
+    "storage must not close before its atomic write finishes",
+  );
+  finishWrite.resolve();
+  await stopping;
+  await run;
+  assert.equal(f.task.status, "paused");
+  assert.equal(f.writes(), 1);
+  assert.ok(
+    Object.values(f.checkpoint()?.hostedInteractions ?? {}).some(
+      (entry) =>
+        entry.id === "committing-remote" &&
+        entry.completedArtifact?.id === f.task.artifacts[0].id,
+    ),
+  );
+  assert.equal(
+    f.task.events.filter((event) => event.type === "artifact_written").length,
+    1,
+  );
+});
+
+test(
+  "a hosted creation arriving after pause persists its ID despite failed cancellation and resumes with GET only",
+  { timeout: 2000 },
+  async () => {
+    const f = fixture();
+    hostedProfile(f, "coordinator");
+    const creating = deferred<void>();
+    const created = deferred<void>();
+    const cancellationReported = deferred<void>();
+    const requests: string[] = [];
+    const fetchResponse: typeof fetch = async (url, init) => {
+      const pathname = new URL(String(url)).pathname;
+      requests.push(`${init?.method} ${pathname}`);
+      if (pathname.endsWith("/cancel"))
+        return new Response("", { status: 503 });
+      if (init?.method === "POST") {
+        creating.resolve();
+        // Simulate a server response already in flight when the local abort occurs.
+        await created.promise;
+        return Response.json({
+          id: "late-created-remote",
+          status: "in_progress",
+        });
+      }
+      assert.equal(pathname, "/v1beta/interactions/late-created-remote");
+      return Response.json({
+        id: "late-created-remote",
+        status: "completed",
+        outputs: [{ type: "text", text: "恢复后读取到原远端任务的成果。" }],
+      });
+    };
+    const runtime = new TeamRuntime(f.hooks, {
+      googleAgentFactory: (profile, key, options) =>
+        createGoogleAgentModel(profile, key, {
+          ...options,
+          fetch: fetchResponse,
+          pollMs: 0,
+          onCancel: (confirmed) => {
+            options.onCancel?.(confirmed);
+            cancellationReported.resolve();
+          },
+        }),
+    });
+    const run = runtime.run(f.task.id);
+    await creating.promise;
+    const stopping = runtime.stop(f.task.id);
+    const pausedState = f.checkpoint()!.serializedState;
+    created.resolve();
+    await Promise.all([run, stopping, cancellationReported.promise]);
+    assert.equal(f.task.status, "paused");
+    assert.equal(f.checkpoint()!.serializedState, pausedState);
+    assert.equal(
+      Object.values(f.checkpoint()?.hostedInteractions ?? {})[0]?.id,
+      "late-created-remote",
+    );
+    assert.ok(
+      f.task.events.some((event) => event.data?.cancelConfirmed === false),
+    );
+    await new TeamRuntime(f.hooks, {
+      googleAgentFactory: (profile, key, options) =>
+        createGoogleAgentModel(profile, key, {
+          ...options,
+          fetch: fetchResponse,
+          pollMs: 0,
+        }),
+    }).run(f.task.id);
+    assert.equal(f.task.status, "completed", f.task.error);
+    assert.equal(f.writes(), 1);
+    assert.deepEqual(requests, [
+      "POST /v1beta/interactions",
+      "POST /v1beta/interactions/late-created-remote/cancel",
+      "GET /v1beta/interactions/late-created-remote",
+    ]);
+  },
+);
+
+test(
+  "a late hosted creation for an obsolete goal is cancelled without changing its replacement checkpoint",
+  { timeout: 2000 },
+  async () => {
+    const f = fixture();
+    hostedProfile(f, "coordinator");
+    const creating = deferred<void>();
+    const created = deferred<void>();
+    const cancellationReported = deferred<void>();
+    const requests: string[] = [];
+    const runtime = new TeamRuntime(f.hooks, {
+      googleAgentFactory: (profile, key, options) =>
+        createGoogleAgentModel(profile, key, {
+          ...options,
+          fetch: async (url, init) => {
+            const pathname = new URL(String(url)).pathname;
+            requests.push(`${init?.method} ${pathname}`);
+            if (pathname.endsWith("/cancel"))
+              return new Response("", { status: 503 });
+            creating.resolve();
+            await created.promise;
+            return Response.json({
+              id: "obsolete-remote",
+              status: "in_progress",
+            });
+          },
+          onCancel: (confirmed) => {
+            options.onCancel?.(confirmed);
+            cancellationReported.resolve();
+          },
+        }),
+    });
+    const run = runtime.run(f.task.id);
+    await creating.promise;
+    const stopping = runtime.stop(f.task.id);
+    f.task.goalVersion = 2;
+    const replacement: RuntimeCheckpoint = {
+      ...f.checkpoint()!,
+      goalVersion: 2,
+      runId: "replacement-run",
+      hostedInteractions: {
+        replacement: { id: "current-remote", inputHash: "current-input" },
+      },
+    };
+    f.hooks.saveCheckpoint(f.task.id, replacement);
+    const eventCount = f.task.events.length;
+    created.resolve();
+    await Promise.all([run, stopping, cancellationReported.promise]);
+    assert.deepEqual(f.checkpoint(), replacement);
+    assert.equal(f.task.events.length, eventCount);
+    assert.equal(f.writes(), 0);
+    assert.deepEqual(requests, [
+      "POST /v1beta/interactions",
+      "POST /v1beta/interactions/obsolete-remote/cancel",
+    ]);
+  },
+);

@@ -10,10 +10,11 @@ import {
   LoaderCircle,
   Pause,
   Search,
+  Save,
   Wrench,
 } from "lucide-react";
 import { buildAgentProgress, type ProgressStatus } from "../shared/progress";
-import type { Task, TaskEvent } from "../shared/types";
+import type { MemberId, Task, TaskEvent } from "../shared/types";
 import { formatTime, memberName, type Dispatch } from "./common";
 
 const statusNames: Record<ProgressStatus, string> = {
@@ -66,6 +67,21 @@ export function ProcessView({
   compact?: boolean;
 }) {
   const [history, setHistory] = useState(false);
+  const [saving, setSaving] = useState<MemberId | "team" | null>(null);
+  const saveSummary = async (member?: MemberId) => {
+    if (saving) return;
+    setSaving(member ?? "team");
+    try {
+      const result = await dispatch({
+        type: "process.save",
+        taskId: task.id,
+        ...(member ? { member } : {}),
+      });
+      if (result) await dispatch({ type: "window.focus", window: "artifact" });
+    } finally {
+      setSaving(null);
+    }
+  };
   const lanes = buildAgentProgress(task);
   const currentEvents = task.events.filter(
     (event) => event.goalVersion === task.goalVersion && isPublicEvent(event),
@@ -101,6 +117,22 @@ export function ProcessView({
       </div>
       {lanes.length ? (
         <>
+          <div className="process-timeline-heading">
+            <span>把当前公开进展整理为可继续编辑的文档</span>
+            <button
+              className="text-button"
+              aria-label="保存团队过程摘要"
+              disabled={saving !== null}
+              onClick={() => void saveSummary()}
+            >
+              {saving === "team" ? (
+                <LoaderCircle size={13} className="spin" />
+              ) : (
+                <Save size={13} />
+              )}
+              保存摘要
+            </button>
+          </div>
           <div className="agent-lanes">
             {lanes.map((lane) => {
               const parent = lanes.find(
@@ -143,6 +175,20 @@ export function ProcessView({
                     </div>
                   ) : null}
                   <p className="agent-summary">{lane.latestSummary}</p>
+                  <button
+                    className="text-button"
+                    aria-label={`保存${memberName(lane.member)}过程摘要`}
+                    title={`整理当前目标版本中${memberName(lane.member)}的公开记录`}
+                    disabled={saving !== null}
+                    onClick={() => void saveSummary(lane.member)}
+                  >
+                    {saving === lane.member ? (
+                      <LoaderCircle size={12} className="spin" />
+                    ) : (
+                      <Save size={12} />
+                    )}
+                    保存成员摘要
+                  </button>
                   {activeTools.length ? (
                     <div className="active-tools">
                       {activeTools.map((tool) => (

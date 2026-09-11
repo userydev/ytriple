@@ -1,4 +1,12 @@
 import path from "node:path";
+import {
+  normalizeMemberSettings,
+  normalizeTeamSettings,
+} from "../shared/member-settings.js";
+import { buildProcessDocument } from "./process-document.js";
+import { ProjectDiscovery } from "./projects.js";
+import { createGoogleAgentModel } from "./google-agents.js";
+import { Agent, Runner } from "@openai/agents";
 import type {
   AppSettings,
   Command,
@@ -31,12 +39,7 @@ import {
 import { importFile, importURL } from "./sources.js";
 import { TeamRuntime, type RuntimeCheckpoint } from "./runtime.js";
 import { probeProfile } from "./models.js";
-import {
-  inspectSystem,
-  bootstrapSystem,
-  listProjects,
-  initializeProject,
-} from "./system.js";
+import { inspectSystem, bootstrapSystem, initializeProject } from "./system.js";
 
 export type InternalCommand =
   | Command
@@ -49,11 +52,23 @@ export type InternalCommand =
       goalVersion: number;
       png: Uint8Array;
     };
+type HostedProbeResult = {
+  capabilities: { text: boolean; tools: boolean; streaming: boolean };
+  error?: string;
+  incomplete?: boolean;
+};
 export class WorkbenchService {
   readonly store: Store;
   readonly runtime: TeamRuntime;
   private system?: Snapshot["system"];
-  private projects: Snapshot["projects"] = [];
+  private readonly projectScanner = new ProjectDiscovery();
+  private projectTimer?: ReturnType<typeof setTimeout>;
+  private scanning?: Promise<void>;
+  private closing = false;
+  private readonly probes = new Map<
+    string,
+    { controller: AbortController; promise: Promise<HostedProbeResult> }
+  >();
   private updateTimer?: ReturnType<typeof setTimeout>;
   constructor(
     dataPath: string,
@@ -61,6 +76,9 @@ export class WorkbenchService {
       profile: ModelProfile,
     ) => string | undefined | Promise<string | undefined>,
     readonly changed: (snapshot: Snapshot) => void = () => {},
+    readonly options: {
+      googleAgentFactory?: typeof createGoogleAgentModel;
+    } = {},
   ) {
     this.store = new Store(dataPath);
     this.runtime = new TeamRuntime({
@@ -76,6 +94,11 @@ export class WorkbenchService {
         if (!profile) throw new Error("请先在设置中选择有效的模型连接。");
         return profile;
       },
+      getMemberSettings: (member) =>
+        normalizeMemberSettings(
+          this.store.settings().memberSettings?.[member],
+          member,
+        ),
       readKey,
       appendEvent: (id, event) => {
         this.store.event(id, event);
@@ -126,6 +149,7 @@ export class WorkbenchService {
     await recoverArtifacts(this.store);
     await recoverLibrary(this.store, this.store.settings().aiRoot);
     await this.refreshSystem();
+    this.scheduleProjects();
     return this.snapshot();
   }
   private runtimeTask(id: string): Task {
@@ -136,7 +160,7 @@ export class WorkbenchService {
     return task;
   }
   private notify(): void {
-    if (this.updateTimer) return;
+    if (this.closing || this.updateTimer) return;
     this.updateTimer = setTimeout(() => {
       this.updateTimer = undefined;
       void this.snapshot()
@@ -147,7 +171,45 @@ export class WorkbenchService {
   private async refreshSystem(): Promise<void> {
     const settings = this.store.settings();
     this.system = await inspectSystem(settings.aiRoot, settings.codeRoot);
-    this.projects = await listProjects(settings.aiRoot).catch(() => []);
+    await this.refreshProjects();
+  }
+  private async refreshProjects(): Promise<void> {
+    if (this.scanning) {
+      await this.scanning;
+      if (this.closing) return;
+      const settings = this.store.settings();
+      const last = this.projectScanner.snapshot.discovery;
+      if (
+        last.aiRoot === settings.aiRoot &&
+        last.codeRoot === settings.codeRoot
+      )
+        return;
+    }
+    if (this.closing) return;
+    const settings = this.store.settings();
+    this.scanning = this.projectScanner
+      .refresh(settings.aiRoot, settings.codeRoot)
+      .then(() => {});
+    try {
+      await this.scanning;
+    } finally {
+      this.scanning = undefined;
+    }
+  }
+  private scheduleProjects(): void {
+    if (this.projectTimer) clearTimeout(this.projectTimer);
+    if (this.closing || this.store.settings().projectMonitoring === false)
+      return;
+    this.projectTimer = setTimeout(() => {
+      this.projectTimer = undefined;
+      void this.refreshProjects()
+        .then(() => {
+          if (!this.closing) this.notify();
+        })
+        .catch(() => {})
+        .finally(() => this.scheduleProjects());
+    }, 30_000);
+    this.projectTimer.unref();
   }
   async snapshot(): Promise<Snapshot> {
     if (!this.system) await this.refreshSystem();
@@ -171,7 +233,8 @@ export class WorkbenchService {
       profiles,
       settings: this.store.settings(),
       system: this.system!,
-      projects: this.projects,
+      projects: this.projectScanner.snapshot.projects,
+      projectDiscovery: this.projectScanner.snapshot.discovery,
       library: listLibrary(this.store, this.store.settings().aiRoot),
     };
   }
@@ -209,9 +272,24 @@ export class WorkbenchService {
     this.store.saveCheckpoint(id, null);
   }
   async execute(command: InternalCommand): Promise<Snapshot> {
+    if (this.closing) throw new Error("工作台正在关闭。");
     switch (command.type) {
       case "snapshot":
         break;
+      case "project.refresh":
+        await this.refreshProjects();
+        break;
+      case "process.save": {
+        const task = this.store.task(command.taskId);
+        const document = buildProcessDocument(task, command.member);
+        await writeArtifact(this.store, task.id, {
+          ...document,
+          format: "md",
+          goalVersion: task.goalVersion,
+          operationId: uid(),
+        });
+        break;
+      }
       case "task.create": {
         const goal = requireText(command.goal, 40000, "工作目标");
         const settings = this.store.settings();
@@ -442,7 +520,10 @@ export class WorkbenchService {
         break;
       }
       case "profile.save": {
-        await this.runtime.stopAll();
+        await Promise.all([
+          this.runtime.stopAll(),
+          this.stopProbes(command.profile.id),
+        ]);
         const p = validateProfile(command.profile);
         const profiles = this.store.profiles().filter((old) => old.id !== p.id);
         profiles.push({
@@ -461,16 +542,28 @@ export class WorkbenchService {
           .profiles()
           .find((p) => p.id === command.profileId);
         if (!profile) throw new Error("连接不存在。");
-        const result = await probeProfile(profile, this.readKey);
+        const result =
+          profile.execution === "google-agent"
+            ? await this.startGoogleProbe(profile)
+            : await probeProfile(profile, this.readKey);
+        if (this.closing) throw new Error("工作台正在关闭，连接检查已停止。");
         this.store.setConfig(
           "profiles",
           this.store.profiles().map((p) =>
             p.id === profile.id
               ? {
                   ...p,
-                  status: result.error ? "failed" : "ready",
+                  status:
+                    "incomplete" in result && result.incomplete
+                      ? "untested"
+                      : result.error
+                        ? "failed"
+                        : "ready",
                   lastError: result.error,
-                  capabilities: result.capabilities,
+                  capabilities:
+                    "incomplete" in result && result.incomplete
+                      ? undefined
+                      : result.capabilities,
                   testedAt: now(),
                 }
               : p,
@@ -479,9 +572,14 @@ export class WorkbenchService {
         break;
       }
       case "settings.save": {
-        await this.runtime.stopAll();
         const settings = validateSettings(command.settings);
+        const previous = this.store.settings();
+        const { projectMonitoring: _a, ...before } = previous;
+        const { projectMonitoring: _b, ...after } = settings;
+        if (JSON.stringify(before) !== JSON.stringify(after))
+          await this.runtime.stopAll();
         this.store.setConfig("settings", settings);
+        this.scheduleProjects();
         await recoverLibrary(this.store, settings.aiRoot);
         await this.refreshSystem();
         break;
@@ -546,8 +644,65 @@ export class WorkbenchService {
     this.changed(snapshot);
     return snapshot;
   }
+  private startGoogleProbe(profile: ModelProfile): Promise<HostedProbeResult> {
+    const existing = this.probes.get(profile.id);
+    if (existing) return existing.promise;
+    const controller = new AbortController();
+    const signal = AbortSignal.any([
+      controller.signal,
+      AbortSignal.timeout(90_000),
+    ]);
+    const promise = this.probeGoogleAgent(profile, signal).finally(() =>
+      this.probes.delete(profile.id),
+    );
+    this.probes.set(profile.id, { controller, promise });
+    return promise;
+  }
+  private async stopProbes(profileId?: string): Promise<void> {
+    const active = [...this.probes.entries()]
+      .filter(([id]) => !profileId || id === profileId)
+      .map(([, probe]) => probe);
+    for (const probe of active)
+      probe.controller.abort(new DOMException("连接检查已停止", "AbortError"));
+    await Promise.allSettled(active.map((probe) => probe.promise));
+  }
+  private async probeGoogleAgent(
+    profile: ModelProfile,
+    signal: AbortSignal,
+  ): Promise<HostedProbeResult> {
+    const capabilities = { text: false, tools: false, streaming: false };
+    try {
+      const model = await (
+        this.options.googleAgentFactory ?? createGoogleAgentModel
+      )(profile, this.readKey);
+      const result = await new Runner({ tracingDisabled: true }).run(
+        new Agent({ name: "synthetic_agent_probe", model }),
+        "Synthetic connection test only. Reply with exactly AGENT_OK. Do not browse or create files.",
+        { signal, maxTurns: 1 },
+      );
+      capabilities.text = String(result.finalOutput).includes("AGENT_OK");
+      return {
+        capabilities,
+        error: capabilities.text ? undefined : "专项 Agent 未返回预期文本。",
+      };
+    } catch (error) {
+      return {
+        capabilities,
+        incomplete: signal.aborted,
+        error: signal.aborted
+          ? "90 秒连接检查尚未得到最终结果，已请求取消；专项研究仍可保存后作为任务运行。"
+          : safeError(error),
+      };
+    }
+  }
   async close(): Promise<void> {
-    await this.runtime.stopAll();
+    this.closing = true;
+    if (this.projectTimer) clearTimeout(this.projectTimer);
+    await Promise.all([
+      this.runtime.stopAll(),
+      this.scanning,
+      this.stopProbes(),
+    ]);
     if (this.updateTimer) clearTimeout(this.updateTimer);
     this.store.close();
   }
@@ -563,6 +718,7 @@ export function validateProfile(input: ModelProfile): ModelProfile {
     name: requireText(input.name, 120, "连接名称"),
     provider: input.provider,
     protocol: input.protocol,
+    execution: input.execution ?? "model",
     baseURL: typeof input.baseURL === "string" ? input.baseURL.trim() : "",
     modelId: typeof input.modelId === "string" ? input.modelId.trim() : "",
     apiKeyEnv:
@@ -576,6 +732,17 @@ export function validateProfile(input: ModelProfile): ModelProfile {
     !["google", "openai"].includes(p.protocol)
   )
     throw new Error("连接类型或 ID 无效。");
+  if (
+    !["model", "google-agent"].includes(p.execution) ||
+    (p.execution === "google-agent" &&
+      (p.provider !== "gemini" || p.protocol !== "google"))
+  )
+    throw new Error("专项 Agent 必须使用 Google 原生连接。");
+  if (
+    /^(deep-research|antigravity)/.test(p.modelId) &&
+    p.execution !== "google-agent"
+  )
+    throw new Error("此 ID 是专项 Agent，请切换为 Google 专项 Agent。");
   if (p.apiKeyEnv && !/^[A-Z][A-Z0-9_]*$/.test(p.apiKeyEnv))
     throw new Error("环境变量名格式不正确。");
   if (p.baseURL) {
@@ -609,6 +776,8 @@ export function validateSettings(input: AppSettings): AppSettings {
     codeRoot: path.resolve(input.codeRoot),
     workspaceRoot: path.resolve(input.workspaceRoot),
     defaultProfileId: input.defaultProfileId,
+    memberSettings: normalizeTeamSettings(input.memberSettings),
+    projectMonitoring: input.projectMonitoring !== false,
     memberProfiles: {
       coordinator: input.memberProfiles.coordinator,
       cto: input.memberProfiles.cto,

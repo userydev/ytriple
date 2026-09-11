@@ -1,3 +1,5 @@
+import type { MemberSettingsMap } from "./member-settings.js";
+import type { ProjectObservation, ProjectDiscoveryState } from "./projects.js";
 export type MemberId = "coordinator" | "cto" | "researcher";
 export type TaskStatus =
   "idle" | "running" | "waiting" | "paused" | "failed" | "completed";
@@ -8,6 +10,7 @@ export interface ModelProfile {
   name: string;
   provider: "gemini" | "deepseek" | "ark" | "compatible";
   protocol: "google" | "openai";
+  execution?: "model" | "google-agent";
   baseURL: string;
   modelId: string;
   apiKeyEnv: string;
@@ -23,6 +26,8 @@ export interface AppSettings {
   workspaceRoot: string;
   defaultProfileId: string;
   memberProfiles: Record<MemberId, string>;
+  memberSettings?: MemberSettingsMap;
+  projectMonitoring?: boolean;
 }
 export interface Source {
   id: string;
@@ -103,6 +108,10 @@ export interface SystemStatus {
   policyText?: string;
 }
 export interface ProjectInfo {
+  registered?: boolean;
+  lifecycle?: string;
+  manifestPath?: string;
+  observation?: ProjectObservation;
   id: string;
   name: string;
   series: string;
@@ -147,6 +156,7 @@ export interface LibraryEntry {
   previewURL?: string;
 }
 export interface DesktopState {
+  rightMode?: "split" | "evidence" | "artifact";
   ratios?: { main: number; evidence: number };
   expanded?: WindowKind | null;
   revision?: number;
@@ -163,10 +173,14 @@ export interface Snapshot {
   settings: AppSettings;
   system: SystemStatus;
   projects: ProjectInfo[];
+  projectDiscovery?: ProjectDiscoveryState;
   library?: LibraryEntry[];
   desktop?: DesktopState;
 }
 export type Command =
+  | { type: "window.rightMode"; mode: "split" | "evidence" | "artifact" }
+  | { type: "project.refresh" }
+  | { type: "process.save"; taskId: string; member?: MemberId }
   | { type: "window.resize"; main: number; evidence: number }
   | { type: "window.expand"; window: WindowKind | null }
   | { type: "snapshot" }

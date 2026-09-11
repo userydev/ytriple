@@ -6,9 +6,12 @@ export interface Bounds {
   width: number;
   height: number;
 }
+export type RightPaneMode = "split" | "evidence" | "artifact";
+
 export interface WindowLayout {
   version: 2;
   mode: DesktopState["mode"];
+  rightMode: RightPaneMode;
   taskId: string | null;
   bounds: Bounds;
   collapsed: Record<WindowKind, boolean>;
@@ -56,6 +59,7 @@ export function restoreLayout(
   const result: WindowLayout = {
     version: 2,
     mode: "triple",
+    rightMode: "split",
     taskId: null,
     bounds: defaultBounds(fallback),
     collapsed: { main: false, evidence: false, artifact: false },
@@ -74,6 +78,8 @@ export function restoreLayout(
   // the new workspace starts with a single full-sized container and all three panes.
   if (raw.version !== 2) return result;
   if (raw.mode === "single" || raw.mode === "triple") result.mode = raw.mode;
+  if (["split", "evidence", "artifact"].includes(raw.rightMode ?? ""))
+    result.rightMode = raw.rightMode!;
   if (isBounds(raw.bounds)) {
     const b = raw.bounds;
     const area =
@@ -100,4 +106,69 @@ export function restoreLayout(
     if (raw.expanded !== "main") result.mode = "triple";
   }
   return result;
+}
+
+/** A right-side view never maximizes the whole app or changes native geometry. */
+export function setRightPaneMode(
+  layout: WindowLayout,
+  mode: RightPaneMode,
+): void {
+  layout.rightMode = mode;
+  layout.mode = "triple";
+  layout.expanded = null;
+  if (mode === "split") {
+    layout.collapsed.evidence = false;
+    layout.collapsed.artifact = false;
+  } else layout.collapsed[mode] = false;
+}
+export function focusLayoutPane(layout: WindowLayout, kind: WindowKind): void {
+  if (kind !== "main") {
+    layout.mode = "triple";
+    if (layout.rightMode !== "split") layout.rightMode = kind;
+  }
+  layout.expanded = null;
+  layout.collapsed[kind] = false;
+}
+export function setPanelLayout(
+  layout: WindowLayout,
+  mode: DesktopState["mode"],
+  reset = false,
+): void {
+  layout.mode = mode;
+  layout.expanded = null;
+  if (mode === "single") layout.collapsed.main = false;
+  else layout.rightMode = "split";
+  if (reset) {
+    layout.rightMode = "split";
+    layout.ratios = defaultRatios();
+    layout.collapsed = { main: false, evidence: false, artifact: false };
+  }
+}
+export function layoutDesktopState(
+  layout: WindowLayout,
+  revision: number,
+): DesktopState {
+  const rightMode = layout.rightMode ?? "split";
+  return {
+    mode: layout.mode,
+    rightMode,
+    taskId: layout.taskId,
+    revision,
+    collapsed: { ...layout.collapsed },
+    ratios: { ...layout.ratios },
+    expanded: layout.expanded,
+    open: {
+      main: !layout.expanded || layout.expanded === "main",
+      evidence:
+        layout.mode === "triple" &&
+        (layout.expanded
+          ? layout.expanded === "evidence"
+          : rightMode === "split" || rightMode === "evidence"),
+      artifact:
+        layout.mode === "triple" &&
+        (layout.expanded
+          ? layout.expanded === "artifact"
+          : rightMode === "split" || rightMode === "artifact"),
+    },
+  };
 }

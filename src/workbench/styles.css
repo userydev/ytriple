@@ -4004,3 +4004,85 @@ button {
   grid-column: 1;
   grid-row: 3;
 }
+
+/* Right-only views preserve the decision pane and the previous split ratio. */
+.workspace-panels > .workspace-right {
+  display: flex;
+  flex-direction: column;
+  container-type: inline-size;
+}
+.workspace-right-content {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.workspace-right-content > .pane-evidence {
+  grid-column: 1;
+  grid-row: 1;
+}
+.workspace-right-content > .divider-evidence {
+  grid-column: 1;
+  grid-row: 2;
+}
+.workspace-right-content > .pane-artifact {
+  grid-column: 1;
+  grid-row: 3;
+}
+.right-pane-toolbar {
+  min-height: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 10px 0 13px;
+  background: #eff4e9;
+  border-bottom: 1px solid #dfe7d8;
+}
+.right-pane-toolbar > span {
+  font-size: 10px;
+  color: #809076;
+  white-space: nowrap;
+}
+.right-mode-controls {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px;
+  background: #e5ecde;
+  border-radius: 5px;
+}
+.right-mode-controls button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 4px 7px;
+  font-size: 10px;
+  color: #84957a;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+.right-mode-controls button.active {
+  background: #fffefa;
+  color: #426942;
+  box-shadow: 0 1px 3px #2a492710;
+}
+.right-mode-controls button:hover {
+  color: #466a41;
+}
+.right-toolbar-hidden {
+  display: none;
+}
+@container (max-width: 375px) {
+  .right-pane-toolbar > span {
+    display: none;
+  }
+  .right-pane-toolbar {
+    justify-content: flex-end;
+    padding-left: 7px;
+    padding-right: 7px;
+  }
+}

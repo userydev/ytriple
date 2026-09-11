@@ -1,3 +1,4 @@
+import { normalizeTeamSettings } from "../shared/member-settings.js";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
@@ -93,7 +94,7 @@ export class Store {
       .run(key, JSON.stringify(value));
   }
   settings(): AppSettings {
-    return this.config("settings", () => {
+    const settings = this.config<AppSettings>("settings", () => {
       const aiRoot = path.join(os.homedir(), "AI");
       const profiles = this.profiles();
       const first =
@@ -112,6 +113,11 @@ export class Store {
         },
       };
     });
+    return {
+      ...settings,
+      memberSettings: normalizeTeamSettings(settings.memberSettings),
+      projectMonitoring: settings.projectMonitoring !== false,
+    };
   }
   profiles(): ModelProfile[] {
     return this.config("profiles", () => [

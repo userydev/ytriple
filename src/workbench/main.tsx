@@ -10,3 +10,6 @@ createRoot(root).render(
     <App />
   </StrictMode>,
 );
+
+import "./projects.css";
+import "./settings-extra.css";

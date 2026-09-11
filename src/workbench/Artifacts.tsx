@@ -471,12 +471,17 @@ export function ArtifactList({
   task,
   dispatch,
   compact = false,
+  preferredArtifactId,
 }: {
   task: Task;
   dispatch: Dispatch;
   compact?: boolean;
+  preferredArtifactId?: string;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
+  useEffect(() => {
+    if (preferredArtifactId) setSelected(preferredArtifactId);
+  }, [preferredArtifactId]);
   const artifact =
     task.artifacts.find((item) => item.id === selected) ??
     task.artifacts.at(-1);

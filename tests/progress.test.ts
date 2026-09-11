@@ -123,3 +123,22 @@ test("resumed invocations and tool calls preserve identity, public finding and o
   assert.deepEqual(lane.sourceIds, ["s-1"]);
   assert.deepEqual(lane.artifactIds, ["report-1"]);
 });
+
+test("a completed legacy run does not keep its initial in-progress plan as the current status", () => {
+  const plan = {
+    ...event("progress_reported", { stage: "plan" }),
+    summary: "已接收任务，正在处理。",
+  };
+  const [lane] = buildAgentProgress({
+    events: [
+      event("agent_started"),
+      plan,
+      event("agent_completed"),
+      event("run_completed"),
+    ],
+    goalVersion: 2,
+    status: "completed",
+  });
+  assert.equal(lane.latestSummary, "本次处理已完成。");
+  assert.equal(lane.reports[0].summary, plan.summary);
+});

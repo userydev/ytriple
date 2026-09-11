@@ -4,6 +4,10 @@ import {
   clampBounds,
   restoreLayout,
   defaultBounds,
+  setRightPaneMode,
+  focusLayoutPane,
+  setPanelLayout,
+  layoutDesktopState,
 } from "../src/desktop/window-layout.js";
 import { parseCommand } from "../src/desktop/commands.js";
 
@@ -43,7 +47,7 @@ test("embedded layout restores panel ratios and folds separately from native geo
     expanded: null,
   };
   const restored = restoreLayout(saved, [area], area);
-  assert.deepEqual(restored, saved);
+  assert.deepEqual(restored, { ...saved, rightMode: "split" });
   const newDisplay = { x: 0, y: 28, width: 1280, height: 740 };
   assert.deepEqual(
     restoreLayout(saved, [newDisplay], newDisplay).bounds,
@@ -125,4 +129,107 @@ test("new desktop and library IPC reject forged commands and require conflict to
     tags: ["阅读"],
   };
   assert.deepEqual(parseCommand({ ...valid, path: "/outside" }), valid);
+});
+
+test("right-side mode persists without changing decision width, split ratio, task or native bounds", () => {
+  const area = { x: 0, y: 28, width: 1440, height: 900 };
+  const layout = restoreLayout(
+    {
+      version: 2,
+      taskId: "persisted-task",
+      ratios: { main: 0.46, evidence: 0.4 },
+      collapsed: { main: false, evidence: true, artifact: true },
+    },
+    [area],
+    area,
+  );
+  const geometry = structuredClone(layout.bounds);
+  for (const mode of ["evidence", "artifact", "split"] as const) {
+    layout.expanded = "artifact";
+    setRightPaneMode(layout, mode);
+    assert.equal(layout.mode, "triple");
+    assert.equal(layout.expanded, null);
+    assert.equal(layout.taskId, "persisted-task");
+    assert.deepEqual(layout.ratios, { main: 0.46, evidence: 0.4 });
+    assert.deepEqual(layout.bounds, geometry);
+    const restored = restoreLayout(
+      JSON.parse(JSON.stringify(layout)),
+      [area],
+      area,
+    );
+    assert.equal(restored.rightMode, mode);
+    assert.deepEqual(layoutDesktopState(restored, 7).open, {
+      main: true,
+      evidence: mode !== "artifact",
+      artifact: mode !== "evidence",
+    });
+  }
+  assert.deepEqual(layout.collapsed, {
+    main: false,
+    evidence: false,
+    artifact: false,
+  });
+});
+test("focusing a hidden right panel reveals it, while full-workspace expansion restores the saved right mode", () => {
+  const area = { x: 0, y: 28, width: 1440, height: 900 };
+  const layout = restoreLayout(
+    {
+      version: 2,
+      rightMode: "artifact",
+      ratios: { main: 0.44, evidence: 0.38 },
+    },
+    [area],
+    area,
+  );
+  focusLayoutPane(layout, "evidence");
+  assert.equal(layout.rightMode, "evidence");
+  assert.deepEqual(layoutDesktopState(layout, 2).open, {
+    main: true,
+    evidence: true,
+    artifact: false,
+  });
+  focusLayoutPane(layout, "main");
+  assert.equal(layout.rightMode, "evidence");
+  layout.expanded = "artifact";
+  assert.deepEqual(layoutDesktopState(layout, 3).open, {
+    main: false,
+    evidence: false,
+    artifact: true,
+  });
+  const resumed = restoreLayout(
+    JSON.parse(JSON.stringify(layout)),
+    [area],
+    area,
+  );
+  assert.equal(resumed.rightMode, "evidence");
+  resumed.expanded = null;
+  assert.deepEqual(layoutDesktopState(resumed, 4).open, {
+    main: true,
+    evidence: true,
+    artifact: false,
+  });
+  setPanelLayout(resumed, "single");
+  assert.equal(resumed.rightMode, "evidence");
+  focusLayoutPane(resumed, "artifact");
+  assert.equal(resumed.mode, "triple");
+  assert.equal(resumed.rightMode, "artifact");
+  setPanelLayout(resumed, "triple", true);
+  assert.equal(resumed.rightMode, "split");
+  assert.deepEqual(resumed.ratios, { main: 0.52, evidence: 0.5 });
+});
+test("missing or invalid right modes use split and IPC only accepts the three supported modes", () => {
+  const area = { x: 0, y: 28, width: 1440, height: 900 };
+  for (const rightMode of [undefined, "native", "outside", null, 42])
+    assert.equal(
+      restoreLayout({ version: 2, rightMode }, [area], area).rightMode,
+      "split",
+    );
+  for (const mode of ["split", "evidence", "artifact"])
+    assert.deepEqual(parseCommand({ type: "window.rightMode", mode }), {
+      type: "window.rightMode",
+      mode,
+    });
+  assert.throws(() =>
+    parseCommand({ type: "window.rightMode", mode: "outside" }),
+  );
 });

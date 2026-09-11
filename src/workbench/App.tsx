@@ -51,6 +51,7 @@ import { ArtifactList, SourceList } from "./Artifacts";
 import { Settings } from "./Settings";
 import { Library } from "./Library";
 import { ProcessView } from "./ProcessView";
+import { Projects } from "./Projects";
 import { WorkspaceControls } from "./WindowControls";
 import { WorkspacePanels } from "./WorkspacePanels";
 import {
@@ -995,115 +996,12 @@ function SourceDialog({
   );
 }
 
-function Projects({
-  snapshot,
-  dispatch,
-  onInitialize,
-  onTask,
-}: {
-  snapshot: Snapshot | null;
-  dispatch: Dispatch;
-  onInitialize: () => void;
-  onTask: (id: string) => void;
-}) {
-  const projectTasks =
-    snapshot?.tasks.filter((task) => task.kind === "project") ?? [];
-  return (
-    <div className="collection-page">
-      <div className="page-heading">
-        <span className="eyebrow">PROJECTS</span>
-        <div className="heading-with-action">
-          <h1>让想法走向实践</h1>
-          <button className="button primary" onClick={onInitialize}>
-            <Plus size={15} />
-            初始化项目
-          </button>
-        </div>
-        <p>在这里讨论、准备，再交给专业工具继续。</p>
-      </div>
-      {snapshot?.projects.length ? (
-        <div className="project-list">
-          {snapshot.projects.map((project) => (
-            <article className="project-row" key={project.id}>
-              <div className="project-symbol">
-                <Folder size={23} strokeWidth={1.4} />
-              </div>
-              <div className="project-row-content">
-                <div>
-                  <h3>{project.name}</h3>
-                  <span className="series-label">{project.series}</span>
-                </div>
-                <code>{project.root}</code>
-                <div className="project-documents">
-                  {Object.entries(project.documents).map(([name, path]) =>
-                    path ? (
-                      <button
-                        className="text-button"
-                        key={name}
-                        onClick={() =>
-                          void dispatch({ type: "path.reveal", path })
-                        }
-                      >
-                        <FileText size={12} />
-                        {name}
-                      </button>
-                    ) : null,
-                  )}
-                </div>
-              </div>
-              <button
-                className="icon-button"
-                aria-label={`打开 ${project.name} 开发目录`}
-                title="打开开发目录"
-                onClick={() =>
-                  void dispatch({ type: "path.reveal", path: project.devPath })
-                }
-              >
-                <ArrowUpRight size={18} />
-              </button>
-            </article>
-          ))}
-        </div>
-      ) : (
-        <div className="collection-empty">
-          <div className="large-line-icon">
-            <Sprout size={49} strokeWidth={1.1} />
-          </div>
-          <h2>每个项目，都从一个想法开始</h2>
-          <p>
-            准备好产品雏形和需求，
-            <br />
-            团队会建立规则、文档与开发目录。
-          </p>
-          <button className="button secondary" onClick={onInitialize}>
-            准备第一个项目
-            <ArrowRight size={14} />
-          </button>
-        </div>
-      )}
-      {projectTasks.length ? (
-        <section className="related-work">
-          <h3>相关讨论</h3>
-          {projectTasks.map((task) => (
-            <button
-              className="related-task"
-              key={task.id}
-              onClick={() => onTask(task.id)}
-            >
-              <MessageSquare size={15} />
-              <span>{task.title}</span>
-              <Status task={task} />
-              <ArrowUpRight size={14} />
-            </button>
-          ))}
-        </section>
-      ) : null}
-    </div>
-  );
-}
-
 export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [artifactFocus, setArtifactFocus] = useState<{
+    taskId: string;
+    artifactId: string;
+  } | null>(null);
   const [connection, setConnection] = useState<
     "loading" | "connected" | "unavailable" | "failed"
   >(() => (window.ytriple ? "loading" : "unavailable"));
@@ -1172,6 +1070,13 @@ export function App() {
       try {
         const result = await window.ytriple.invoke(command);
         acceptSnapshot(result);
+        if (command.type === "process.save") {
+          const artifactId = result.tasks
+            .find((task) => task.id === command.taskId)
+            ?.artifacts.at(-1)?.id;
+          if (artifactId)
+            setArtifactFocus({ taskId: command.taskId, artifactId });
+        }
         if (command.type === "window.focus" || command.type === "window.open") {
           setPage("work");
           setFocusRequest((current) => ({
@@ -1506,10 +1411,12 @@ export function App() {
                     资料 <span>{task?.sources.length ?? 0}</span>
                   </button>
                 </div>
-                <button className="text-button" onClick={addSource}>
-                  <Plus size={13} />
-                  添加资料
-                </button>
+                {evidenceTab === "sources" ? (
+                  <button className="text-button" onClick={addSource}>
+                    <Plus size={13} />
+                    添加资料
+                  </button>
+                ) : null}
               </div>
               {evidenceTab === "process" ? (
                 task ? (
@@ -1537,6 +1444,11 @@ export function App() {
             task ? (
               <ArtifactList
                 key={`artifacts:${task.id}`}
+                preferredArtifactId={
+                  artifactFocus?.taskId === task.id
+                    ? artifactFocus.artifactId
+                    : undefined
+                }
                 task={task}
                 dispatch={dispatch}
               />

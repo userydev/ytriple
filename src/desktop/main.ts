@@ -23,7 +23,10 @@ import { imageDocument } from "../core/exports.js";
 import { readOwnedArtifact } from "../core/files.js";
 import {
   restoreLayout,
-  defaultRatios,
+  setRightPaneMode,
+  focusLayoutPane,
+  setPanelLayout,
+  layoutDesktopState,
   type WindowLayout,
 } from "./window-layout.js";
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -58,23 +61,7 @@ let movingWindow = false;
 let layoutTimer: ReturnType<typeof setTimeout> | undefined;
 let layoutWrites = Promise.resolve();
 function desktopState(): DesktopState {
-  return {
-    mode: layout.mode,
-    taskId: layout.taskId,
-    revision: desktopRevision,
-    collapsed: { ...layout.collapsed },
-    ratios: { ...layout.ratios },
-    expanded: layout.expanded,
-    open: {
-      main: !layout.expanded || layout.expanded === "main",
-      evidence:
-        layout.mode === "triple" &&
-        (!layout.expanded || layout.expanded === "evidence"),
-      artifact:
-        layout.mode === "triple" &&
-        (!layout.expanded || layout.expanded === "artifact"),
-    },
-  };
+  return layoutDesktopState(layout, desktopRevision);
 }
 function persistLayout(): void {
   clearTimeout(layoutTimer);
@@ -260,19 +247,11 @@ function openWindow(): BrowserWindow {
   return win;
 }
 function setLayout(mode: DesktopState["mode"], reset = false): void {
-  layout.mode = mode;
-  layout.expanded = null;
-  if (mode === "single") layout.collapsed.main = false;
-  if (reset) {
-    layout.ratios = defaultRatios();
-    layout.collapsed = { main: false, evidence: false, artifact: false };
-  }
+  setPanelLayout(layout, mode, reset);
   desktopChanged();
 }
 function focusPane(kind: WindowKind): void {
-  if (kind !== "main") layout.mode = "triple";
-  layout.expanded = null;
-  layout.collapsed[kind] = false;
+  focusLayoutPane(layout, kind);
   desktopChanged();
 }
 async function renderPNG(
@@ -350,6 +329,11 @@ async function command(input: Command): Promise<Snapshot> {
     setLayout(input.mode, input.reset);
     return latest!;
   }
+  if (input.type === "window.rightMode") {
+    setRightPaneMode(layout, input.mode);
+    desktopChanged();
+    return latest!;
+  }
   if (input.type === "window.collapse") {
     layout.collapsed[input.window] = input.collapsed;
     if (layout.expanded === input.window && input.collapsed)
@@ -400,6 +384,7 @@ async function command(input: Command): Promise<Snapshot> {
       ...latest.projects.flatMap((p) => [
         p.root,
         p.devPath,
+        ...(p.observation?.worktrees.map((w) => w.path) ?? []),
         ...Object.values(p.documents).filter((p): p is string => !!p),
       ]),
       ...latest.tasks.flatMap((t) => [

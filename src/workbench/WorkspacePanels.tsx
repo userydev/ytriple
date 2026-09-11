@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import type { DesktopState, WindowKind } from "../shared/types";
 import type { Dispatch } from "./common";
+import { RightModeControls } from "./WindowControls";
 
 export const PANEL_NAMES: Record<WindowKind, string> = {
   main: "决策与讨论",
@@ -59,6 +60,7 @@ export function WorkspacePanels({
   const [dragging, setDragging] = useState<"main" | "evidence" | null>(null);
   const container = useRef<HTMLDivElement>(null);
   const right = useRef<HTMLDivElement>(null);
+  const rightToolbar = useRef<HTMLDivElement>(null);
   const collapsed = desktop?.collapsed ?? {
     main: false,
     evidence: false,
@@ -68,9 +70,18 @@ export function WorkspacePanels({
   const single = desktop?.mode === "single";
   const rightHidden = single || expanded === "main";
   const mainHidden = expanded === "evidence" || expanded === "artifact";
-  const evidenceHidden = expanded === "artifact";
-  const artifactHidden = expanded === "evidence";
-  const rightRail = collapsed.evidence && collapsed.artifact && !expanded;
+  const rightMode = desktop?.rightMode ?? "split";
+  const evidenceHidden = expanded
+    ? expanded === "artifact"
+    : rightMode === "artifact";
+  const artifactHidden = expanded
+    ? expanded === "evidence"
+    : rightMode === "evidence";
+  const rightRail =
+    !expanded &&
+    (rightMode === "split"
+      ? collapsed.evidence && collapsed.artifact
+      : collapsed[rightMode]);
   useEffect(() => {
     if (drag.current) return;
     const next = {
@@ -108,6 +119,41 @@ export function WorkspacePanels({
     [dispatch],
   );
   useEffect(() => {
+    const current = drag.current;
+    if (!current) return;
+    const disabled =
+      hidden ||
+      rightHidden ||
+      mainHidden ||
+      (current.axis === "main"
+        ? collapsed.main || rightRail
+        : evidenceHidden ||
+          artifactHidden ||
+          collapsed.evidence ||
+          collapsed.artifact);
+    if (!disabled) return;
+    finishDrag(true);
+    const saved = {
+      main: clamp(desktop?.ratios?.main ?? DEFAULT_RATIOS.main),
+      evidence: clamp(desktop?.ratios?.evidence ?? DEFAULT_RATIOS.evidence),
+    };
+    ratiosRef.current = saved;
+    setRatios(saved);
+  }, [
+    hidden,
+    rightHidden,
+    mainHidden,
+    rightRail,
+    evidenceHidden,
+    artifactHidden,
+    collapsed.main,
+    collapsed.evidence,
+    collapsed.artifact,
+    finishDrag,
+    desktop?.ratios?.main,
+    desktop?.ratios?.evidence,
+  ]);
+  useEffect(() => {
     const pointerUp = (event: globalThis.PointerEvent) =>
       finishDrag(false, event.pointerId);
     const pointerCancel = (event: globalThis.PointerEvent) =>
@@ -144,13 +190,17 @@ export function WorkspacePanels({
       axis === "main" ? container.current : right.current
     )?.getBoundingClientRect();
     if (!bounds) return;
+    const toolbarHeight =
+      axis === "evidence"
+        ? (rightToolbar.current?.getBoundingClientRect().height ?? 0)
+        : 0;
     event.preventDefault();
     event.currentTarget.setPointerCapture?.(event.pointerId);
     drag.current = {
       axis,
       pointerId: event.pointerId,
-      start: axis === "main" ? bounds.left : bounds.top,
-      size: axis === "main" ? bounds.width : bounds.height,
+      start: axis === "main" ? bounds.left : bounds.top + toolbarHeight,
+      size: axis === "main" ? bounds.width : bounds.height - toolbarHeight,
       initial: ratiosRef.current,
       target: event.currentTarget,
     };
@@ -202,13 +252,19 @@ export function WorkspacePanels({
           : "workspace-evidence workspace-artifact"
       }
       tabIndex={inactive ? -1 : 0}
-      onPointerDown={(event) => beginDrag(axis, event)}
+      aria-hidden={inactive}
+      onPointerDown={(event) => {
+        if (!inactive) beginDrag(axis, event);
+      }}
       onPointerMove={moveDrag}
       onPointerUp={(event) => endDrag(event)}
       onPointerCancel={(event) => endDrag(event, true)}
       onLostPointerCapture={(event) => endDrag(event, true)}
-      onKeyDown={(event) => resizeWithKeyboard(axis, event)}
+      onKeyDown={(event) => {
+        if (!inactive) resizeWithKeyboard(axis, event);
+      }}
       onDoubleClick={() =>
+        !inactive &&
         persist({ ...ratiosRef.current, [axis]: DEFAULT_RATIOS[axis] })
       }
     >
@@ -308,6 +364,7 @@ export function WorkspacePanels({
       className={`workspace-panels ${hidden ? "workspace-hidden" : ""} ${dragging ? `workspace-resizing resizing-${dragging}` : ""} ${expanded ? "has-expanded-panel" : ""}`}
       style={{ gridTemplateColumns: columns } as CSSProperties}
       data-mode={single ? "single" : "triple"}
+      data-right-mode={rightMode}
     >
       {panel("main", decision, mainHidden)}
       {split("main", rightHidden || mainHidden || collapsed.main || rightRail)}
@@ -315,17 +372,28 @@ export function WorkspacePanels({
         id="workspace-right"
         ref={right}
         className={`workspace-right ${rightHidden ? "panel-hidden" : ""} ${rightRail ? "right-rail" : ""}`}
-        style={{ gridTemplateRows: rows }}
       >
-        {panel("evidence", evidence, evidenceHidden)}
-        {split(
-          "evidence",
-          evidenceHidden ||
-            artifactHidden ||
-            collapsed.evidence ||
-            collapsed.artifact,
-        )}
-        {panel("artifact", artifact, artifactHidden)}
+        <div
+          ref={rightToolbar}
+          className={`right-pane-toolbar ${expanded || rightRail ? "right-toolbar-hidden" : ""}`}
+        >
+          <span>右侧工作区</span>
+          <RightModeControls desktop={desktop} dispatch={dispatch} />
+        </div>
+        <div
+          className="workspace-right-content"
+          style={{ gridTemplateRows: rows }}
+        >
+          {panel("evidence", evidence, evidenceHidden)}
+          {split(
+            "evidence",
+            evidenceHidden ||
+              artifactHidden ||
+              collapsed.evidence ||
+              collapsed.artifact,
+          )}
+          {panel("artifact", artifact, artifactHidden)}
+        </div>
       </div>
       {dragging ? <div className="resize-shield" aria-hidden="true" /> : null}
     </div>
