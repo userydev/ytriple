@@ -28,7 +28,6 @@ import {
   LoaderCircle,
   Menu,
   MessageSquare,
-  PanelRight,
   Pause,
   Plus,
   Search,
@@ -48,11 +47,12 @@ import {
   type TaskKind,
   type WindowKind,
 } from "../shared/types";
-import { ArtifactList, ContextPanel, SourceList } from "./Artifacts";
+import { ArtifactList, SourceList } from "./Artifacts";
 import { Settings } from "./Settings";
 import { Library } from "./Library";
 import { ProcessView } from "./ProcessView";
-import { WindowControls } from "./WindowControls";
+import { WorkspaceControls } from "./WindowControls";
+import { WorkspacePanels } from "./WorkspacePanels";
 import {
   Markdown,
   Modal,
@@ -77,12 +77,6 @@ const EMPTY_DRAFT: ComposerDraft = {
   member: "coordinator",
   profileId: "",
 };
-const QUERY = new URLSearchParams(window.location.search);
-const AUXILIARY =
-  QUERY.get("window") === "artifact" || QUERY.get("window") === "evidence"
-    ? (QUERY.get("window") as "artifact" | "evidence")
-    : null;
-const INITIAL_TASK_ID = QUERY.get("taskId");
 const DIRECTIONS: {
   kind: TaskKind;
   label: string;
@@ -1108,25 +1102,18 @@ function Projects({
   );
 }
 
-export function App({
-  windowKind = AUXILIARY ?? "main",
-}: {
-  windowKind?: WindowKind;
-}) {
-  const auxiliary = windowKind === "main" ? null : windowKind;
+export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [connection, setConnection] = useState<
     "loading" | "connected" | "unavailable" | "failed"
   >(() => (window.ytriple ? "loading" : "unavailable"));
   const [page, setPage] = useState<Page>("work");
-  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(
-    INITIAL_TASK_ID,
-  );
-  const [contextOpen, setContextOpen] = useState(() => window.innerWidth > 960);
-  const [contextTab, setContextTab] = useState<"artifact" | "evidence">(
-    "artifact",
-  );
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [focusRequest, setFocusRequest] = useState<{
+    panel: WindowKind;
+    sequence: number;
+  }>({ panel: "main", sequence: 0 });
   const [evidenceTab, setEvidenceTab] = useState<"process" | "sources">(
     "process",
   );
@@ -1141,55 +1128,41 @@ export function App({
   const [seedRevision, setSeedRevision] = useState(0);
   const [newWorkRevision, setNewWorkRevision] = useState(0);
   useEffect(() => {
-    document.title =
-      auxiliary === "artifact"
-        ? "ytriple · 成果工作区"
-        : auxiliary === "evidence"
-          ? "ytriple · Agent 协作过程"
-          : "ytriple · 工作台";
-  }, [auxiliary]);
+    document.title = "ytriple · 工作台";
+  }, []);
   const connected = connection === "connected";
-  const visibleTaskId = auxiliary
-    ? snapshot?.desktop
-      ? snapshot.desktop.taskId
-      : selectedTaskId
-    : selectedTaskId;
-  const task = snapshot?.tasks.find((item) => item.id === visibleTaskId);
-  const triple = snapshot?.desktop?.mode === "triple";
-  const collapsed = snapshot?.desktop?.collapsed[windowKind] ?? false;
-  const acceptSnapshot = useCallback(
-    (value: Snapshot) => {
-      setSnapshot((current) => {
-        const currentRevision = current?.desktop?.revision ?? -1;
-        const incomingRevision = value.desktop?.revision ?? -1;
-        return current && currentRevision > incomingRevision
-          ? { ...value, desktop: current.desktop }
-          : value;
-      });
-      if (!initialSelectionLoaded.current) {
-        initialSelectionLoaded.current = true;
-        if (value.desktop && !auxiliary) {
-          setSelectedTaskId(value.desktop.taskId);
-          const restored = value.tasks.find(
-            (item) => item.id === value.desktop?.taskId,
+  const task = snapshot?.tasks.find((item) => item.id === selectedTaskId);
+  const triple = snapshot?.desktop?.mode !== "single";
+  const acceptSnapshot = useCallback((value: Snapshot) => {
+    setSnapshot((current) => {
+      const currentRevision = current?.desktop?.revision ?? -1;
+      const incomingRevision = value.desktop?.revision ?? -1;
+      return current && currentRevision > incomingRevision
+        ? { ...value, desktop: current.desktop }
+        : value;
+    });
+    if (!initialSelectionLoaded.current) {
+      initialSelectionLoaded.current = true;
+      if (value.desktop) {
+        setSelectedTaskId(value.desktop.taskId);
+        const restored = value.tasks.find(
+          (item) => item.id === value.desktop?.taskId,
+        );
+        if (restored)
+          setComposerDraft((current) =>
+            current.text
+              ? current
+              : (composerDrafts.current.get(restored.id) ?? {
+                  text: "",
+                  kind: restored.kind,
+                  member: restored.member,
+                  profileId: restored.profileId ?? "",
+                }),
           );
-          if (restored)
-            setComposerDraft((current) =>
-              current.text
-                ? current
-                : (composerDrafts.current.get(restored.id) ?? {
-                    text: "",
-                    kind: restored.kind,
-                    member: restored.member,
-                    profileId: restored.profileId ?? "",
-                  }),
-            );
-        }
       }
-      setConnection("connected");
-    },
-    [auxiliary],
-  );
+    }
+    setConnection("connected");
+  }, []);
   const dispatch = useCallback<Dispatch>(
     async (command: Command) => {
       if (!window.ytriple) {
@@ -1199,6 +1172,13 @@ export function App({
       try {
         const result = await window.ytriple.invoke(command);
         acceptSnapshot(result);
+        if (command.type === "window.focus" || command.type === "window.open") {
+          setPage("work");
+          setFocusRequest((current) => ({
+            panel: command.window,
+            sequence: current.sequence + 1,
+          }));
+        }
         return result;
       } catch (cause) {
         setError(
@@ -1253,11 +1233,7 @@ export function App({
   }, [dispatch, composerDraft, selectedTaskId, triple]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        (event.metaKey || event.ctrlKey) &&
-        event.key.toLowerCase() === "n" &&
-        !auxiliary
-      ) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
         newWork();
       }
@@ -1323,7 +1299,7 @@ export function App({
   };
   const addSource = () => {
     setSourceDraft(!selectedTaskId ? { ...composerDraft } : null);
-    if (page === "library" && !auxiliary) {
+    if (page === "library") {
       setSelectedTaskId(null);
       void dispatch({ type: "window.select", taskId: null });
     }
@@ -1339,67 +1315,59 @@ export function App({
           : null;
   return (
     <div
-      className={`app-shell ${auxiliary ? "auxiliary-shell" : ""} ${triple ? "triple-layout" : "single-layout"} ${collapsed ? "window-collapsed" : ""}`}
+      className={`app-shell integrated-shell ${triple ? "three-panel-layout" : "focused-layout"}`}
     >
-      {!auxiliary ? (
-        <Sidebar
-          snapshot={snapshot}
-          page={page}
-          selectedTaskId={selectedTaskId}
-          onPage={(next) => {
-            setPage(next);
-            if (triple || window.innerWidth <= 760) setSidebarOpen(false);
-          }}
-          onTask={selectTask}
-          onNew={newWork}
-          connected={connected}
-          collapsed={!sidebarOpen}
-          onClose={() => setSidebarOpen(false)}
-        />
-      ) : null}
+      <Sidebar
+        snapshot={snapshot}
+        page={page}
+        selectedTaskId={selectedTaskId}
+        onPage={(next) => {
+          setPage(next);
+          setSidebarOpen(false);
+        }}
+        onTask={selectTask}
+        onNew={newWork}
+        connected={connected}
+        collapsed={!sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      />
       <main className="main-shell">
         <header className="topbar">
           <div className="topbar-location">
-            {!auxiliary ? (
-              <button
-                className="icon-button"
-                aria-label={sidebarOpen ? "收起侧栏" : "展开侧栏"}
-                onClick={() => setSidebarOpen(!sidebarOpen)}
-              >
-                <Menu size={17} />
-              </button>
-            ) : (
-              <span className="aux-brand">
-                <Logo />
-              </span>
-            )}
+            <button
+              className="icon-button"
+              aria-label={sidebarOpen ? "收起侧栏" : "展开侧栏"}
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+            >
+              <Menu size={17} />
+            </button>
             <span className="breadcrumb">
-              {auxiliary
-                ? (task?.title ?? "当前工作")
-                : {
-                    work: "工作空间",
-                    projects: "项目",
-                    library: "本地 Lib",
-                    settings: "设置",
-                  }[page]}
+              {
+                {
+                  work: "工作空间",
+                  projects: "项目",
+                  library: "本地 Lib",
+                  settings: "设置",
+                }[page]
+              }
             </span>
             <ChevronRight size={12} />
             <strong>
-              {auxiliary
-                ? auxiliary === "artifact"
-                  ? "成果工作区"
-                  : "Agent 协作过程"
-                : page === "work"
-                  ? (task?.title ?? "新的开始")
-                  : page === "settings"
-                    ? "工作台配置"
-                    : "我的工作"}
+              {page === "work"
+                ? (task?.title ?? "新的开始")
+                : page === "settings"
+                  ? "工作台配置"
+                  : "我的工作"}
             </strong>
           </div>
           <div className="topbar-actions">
-            {task && page === "work" && !auxiliary ? (
+            {task && page === "work" ? (
               <>
-                <TaskControl key={task.id} task={task} dispatch={dispatch} />
+                <TaskControl
+                  key={`control:${task.id}`}
+                  task={task}
+                  dispatch={dispatch}
+                />
                 <button
                   className="icon-button"
                   aria-label="将当前工作初始化为项目"
@@ -1410,20 +1378,17 @@ export function App({
                 </button>
               </>
             ) : null}
-            {!auxiliary && page === "work" && !triple ? (
-              <button
-                className={`icon-button ${contextOpen ? "selected" : ""}`}
-                aria-label={contextOpen ? "收起成果与资料" : "展开成果与资料"}
-                onClick={() => setContextOpen(!contextOpen)}
-              >
-                <PanelRight size={17} />
+            {page === "work" ? (
+              <WorkspaceControls
+                desktop={snapshot?.desktop}
+                dispatch={dispatch}
+              />
+            ) : (
+              <button className="text-button" onClick={() => setPage("work")}>
+                回到工作区
+                <ArrowUpRight size={13} />
               </button>
-            ) : null}
-            <WindowControls
-              desktop={snapshot?.desktop}
-              kind={windowKind}
-              dispatch={dispatch}
-            />
+            )}
             <span className="topbar-local">
               <span className={`tiny-dot ${connected ? "green" : ""}`} />
               {connected ? "本机工作台" : "未连接"}
@@ -1452,94 +1417,12 @@ export function App({
             ) : null}
           </div>
         ) : null}
-        {auxiliary ? (
-          <div
-            className={`auxiliary-body ${auxiliary === "evidence" ? "evidence-body" : "artifact-body"}`}
-          >
-            {task ? (
-              auxiliary === "artifact" ? (
-                <ArtifactList
-                  key={`aux-artifacts:${task.id}`}
-                  task={task}
-                  dispatch={dispatch}
-                />
-              ) : (
-                <>
-                  <div className="evidence-toolbar">
-                    <div className="panel-tabs">
-                      <button
-                        className={evidenceTab === "process" ? "active" : ""}
-                        onClick={() => setEvidenceTab("process")}
-                      >
-                        Agent 过程
-                      </button>
-                      <button
-                        className={evidenceTab === "sources" ? "active" : ""}
-                        onClick={() => setEvidenceTab("sources")}
-                      >
-                        资料 <span>{task.sources.length}</span>
-                      </button>
-                    </div>
-                    <button className="text-button" onClick={addSource}>
-                      <Plus size={13} />
-                      添加资料
-                    </button>
-                  </div>
-                  {evidenceTab === "process" ? (
-                    <ProcessView task={task} dispatch={dispatch} />
-                  ) : (
-                    <SourceList
-                      key={`sources:${task.id}`}
-                      sources={task.sources}
-                      dispatch={dispatch}
-                      onAdd={addSource}
-                    />
-                  )}
-                </>
-              )
-            ) : (
-              <div className="collection-empty auxiliary-empty">
-                {auxiliary === "evidence" ? (
-                  <Layers2 size={30} strokeWidth={1.3} />
-                ) : (
-                  <FileText size={30} strokeWidth={1.3} />
-                )}
-                <h2>
-                  {auxiliary === "evidence"
-                    ? "看见团队怎样推进"
-                    : "成果可以接着做"}
-                </h2>
-                <p>
-                  {auxiliary === "evidence"
-                    ? "选中一项工作，查看成员分工、依据与公开工作摘要。"
-                    : "选择工作后，可编辑、继续加工或收藏到本地 Lib。"}
-                </p>
-              </div>
-            )}
-          </div>
-        ) : page === "settings" ? (
-          <Settings
-            snapshot={snapshot}
-            dispatch={dispatch}
-            connected={connected}
-          />
-        ) : page === "projects" ? (
-          <Projects
-            snapshot={snapshot}
-            dispatch={dispatch}
-            onInitialize={() => setDialog("project")}
-            onTask={selectTask}
-          />
-        ) : page === "library" ? (
-          <Library
-            snapshot={snapshot}
-            dispatch={dispatch}
-            onTask={selectTask}
-            onAdd={addSource}
-            selectedTaskId={selectedTaskId}
-          />
-        ) : (
-          <div className="work-layout">
+        <WorkspacePanels
+          desktop={snapshot?.desktop}
+          dispatch={dispatch}
+          hidden={page !== "work"}
+          focusRequest={focusRequest}
+          decision={
             <section
               className={`decision-pane ${task ? "has-task" : "is-new"}`}
             >
@@ -1605,18 +1488,92 @@ export function App({
                 onConfigure={() => setPage("settings")}
               />
             </section>
-            {contextOpen && !triple ? (
-              <ContextPanel
+          }
+          evidence={
+            <div className="evidence-workspace">
+              <div className="evidence-toolbar">
+                <div className="panel-tabs">
+                  <button
+                    className={evidenceTab === "process" ? "active" : ""}
+                    onClick={() => setEvidenceTab("process")}
+                  >
+                    Agent 过程
+                  </button>
+                  <button
+                    className={evidenceTab === "sources" ? "active" : ""}
+                    onClick={() => setEvidenceTab("sources")}
+                  >
+                    资料 <span>{task?.sources.length ?? 0}</span>
+                  </button>
+                </div>
+                <button className="text-button" onClick={addSource}>
+                  <Plus size={13} />
+                  添加资料
+                </button>
+              </div>
+              {evidenceTab === "process" ? (
+                task ? (
+                  <ProcessView task={task} dispatch={dispatch} />
+                ) : (
+                  <div className="collection-empty pane-empty">
+                    <Layers2 size={30} strokeWidth={1.3} />
+                    <h2>看见团队怎样推进</h2>
+                    <p>
+                      从一项工作开始，成员分工、工具活动和公开工作摘要会在这里展开。
+                    </p>
+                  </div>
+                )
+              ) : (
+                <SourceList
+                  key={`sources:${task?.id ?? "new"}`}
+                  sources={task?.sources ?? []}
+                  dispatch={dispatch}
+                  onAdd={addSource}
+                />
+              )}
+            </div>
+          }
+          artifact={
+            task ? (
+              <ArtifactList
+                key={`artifacts:${task.id}`}
                 task={task}
-                tab={contextTab}
-                onTab={setContextTab}
                 dispatch={dispatch}
-                onAdd={addSource}
-                onClose={() => setContextOpen(false)}
               />
-            ) : null}
-          </div>
-        )}
+            ) : (
+              <div className="collection-empty pane-empty">
+                <FileText size={30} strokeWidth={1.3} />
+                <h2>成果可以接着做</h2>
+                <p>
+                  文档与图示在这里产出。继续编辑、交给团队加工，或收藏到本地
+                  Lib。
+                </p>
+              </div>
+            )
+          }
+        />
+        {page === "settings" ? (
+          <Settings
+            snapshot={snapshot}
+            dispatch={dispatch}
+            connected={connected}
+          />
+        ) : page === "projects" ? (
+          <Projects
+            snapshot={snapshot}
+            dispatch={dispatch}
+            onInitialize={() => setDialog("project")}
+            onTask={selectTask}
+          />
+        ) : page === "library" ? (
+          <Library
+            snapshot={snapshot}
+            dispatch={dispatch}
+            onTask={selectTask}
+            onAdd={addSource}
+            selectedTaskId={selectedTaskId}
+          />
+        ) : null}
       </main>
       {error ? (
         <div className="error-toast" role="alert">

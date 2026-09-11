@@ -3,54 +3,86 @@ import assert from "node:assert/strict";
 import {
   clampBounds,
   restoreLayout,
-  tileWindows,
+  defaultBounds,
 } from "../src/desktop/window-layout.js";
 import { parseCommand } from "../src/desktop/commands.js";
 
-test("three panes fit the visible display without overlaps, including a second display", () => {
-  for (const area of [
-    { x: 0, y: 38, width: 1440, height: 862 },
-    { x: -1920, y: 0, width: 1920, height: 1080 },
-  ]) {
-    const panes = tileWindows(area);
-    for (const p of Object.values(panes)) {
-      assert.ok(p.x >= area.x && p.y >= area.y);
-      assert.ok(p.x + p.width <= area.x + area.width);
-      assert.ok(p.y + p.height <= area.y + area.height);
-    }
-    assert.ok(panes.main.x + panes.main.width < panes.evidence.x);
-    assert.ok(panes.evidence.y + panes.evidence.height < panes.artifact.y);
-    assert.equal(panes.evidence.width, panes.artifact.width);
-    assert.ok(panes.main.width < area.width * 0.6);
-  }
-});
-test("removed displays recover saved windows onto an available display and preserve folds", () => {
-  const area = { x: 0, y: 28, width: 1280, height: 740 };
-  const saved = {
-    mode: "triple",
+test("legacy native windows migrate to one large embedded workspace without losing task selection", () => {
+  const area = { x: 0, y: 38, width: 1728, height: 1040 };
+  const legacy = {
+    mode: "single",
     taskId: "task-1",
-    bounds: { main: { x: -1900, y: 0, width: 1800, height: 1080 } },
-    collapsed: { main: true },
+    bounds: {
+      main: { x: 8, y: 41, width: 886, height: 978 },
+      evidence: { x: 902, y: 41, width: 818, height: 485 },
+    },
+    collapsed: { main: true, evidence: true, artifact: true },
+  };
+  const restored = restoreLayout(legacy, [area], area);
+  assert.equal(restored.version, 2);
+  assert.equal(restored.taskId, "task-1");
+  assert.equal(restored.mode, "triple");
+  assert.deepEqual(restored.bounds, defaultBounds(area));
+  assert.ok(restored.bounds.width > legacy.bounds.main.width);
+  assert.deepEqual(restored.ratios, { main: 0.52, evidence: 0.5 });
+  assert.deepEqual(restored.collapsed, {
+    main: false,
+    evidence: false,
+    artifact: false,
+  });
+});
+test("embedded layout restores panel ratios and folds separately from native geometry", () => {
+  const area = { x: -1920, y: 0, width: 1920, height: 1080 };
+  const saved = {
+    version: 2,
+    mode: "triple",
+    taskId: "task-2",
+    bounds: { x: -1800, y: 80, width: 1500, height: 800 },
+    ratios: { main: 0.4, evidence: 0.7 },
+    collapsed: { main: true, evidence: false, artifact: true },
+    expanded: null,
   };
   const restored = restoreLayout(saved, [area], area);
-  assert.deepEqual(restored.bounds.main, area);
-  assert.equal(restored.collapsed.main, true);
-  assert.equal(restored.taskId, "task-1");
-  assert.equal(
-    restoreLayout(
-      {
-        bounds: { main: { ...area, width: NaN } },
-        collapsed: { artifact: "yes" },
-      },
-      [area],
-      area,
-    ).collapsed.artifact,
-    false,
+  assert.deepEqual(restored, saved);
+  const newDisplay = { x: 0, y: 28, width: 1280, height: 740 };
+  assert.deepEqual(
+    restoreLayout(saved, [newDisplay], newDisplay).bounds,
+    newDisplay,
   );
   assert.deepEqual(
-    clampBounds({ x: 9999, y: 9999, width: 600, height: 400 }, area),
-    { x: 680, y: 368, width: 600, height: 400 },
+    clampBounds({ x: 9999, y: 9999, width: 1100, height: 650 }, newDisplay),
+    { x: 180, y: 118, width: 1100, height: 650 },
   );
+});
+test("malformed preferences cannot create invisible panels or move the app off screen", () => {
+  const area = { x: 0, y: 28, width: 1280, height: 740 };
+  const restored = restoreLayout(
+    {
+      version: 2,
+      bounds: { ...area, width: NaN },
+      ratios: { main: -100, evidence: Infinity },
+      collapsed: { artifact: "yes" },
+      expanded: "outside",
+    },
+    [area],
+    area,
+  );
+  assert.deepEqual(restored.bounds, defaultBounds(area));
+  assert.deepEqual(restored.ratios, { main: 0.2, evidence: 0.5 });
+  assert.equal(restored.collapsed.artifact, false);
+  assert.equal(restored.expanded, null);
+  const expanded = restoreLayout(
+    {
+      version: 2,
+      mode: "single",
+      expanded: "artifact",
+      collapsed: { artifact: true },
+    },
+    [area],
+    area,
+  );
+  assert.equal(expanded.mode, "triple");
+  assert.equal(expanded.collapsed.artifact, false);
 });
 test("new desktop and library IPC reject forged commands and require conflict tokens", () => {
   assert.deepEqual(parseCommand({ type: "window.select", taskId: null }), {
@@ -72,6 +104,19 @@ test("new desktop and library IPC reject forged commands and require conflict to
       instruction: "",
     }),
   );
+  assert.throws(() =>
+    parseCommand({ type: "window.resize", main: NaN, evidence: 0.5 }),
+  );
+  assert.throws(() =>
+    parseCommand({ type: "window.resize", main: 0.52, evidence: 1.5 }),
+  );
+  assert.throws(() =>
+    parseCommand({ type: "window.expand", window: "outside" }),
+  );
+  assert.deepEqual(parseCommand({ type: "window.expand", window: null }), {
+    type: "window.expand",
+    window: null,
+  });
   const valid = {
     type: "library.collect",
     taskId: "t",

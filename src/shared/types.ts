@@ -147,6 +147,8 @@ export interface LibraryEntry {
   previewURL?: string;
 }
 export interface DesktopState {
+  ratios?: { main: number; evidence: number };
+  expanded?: WindowKind | null;
   revision?: number;
   mode: "single" | "triple";
   taskId: string | null;
@@ -165,6 +167,8 @@ export interface Snapshot {
   desktop?: DesktopState;
 }
 export type Command =
+  | { type: "window.resize"; main: number; evidence: number }
+  | { type: "window.expand"; window: WindowKind | null }
   | { type: "snapshot" }
   | {
       type: "task.create";

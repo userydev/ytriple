@@ -23,9 +23,7 @@ import { imageDocument } from "../core/exports.js";
 import { readOwnedArtifact } from "../core/files.js";
 import {
   restoreLayout,
-  tileWindows,
-  foldedHeight,
-  windowKinds,
+  defaultRatios,
   type WindowLayout,
 } from "./window-layout.js";
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -36,7 +34,7 @@ if (process.env.YTRIPLE_DATA_PATH)
   app.setPath("userData", path.resolve(process.env.YTRIPLE_DATA_PATH));
 if (!app.requestSingleInstanceLock()) app.exit(0);
 app.on("second-instance", () => {
-  const main = windows.get("main");
+  const main = mainWindow;
   if (main) {
     main.show();
     main.focus();
@@ -53,11 +51,10 @@ let latest: Snapshot | undefined;
 let sequence = 0;
 let closing = false;
 let closed = false;
-const windows = new Map<WindowKind, BrowserWindow>();
-const leavingFullScreen = new WeakSet<BrowserWindow>();
+let mainWindow: BrowserWindow | undefined;
 let layout: WindowLayout;
 let desktopRevision = 0;
-let movingWindows = false;
+let movingWindow = false;
 let layoutTimer: ReturnType<typeof setTimeout> | undefined;
 let layoutWrites = Promise.resolve();
 function desktopState(): DesktopState {
@@ -66,10 +63,16 @@ function desktopState(): DesktopState {
     taskId: layout.taskId,
     revision: desktopRevision,
     collapsed: { ...layout.collapsed },
+    ratios: { ...layout.ratios },
+    expanded: layout.expanded,
     open: {
-      main: !!windows.get("main")?.isVisible(),
-      evidence: !!windows.get("evidence")?.isVisible(),
-      artifact: !!windows.get("artifact")?.isVisible(),
+      main: !layout.expanded || layout.expanded === "main",
+      evidence:
+        layout.mode === "triple" &&
+        (!layout.expanded || layout.expanded === "evidence"),
+      artifact:
+        layout.mode === "triple" &&
+        (!layout.expanded || layout.expanded === "artifact"),
     },
   };
 }
@@ -143,8 +146,8 @@ function decorate(snapshot: Snapshot): Snapshot {
 }
 function publish(snapshot: Snapshot): Snapshot {
   latest = decorate(snapshot);
-  for (const win of windows.values())
-    if (!win.isDestroyed()) win.webContents.send("ytriple:snapshot", latest);
+  if (mainWindow && !mainWindow.isDestroyed())
+    mainWindow.webContents.send("ytriple:snapshot", latest);
   return latest;
 }
 async function loadVault(): Promise<Record<string, string>> {
@@ -183,60 +186,38 @@ async function saveKey(profileId: string, value: string): Promise<void> {
   vault = next;
   await request({ type: "key", profileId, apiKey: value.trim() });
 }
-function applyBounds(kind: WindowKind): void {
-  const win = windows.get(kind);
-  if (!win || win.isDestroyed()) return;
-  if (win.isFullScreen()) {
-    if (!leavingFullScreen.has(win)) {
-      leavingFullScreen.add(win);
-      win.once("leave-full-screen", () => {
-        leavingFullScreen.delete(win);
-        applyBounds(kind);
-      });
-      win.setFullScreen(false);
-    }
+function applyBounds(): void {
+  if (
+    !mainWindow ||
+    mainWindow.isDestroyed() ||
+    mainWindow.isFullScreen() ||
+    mainWindow.isMaximized()
+  )
     return;
-  }
-  const b = layout.bounds[kind];
-  const collapsed = layout.collapsed[kind];
-  movingWindows = true;
+  movingWindow = true;
   try {
-    win.setMinimumSize(
-      Math.min(b.width, kind === "main" ? 480 : 340),
-      collapsed
-        ? foldedHeight
-        : Math.min(b.height, kind === "main" ? 400 : 240),
+    mainWindow.setMinimumSize(
+      Math.min(900, layout.bounds.width),
+      Math.min(600, layout.bounds.height),
     );
-    if (win.isMaximized()) win.unmaximize();
-    win.setBounds({ ...b, ...(collapsed ? { height: foldedHeight } : {}) });
+    mainWindow.setBounds(layout.bounds);
   } finally {
-    movingWindows = false;
+    movingWindow = false;
   }
 }
-function openWindow(kind: WindowKind = "main", focus = true): BrowserWindow {
-  const existing = windows.get(kind);
-  if (existing && !existing.isDestroyed()) {
-    if (focus) existing.show();
-    else existing.showInactive();
-    if (existing.isMinimized()) existing.restore();
-    if (focus) existing.focus();
-    desktopChanged();
-    return existing;
+function openWindow(): BrowserWindow {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    return mainWindow;
   }
   const win = new BrowserWindow({
-    ...layout.bounds[kind],
-    ...(layout.collapsed[kind] ? { height: foldedHeight } : {}),
-    minWidth: Math.min(layout.bounds[kind].width, kind === "main" ? 480 : 340),
-    minHeight: layout.collapsed[kind]
-      ? foldedHeight
-      : Math.min(layout.bounds[kind].height, kind === "main" ? 400 : 240),
+    ...layout.bounds,
+    minWidth: Math.min(900, layout.bounds.width),
+    minHeight: Math.min(600, layout.bounds.height),
     show: false,
-    title:
-      kind === "main"
-        ? "ytriple"
-        : kind === "evidence"
-          ? "ytriple · Agent 过程"
-          : "ytriple · 工作成果",
+    title: "ytriple · 工作台",
     backgroundColor: "#F5F6F3",
     webPreferences: {
       preload: path.join(here, "preload.cjs"),
@@ -246,7 +227,7 @@ function openWindow(kind: WindowKind = "main", focus = true): BrowserWindow {
       webSecurity: true,
     },
   });
-  windows.set(kind, win);
+  mainWindow = win;
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event) => event.preventDefault());
   win.webContents.on("will-attach-webview", (event) => event.preventDefault());
@@ -254,55 +235,44 @@ function openWindow(kind: WindowKind = "main", focus = true): BrowserWindow {
     (_contents, _permission, callback) => callback(false),
   );
   const remember = () => {
-    if (movingWindows || win.isDestroyed() || win.isMinimized()) return;
-    const b = win.getNormalBounds();
-    layout.bounds[kind] = layout.collapsed[kind]
-      ? { ...layout.bounds[kind], x: b.x, y: b.y, width: b.width }
-      : b;
+    if (
+      movingWindow ||
+      win.isDestroyed() ||
+      win.isMinimized() ||
+      win.isFullScreen() ||
+      win.isMaximized()
+    )
+      return;
+    layout.bounds = win.getNormalBounds();
     persistLayout();
   };
   win.on("resize", remember);
   win.on("move", remember);
-  // Hiding preserves text drafts when a pane is closed or single-window mode is chosen.
-  win.on("close", (event) => {
-    if (kind !== "main" && !closing) {
-      event.preventDefault();
-      win.hide();
-      desktopChanged();
-    }
-  });
   win.on("closed", () => {
-    windows.delete(kind);
-    if (kind === "main" && !closing) app.quit();
+    mainWindow = undefined;
+    if (!closing) app.quit();
   });
   win.once("ready-to-show", () => {
-    if (kind === "main" || layout.mode === "triple") {
-      if (focus || kind === "main") win.show();
-      else win.showInactive();
-      desktopChanged();
-    }
+    win.show();
+    desktopChanged();
   });
-  void win.loadFile(uiPath, { query: { window: kind } });
+  void win.loadFile(uiPath);
   return win;
 }
 function setLayout(mode: DesktopState["mode"], reset = false): void {
   layout.mode = mode;
+  layout.expanded = null;
+  if (mode === "single") layout.collapsed.main = false;
   if (reset) {
-    const main = windows.get("main");
-    const area = main
-      ? screen.getDisplayMatching(main.getBounds()).workArea
-      : screen.getPrimaryDisplay().workArea;
-    layout.bounds = tileWindows(area);
+    layout.ratios = defaultRatios();
     layout.collapsed = { main: false, evidence: false, artifact: false };
   }
-  openWindow("main", false);
-  if (mode === "triple")
-    for (const kind of ["evidence", "artifact"] as const)
-      openWindow(kind, false);
-  else
-    for (const kind of ["evidence", "artifact"] as const)
-      windows.get(kind)?.hide();
-  for (const kind of windowKinds) applyBounds(kind);
+  desktopChanged();
+}
+function focusPane(kind: WindowKind): void {
+  if (kind !== "main") layout.mode = "triple";
+  layout.expanded = null;
+  layout.collapsed[kind] = false;
   desktopChanged();
 }
 async function renderPNG(
@@ -369,8 +339,7 @@ async function command(input: Command): Promise<Snapshot> {
     if (!latest?.tasks.some((t) => t.id === input.taskId))
       throw new Error("任务不存在。");
     selectTask(input.taskId);
-    if (input.window !== "main") layout.mode = "triple";
-    openWindow(input.window);
+    focusPane(input.window);
     return latest!;
   }
   if (input.type === "window.select") {
@@ -383,15 +352,26 @@ async function command(input: Command): Promise<Snapshot> {
   }
   if (input.type === "window.collapse") {
     layout.collapsed[input.window] = input.collapsed;
-    applyBounds(input.window);
+    if (layout.expanded === input.window && input.collapsed)
+      layout.expanded = null;
     desktopChanged();
     return latest!;
   }
   if (input.type === "window.focus") {
-    if (input.window !== "main") layout.mode = "triple";
-    layout.collapsed[input.window] = false;
-    openWindow(input.window);
-    applyBounds(input.window);
+    focusPane(input.window);
+    return latest!;
+  }
+  if (input.type === "window.resize") {
+    layout.ratios = { main: input.main, evidence: input.evidence };
+    desktopChanged();
+    return latest!;
+  }
+  if (input.type === "window.expand") {
+    layout.expanded = input.window;
+    if (input.window) {
+      layout.collapsed[input.window] = false;
+      if (input.window !== "main") layout.mode = "triple";
+    }
     desktopChanged();
     return latest!;
   }
@@ -437,8 +417,7 @@ async function command(input: Command): Promise<Snapshot> {
     return latest!;
   }
   if (input.type === "source.import") {
-    const dialogParent =
-      BrowserWindow.getFocusedWindow() || windows.get("main");
+    const dialogParent = BrowserWindow.getFocusedWindow() || mainWindow;
     if (!dialogParent) throw new Error("请先打开工作台窗口。");
     const choice = await dialog.showOpenDialog(dialogParent, {
       title: "导入工作资料",
@@ -571,7 +550,7 @@ app
         !event.senderFrame ||
         event.senderFrame !== event.sender.mainFrame ||
         event.senderFrame.url.split("?")[0] !== trustedURL ||
-        ![...windows.values()].some((win) => win.webContents === event.sender)
+        mainWindow?.webContents !== event.sender
       )
         throw new Error("无效的工作台连接。");
       return publish(await command(parseCommand(input)));
@@ -580,14 +559,14 @@ app
       layout.taskId = null;
     if (savedLayout === undefined && latest?.tasks.length)
       layout.taskId = latest.tasks[0].id;
-    setLayout(layout.mode);
+    openWindow();
     const recoverDisplays = () => {
       layout = restoreLayout(
         layout,
         screen.getAllDisplays().map((d) => d.workArea),
         screen.getPrimaryDisplay().workArea,
       );
-      for (const kind of windowKinds) applyBounds(kind);
+      applyBounds();
       desktopChanged();
     };
     screen.on("display-removed", recoverDisplays);

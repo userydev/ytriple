@@ -11,7 +11,6 @@ import {
   FolderOpen,
   History,
   Image,
-  Maximize2,
   Pencil,
   Plus,
   Presentation,
@@ -21,7 +20,6 @@ import {
 import type { Artifact, Source, Task } from "../shared/types";
 import { formatDate, formatTime, Markdown, type Dispatch } from "./common";
 import { useDocumentDraft } from "./drafts";
-import { ProcessView } from "./ProcessView";
 
 export function SourceList({
   sources,
@@ -462,7 +460,7 @@ export function ArtifactView({
       )}
       {editing ? (
         <div className="editor-footnote">
-          保留原文版本后保存；写入前核对文件是否被其他工作修改。
+          保留原文版本后保存；写入前核对文件是否被其他操作修改。
         </div>
       ) : null}
     </div>
@@ -522,136 +520,5 @@ export function ArtifactList({
         compact={compact}
       />
     </>
-  );
-}
-
-export function ContextPanel({
-  task,
-  tab,
-  onTab,
-  dispatch,
-  onAdd,
-  onClose,
-}: {
-  task?: Task;
-  tab: "artifact" | "evidence";
-  onTab: (tab: "artifact" | "evidence") => void;
-  dispatch: Dispatch;
-  onAdd: () => void;
-  onClose?: () => void;
-}) {
-  const [evidenceTab, setEvidenceTab] = useState<"process" | "sources">(
-    "process",
-  );
-  return (
-    <aside className="context-panel">
-      <header className="context-header">
-        <div className="panel-tabs">
-          <button
-            className={tab === "artifact" ? "active" : ""}
-            onClick={() => onTab("artifact")}
-          >
-            成果
-            {task?.artifacts.length ? (
-              <span>{task.artifacts.length}</span>
-            ) : null}
-          </button>
-          <button
-            className={tab === "evidence" ? "active" : ""}
-            onClick={() => onTab("evidence")}
-          >
-            过程与资料
-            {task?.sources.length ? <span>{task.sources.length}</span> : null}
-          </button>
-        </div>
-        <div className="inline-actions">
-          <button
-            className="icon-button"
-            aria-label={
-              tab === "artifact" ? "在独立窗口打开成果" : "在独立窗口打开资料"
-            }
-            disabled={!task}
-            onClick={() =>
-              task &&
-              void dispatch({
-                type: "window.open",
-                window: tab,
-                taskId: task.id,
-              })
-            }
-          >
-            <Maximize2 size={15} />
-          </button>
-          {onClose ? (
-            <button
-              className="icon-button"
-              aria-label="收起辅助区域"
-              onClick={onClose}
-            >
-              <X size={15} />
-            </button>
-          ) : null}
-        </div>
-      </header>
-      <div className="context-content">
-        {tab === "evidence" ? (
-          <>
-            <div className="panel-intro">
-              <span className="eyebrow">本次工作的依据</span>
-              <button className="text-button" onClick={onAdd}>
-                <Plus size={13} />
-                添加
-              </button>
-            </div>
-            <div className="panel-tabs evidence-inline-tabs">
-              <button
-                className={evidenceTab === "process" ? "active" : ""}
-                onClick={() => setEvidenceTab("process")}
-              >
-                Agent 过程
-              </button>
-              <button
-                className={evidenceTab === "sources" ? "active" : ""}
-                onClick={() => setEvidenceTab("sources")}
-              >
-                资料
-              </button>
-            </div>
-            {evidenceTab === "process" && task ? (
-              <ProcessView task={task} dispatch={dispatch} compact />
-            ) : (
-              <SourceList
-                sources={task?.sources ?? []}
-                dispatch={dispatch}
-                onAdd={onAdd}
-              />
-            )}
-          </>
-        ) : task ? (
-          <ArtifactList key={task.id} task={task} dispatch={dispatch} compact />
-        ) : (
-          <div className="panel-empty">
-            <div className="empty-symbol">
-              <FileText size={24} strokeWidth={1.3} />
-            </div>
-            <h3>想法有了落点</h3>
-            <p>
-              文档、研究和图示都在这里，
-              <br />
-              随时回来，接着完善。
-            </p>
-            <div className="format-pills">
-              <span>MD</span>
-              <span>图片</span>
-              <span>PPT</span>
-            </div>
-          </div>
-        )}
-      </div>
-      <footer className="context-footer">
-        <span className="small-dot" />
-        材料与成果保存在本机
-      </footer>
-    </aside>
   );
 }

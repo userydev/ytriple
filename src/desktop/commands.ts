@@ -30,6 +30,12 @@ const settings = z.object({
   memberProfiles: z.object({ coordinator: id, cto: id, researcher: id }),
 });
 const schemas = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("window.resize"),
+    main: z.number().min(0.2).max(0.8),
+    evidence: z.number().min(0.2).max(0.8),
+  }),
+  z.object({ type: z.literal("window.expand"), window: windowKind.nullable() }),
   z.object({ type: z.literal("snapshot") }),
   z.object({
     type: z.literal("task.create"),

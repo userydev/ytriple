@@ -136,7 +136,7 @@ export function Modal({
           </div>
           <button
             className="icon-button"
-            aria-label="关闭窗口"
+            aria-label="关闭对话框"
             onClick={onClose}
           >
             <X size={18} />
