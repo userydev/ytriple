@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { runPrdTask } from "./taskRuntime";
 
 describe("fixed tri-agent PRD runtime", () => {
-  it("runs the fixed V1 state sequence and returns the standard artifact manifest", async () => {
+  it("runs the fixed V1 execution sequence and returns a single prd.md artifact", async () => {
     const seenStatuses: string[] = [];
 
     const result = await runPrdTask({
@@ -51,13 +51,9 @@ describe("fixed tri-agent PRD runtime", () => {
             confidence: "medium",
             assumptions: ["默认面向单店经营者。"],
             open_questions: ["是否需要多门店权限？"],
-            final_prd_markdown: "# PRD 首稿\n\n## 目标\n帮助咖啡店形成会员活动方案。",
-            artifact_manifest: [
-              "01-final-prd.md",
-              "02-assumptions-and-open-questions.md",
-              "03-research-notes.md",
-              "04-specialist-review.md",
-            ],
+            final_prd_markdown:
+              "# PRD 首稿\n\n## 目标\n帮助咖啡店形成会员活动方案。\n\n## Assumptions and Open Questions\n- 默认面向单店经营者。\n- 是否需要多门店权限？",
+            artifact_manifest: ["prd.md"],
           };
         },
       },
@@ -67,6 +63,7 @@ describe("fixed tri-agent PRD runtime", () => {
     expect(seenStatuses).toEqual([
       "classifying",
       "preparing_context",
+      "dispatching",
       "running_researcher",
       "running_specialist",
       "merging",
@@ -75,11 +72,6 @@ describe("fixed tri-agent PRD runtime", () => {
     ]);
     expect(result.task.templateId).toBe("prd");
     expect(result.task.selectedSpecialistRole).toBe("product_lead");
-    expect(result.conductor.artifact_manifest).toEqual([
-      "01-final-prd.md",
-      "02-assumptions-and-open-questions.md",
-      "03-research-notes.md",
-      "04-specialist-review.md",
-    ]);
+    expect(result.conductor.artifact_manifest).toEqual(["prd.md"]);
   });
 });
