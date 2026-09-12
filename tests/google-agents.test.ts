@@ -233,3 +233,154 @@ test("public URL citation annotations are retained without hidden metadata or un
   assert.ok(!result.includes("javascript:"));
   assert.ok(!result.includes("/home/private"));
 });
+
+test("Google public progress preserves supplied summaries, search evidence and retrieval status without raw thoughts", async () => {
+  const { googleAgentProgress } = await import("../src/core/google-agents.js");
+  const entries = googleAgentProgress({
+    id: "public",
+    status: "in_progress",
+    steps: [
+      {
+        type: "thought",
+        text: "PRIVATE_RAW_THOUGHT",
+        signature: "PRIVATE_SIGNATURE",
+        summary: [
+          {
+            type: "text",
+            text: "先比较官方方法，再核对基准数据。",
+            privateData: "PRIVATE_METADATA",
+          },
+        ],
+      },
+      { type: "thought", text: "PRIVATE_ONLY_NO_SUMMARY" },
+      {
+        type: "google_search_call",
+        arguments: {
+          query: "official evaluation methods",
+          credentials: "PRIVATE_SEARCH_METADATA",
+        },
+      },
+      {
+        type: "google_search_result",
+        result: [
+          {
+            title: "Search hit",
+            url: "https://example.com/found",
+            snippet: "A search excerpt.",
+            hidden: "PRIVATE_RESULT",
+          },
+          { url: "javascript:alert(1)" },
+          { url: "https://user:password@example.com" },
+        ],
+      },
+      {
+        type: "url_context_call",
+        arguments: {
+          urls: ["https://example.com/requested"],
+          hidden: "PRIVATE_ARGUMENTS",
+        },
+      },
+      {
+        type: "url_context_result",
+        result: [
+          {
+            url: "https://example.com/read",
+            status: "success",
+            snippet: "Read excerpt",
+          },
+          { url: "https://example.com/blocked", status: "paywall" },
+          { url: "https://example.com/unknown" },
+        ],
+      },
+      {
+        type: "model_output",
+        content: [
+          {
+            type: "text",
+            text: "Final prose",
+            annotations: [
+              {
+                type: "url_citation",
+                url: "https://example.com/cited",
+                title: "Citation",
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(
+    entries.filter((entry) => entry.details.progressKind === "analysis").length,
+    1,
+  );
+  assert.equal(entries[0].details.detail, "先比较官方方法，再核对基准数据。");
+  const sources = entries.flatMap((entry) => entry.details.webSources ?? []);
+  assert.deepEqual(
+    sources.map((source) => source.status),
+    ["searched", "requested", "read", "unavailable", "cited", "cited"],
+  );
+  assert.deepEqual(
+    entries.find((entry) => entry.details.queries)?.details.queries,
+    ["official evaluation methods"],
+  );
+  assert.doesNotMatch(JSON.stringify(entries), /PRIVATE_|javascript:|password/);
+});
+
+test("hosted polling retains final-step-only public findings and sources and deduplicates unchanged snapshots", async () => {
+  const progress: unknown[] = [];
+  let calls = 0;
+  const model = await createGoogleAgentModel(profile, () => "test-secret", {
+    pollMs: 1,
+    onProgress: (summary, detail) => {
+      if (detail) progress.push({ summary, detail });
+    },
+    fetch: async (_url, init) => {
+      calls++;
+      if (calls === 1)
+        assert.equal(
+          JSON.parse(String(init?.body)).agent_config.thinking_summaries,
+          "auto",
+        );
+      return reply({
+        id: "final-source",
+        status: calls >= 3 ? "completed" : "in_progress",
+        steps: [
+          {
+            type: "thought",
+            summary: [{ type: "text", text: "检查可比性。" }],
+          },
+          ...(calls >= 3
+            ? [
+                {
+                  type: "url_context_result",
+                  result: [
+                    {
+                      title: "Verified",
+                      url: "https://example.com/final",
+                      status: "success",
+                    },
+                  ],
+                },
+                {
+                  type: "model_output",
+                  content: [{ type: "text", text: "Final public report" }],
+                },
+              ]
+            : []),
+        ],
+      });
+    },
+  });
+  const result = await new Runner({ tracingDisabled: true }).run(
+    new Agent({ name: "public-progress", model }),
+    "synthetic public task",
+  );
+  assert.equal(result.finalOutput, "Final public report");
+  assert.equal(
+    progress.length,
+    2,
+    "the repeated thought summary is emitted once, and final-only sources survive",
+  );
+  assert.match(JSON.stringify(progress), /example.com\/final/);
+});

@@ -115,6 +115,19 @@ type MarkdownNode = {
   children?: MarkdownNode[];
   data?: { hProperties?: Record<string, unknown> };
 };
+/** A plain br is safe document formatting; other HTML remains inert. */
+export function remarkSafeLineBreaks() {
+  return (tree: MarkdownNode) => {
+    const visit = (node: MarkdownNode) => {
+      if (node.type === "html" && /^<br\s*\/?\s*>$/i.test(node.value ?? "")) {
+        node.type = "break";
+        delete node.value;
+      }
+      node.children?.forEach(visit);
+    };
+    visit(tree);
+  };
+}
 /** Stable local heading IDs allow document navigation without touching the app URL. */
 export function remarkHeadingIds() {
   return (tree: MarkdownNode) => {

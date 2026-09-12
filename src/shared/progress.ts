@@ -58,6 +58,11 @@ export const ANALYSIS_SECTIONS = [
     description: "如何理解目标、需要澄清的边界与核查方向",
   },
   {
+    id: "method",
+    title: "方法与核查",
+    description: "准备如何验证、比较与处理资料",
+  },
+  {
     id: "evidence",
     title: "依据与发现",
     description: "资料说明了什么，还有哪些信息不确定",
@@ -72,16 +77,190 @@ export const ANALYSIS_SECTIONS = [
     title: "判断与结论",
     description: "作出什么判断，以及判断的关键依据",
   },
+  {
+    id: "provider",
+    title: "研究进展说明",
+    description: "服务商返回的公开分析摘要",
+  },
 ] as const;
+export interface PublicWebSource {
+  url: string;
+  title: string;
+  status: "searched" | "requested" | "read" | "cited" | "unavailable";
+  snippet?: string;
+}
+export interface PublicProgressDetails {
+  progressKind: "analysis" | "search" | "source" | "status";
+  detail?: string;
+  method?: string;
+  queries?: string[];
+  webSources?: PublicWebSource[];
+}
+const publicText = (value: unknown, limit: number) =>
+  typeof value === "string"
+    ? value
+        .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "")
+        .trim()
+        .slice(0, limit)
+    : "";
+export function safePublicURL(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length > 4000) return undefined;
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) &&
+      !url.username &&
+      !url.password
+      ? url.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+export function publicReportDetails(event: TaskEvent) {
+  if (event.type.replaceAll(".", "_") !== "progress_reported")
+    return { detail: "", method: "", questions: [] as string[] };
+  return {
+    detail: publicText(event.data?.detail, 6000),
+    method: publicText(event.data?.method, 2000),
+    questions: Array.isArray(event.data?.questions)
+      ? event.data.questions
+          .slice(0, 8)
+          .map((question) => publicText(question, 300))
+          .filter(Boolean)
+      : [],
+  };
+}
+export interface ProcessSource extends PublicWebSource {
+  id: string;
+  sourceId?: string;
+  members: MemberId[];
+  origin: "local" | "google";
+}
+export const SOURCE_STATUS_NAMES: Record<PublicWebSource["status"], string> = {
+  searched: "搜索结果",
+  requested: "已请求读取",
+  read: "已读取",
+  cited: "引用来源",
+  unavailable: "未能读取",
+};
+/** A URL is not a visited website unless a completed read event explicitly proves it. */
+export function buildProcessSources(
+  task: Pick<Task, "sources">,
+  events: TaskEvent[],
+): ProcessSource[] {
+  const results = new Map<string, ProcessSource>();
+  const ranks: Record<PublicWebSource["status"], number> = {
+    requested: 0,
+    searched: 1,
+    cited: 2,
+    unavailable: 3,
+    read: 4,
+  };
+  const addSource = (entry: ProcessSource) => {
+    const key = entry.sourceId
+      ? `source:${entry.sourceId}`
+      : `url:${entry.url}`;
+    const existing = results.get(key);
+    if (!existing) results.set(key, entry);
+    else {
+      if (ranks[entry.status] > ranks[existing.status])
+        existing.status = entry.status;
+      existing.snippet ||= entry.snippet;
+      for (const member of entry.members)
+        if (!existing.members.includes(member)) existing.members.push(member);
+    }
+  };
+  for (const event of events) {
+    const type = event.type.replaceAll(".", "_");
+    const members = event.member ? [event.member] : [];
+    const data = event.data ?? {};
+    if (
+      type === "progress_reported" &&
+      data.hosted === true &&
+      Array.isArray(data.webSources)
+    ) {
+      for (const raw of data.webSources.slice(0, 100)) {
+        if (!raw || typeof raw !== "object") continue;
+        const source = raw as Record<string, unknown>;
+        const url = safePublicURL(source.url);
+        if (
+          !url ||
+          typeof source.status !== "string" ||
+          !Object.hasOwn(SOURCE_STATUS_NAMES, source.status)
+        )
+          continue;
+        addSource({
+          id: `web:${url}`,
+          url,
+          title: publicText(source.title, 200) || new URL(url).hostname,
+          status: source.status as PublicWebSource["status"],
+          snippet: publicText(source.snippet, 1600) || undefined,
+          origin: "google",
+          members,
+        });
+      }
+    }
+    const ids =
+      type === "progress_reported" && Array.isArray(data.sourceIds)
+        ? data.sourceIds
+        : /^tool_(started|completed|failed)$/.test(type) &&
+            data.tool === "read_source"
+          ? [data.sourceId]
+          : [];
+    for (const id of ids) {
+      const source = task.sources.find((source) => source.id === id);
+      if (!source) continue;
+      const url =
+        source.type === "url" ? safePublicURL(source.location) : undefined;
+      const read = type === "tool_completed" && data.tool === "read_source";
+      addSource({
+        id: source.id,
+        sourceId: source.id,
+        url: url ?? "",
+        title: source.title,
+        status: read
+          ? "read"
+          : type === "tool_failed"
+            ? "unavailable"
+            : type === "tool_started"
+              ? "requested"
+              : "cited",
+        // Read completion can refer to a range; importing the document is not proof that its opening was read.
+        snippet: source.coverage,
+        origin: "local",
+        members,
+      });
+    }
+  }
+  return [...results.values()];
+}
+export function publicSearchQueries(events: TaskEvent[]): string[] {
+  return [
+    ...new Set(
+      events
+        .filter(
+          (event) =>
+            event.type.replaceAll(".", "_") === "progress_reported" &&
+            event.data?.hosted === true,
+        )
+        .flatMap((event) =>
+          Array.isArray(event.data?.queries)
+            ? event.data.queries
+                .slice(0, 20)
+                .map((query) => publicText(query, 1000))
+                .filter(Boolean)
+            : [],
+        ),
+    ),
+  ];
+}
 export type AnalysisSection = (typeof ANALYSIS_SECTIONS)[number]["id"];
 export function publicAnalysisSection(
   event: TaskEvent,
 ): AnalysisSection | undefined {
-  if (
-    event.type.replaceAll(".", "_") !== "progress_reported" ||
-    event.data?.hosted === true
-  )
-    return undefined;
+  if (event.type.replaceAll(".", "_") !== "progress_reported") return undefined;
+  if (event.data?.hosted === true)
+    return event.data?.progressKind === "analysis" ? "provider" : undefined;
   switch (event.data?.stage) {
     case "plan":
     case "framing":
@@ -89,6 +268,8 @@ export function publicAnalysisSection(
     case "finding":
     case "evidence":
       return "evidence";
+    case "method":
+      return "method";
     case "alternatives":
       return "alternatives";
     case "decision":

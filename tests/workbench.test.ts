@@ -1263,8 +1263,8 @@ test("long decision replies open intact in results and saving the detail stays p
   const task = taskFixture("decision-detail-regression", false);
   const detail =
     "# 分析报告\n\n" +
-    "背景与证据需要保留。".repeat(70) +
-    "\n\n## 结论\n\n先完成核心体验，再扩展外围能力。\n\n完整报告末尾标记：ORCHID-END。";
+    "背景与证据需要保留。".repeat(350) +
+    "\n\n## 结论\n\n先完成核心体验，再扩展外围能力。\n\n## 关键依据\n\n核心场景已验证，外围依赖仍不明确。\n\n## 风险\n\n现在扩平台会增加维护成本。\n\n## 附录\n\n完整报告末尾标记：ORCHID-END。";
   task.messages[1]!.content = detail;
   const snap = workbenchSnapshot([task]);
   await withWorkbench(
@@ -1274,8 +1274,9 @@ test("long decision replies open intact in results and saving the detail stays p
       assert.match(decision.textContent!, /先完成核心体验/);
       assert.doesNotMatch(decision.textContent!, /ORCHID-END/);
       assert.ok(
-        decision.textContent!.length < 250,
-        "the decision surface stays concise while preserving full text elsewhere",
+        decision.textContent!.includes("核心场景已验证") &&
+          decision.textContent!.includes("维护成本"),
+        "the meeting report must retain evidence and tradeoffs alongside the conclusion",
       );
       assert.equal(
         document.querySelector(".pane-main .task-run-control"),
@@ -1336,7 +1337,9 @@ test("long decision replies open intact in results and saving the detail stays p
       )!;
       assert.ok(right, "full answer is shown in the product's result pane");
       assert.match(right.textContent!, /ORCHID-END/);
-      assert.ok(right.textContent!.includes("背景与证据需要保留。".repeat(70)));
+      assert.ok(
+        right.textContent!.includes("背景与证据需要保留。".repeat(350)),
+      );
       assert.ok(
         commands.some(
           (command) =>
@@ -1380,7 +1383,154 @@ test("long decision replies open intact in results and saving the detail stays p
   );
 });
 
-test("recent-work menus archive and recover deleted work without executing it or losing saved artifacts", async () => {
+test("a delayed answer save preserves the newer full report in the result pane", async (t) => {
+  for (const otherTask of [false, true]) {
+    await t.test(
+      otherTask ? "after switching tasks" : "within the same task",
+      async () => {
+        const taskA = taskFixture(`pending-report-a-${otherTask}`, false);
+        const taskB = taskFixture(`pending-report-b-${otherTask}`, false);
+        taskA.title = "报告 A 所在的研究";
+        taskB.title = "报告 B 所在的研究";
+        const bodyA = "报告 A 的完整分析与依据。".repeat(300);
+        const bodyB = "报告 B 的完整分析与依据。".repeat(300);
+        taskA.messages[1]!.content = `# 报告 A\n\n${bodyA}\n\n## 结论\n\n建议 A。\n\n## 附录\n\nREPORT-A-END`;
+        taskB.messages[1]!.content = `# 报告 B\n\n${bodyB}\n\n## 结论\n\n建议 B。\n\n## 附录\n\nREPORT-B-END`;
+        if (!otherTask) taskA.messages.push(taskB.messages[1]!);
+        const snap = workbenchSnapshot(otherTask ? [taskA, taskB] : [taskA]);
+        await withWorkbench(
+          snap,
+          async ({ document, window, commands, emit, act }) => {
+            let current = snap;
+            let release!: () => void;
+            const gate = new Promise<void>((resolve) => {
+              release = resolve;
+            });
+            const invoke = window.ytriple!.invoke;
+            window.ytriple!.invoke = async (command) => {
+              if (command.type !== "message.save") {
+                current = await invoke(command);
+                if (command.type === "window.rightMode") {
+                  current.desktop!.rightMode = command.mode;
+                  emit(current);
+                }
+                return current;
+              }
+              commands.push(command);
+              await gate;
+              const next = structuredClone(current);
+              const savedTask = next.tasks.find(
+                (item) => item.id === command.taskId,
+              )!;
+              const source = savedTask.messages.find(
+                (item) => item.id === command.messageId,
+              )!;
+              const artifact = {
+                ...savedTask.artifacts[0]!,
+                id: "delayed-saved-report-a",
+                title: "已经保存的报告 A",
+                content: source.content,
+              };
+              savedTask.artifacts.push(artifact);
+              savedTask.events.push({
+                id: "delayed-save-completed",
+                type: "message.saved",
+                summary: "报告 A 已保存为文档",
+                createdAt: savedTask.updatedAt,
+                goalVersion: savedTask.goalVersion,
+                data: { messageId: command.messageId, artifactId: artifact.id },
+              });
+              current = next;
+              emit(next);
+              return next;
+            };
+            const click = async (target: Element | null | undefined) => {
+              assert.ok(target);
+              await act(async () =>
+                target.dispatchEvent(
+                  new window.Event("click", { bubbles: true }),
+                ),
+              );
+            };
+            const reader = () =>
+              document.querySelector(
+                '.pane-artifact [aria-label="对话完整内容"]',
+              );
+            await click(
+              document.querySelector(".pane-main .message.assistant button"),
+            );
+            assert.match(reader()!.textContent!, /REPORT-A-END/);
+            const save = Array.from(
+              reader()!.querySelectorAll<HTMLButtonElement>("button"),
+            ).find((button) => button.textContent === "保存为文档")!;
+            await click(save);
+            assert.equal(save.disabled, true);
+            if (otherTask) {
+              await click(
+                Array.from(document.querySelectorAll(".work-item")).find(
+                  (item) => item.textContent?.includes(taskB.title),
+                ),
+              );
+            }
+            await click(
+              Array.from(
+                document.querySelectorAll(".pane-main .message.assistant"),
+              )
+                .at(-1)
+                ?.querySelector("button"),
+            );
+            assert.equal(
+              reader()!.querySelector(".markdown h1")?.textContent,
+              "报告 B",
+            );
+            assert.equal(
+              reader()!.querySelector(".markdown p")?.textContent,
+              bodyB,
+            );
+            await act(async () => release());
+            assert.ok(
+              reader(),
+              "saving an earlier answer must not close the report opened afterwards",
+            );
+            assert.equal(
+              reader()!.querySelector(".markdown h1")?.textContent,
+              "报告 B",
+            );
+            assert.equal(
+              reader()!.querySelector(".markdown p")?.textContent,
+              bodyB,
+            );
+            assert.match(reader()!.textContent!, /REPORT-B-END/);
+            assert.doesNotMatch(reader()!.textContent!, /REPORT-A-END/);
+            assert.equal(
+              document.querySelector(".pane-main .task-overview h1")
+                ?.textContent,
+              otherTask ? taskB.title : taskA.title,
+            );
+            assert.deepEqual(
+              commands.filter((command) => command.type === "message.save"),
+              [
+                {
+                  type: "message.save",
+                  taskId: taskA.id,
+                  messageId: taskA.messages[1]!.id,
+                },
+              ],
+            );
+            assert.equal(
+              current.tasks
+                .find((item) => item.id === taskA.id)!
+                .artifacts.at(-1)?.content,
+              taskA.messages[1]!.content,
+            );
+          },
+        );
+      },
+    );
+  }
+});
+
+test("recent-work menus restore archives but permanently delete sessions only after confirmation", async () => {
   const task = taskFixture("managed-work-regression", false);
   const snap = workbenchSnapshot([task]);
   await withWorkbench(
@@ -1397,9 +1547,12 @@ test("recent-work menus archive and recover deleted work without executing it or
           const item = result.tasks.find((item) => item.id === command.taskId)!;
           if (command.type === "task.archive")
             item.archivedAt = "2026-09-11T12:01:00.000Z";
-          else if (command.type === "task.delete")
-            item.deletedAt = "2026-09-11T12:02:00.000Z";
-          else {
+          else if (command.type === "task.delete") {
+            result.tasks = result.tasks.filter(
+              (task) => task.id !== command.taskId,
+            );
+            result.desktop!.taskId = null;
+          } else {
             delete item.archivedAt;
             delete item.deletedAt;
           }
@@ -1444,19 +1597,32 @@ test("recent-work menus archive and recover deleted work without executing it or
         new RegExp(task.title),
       );
       await click(document.querySelector(".work-item"));
-      await click(menuButton("移到最近删除"));
-      assert.equal(document.querySelector(".work-item"), null);
+      await click(menuButton("删除会话"));
+      assert.ok(document.querySelector('[role="dialog"]'));
       assert.match(
-        document.querySelector(".work-history")!.textContent!,
-        /最近删除/,
+        document.querySelector('[role="dialog"]')!.textContent!,
+        /已保存的成果/,
       );
+      assert.ok(!commands.some((command) => command.type === "task.delete"));
       await click(
-        document.querySelector('[aria-label="恢复工作：' + task.title + '"]'),
+        Array.from(document.querySelectorAll('[role="dialog"] button')).find(
+          (button) => button.textContent === "取消",
+        ),
       );
-      await click(document.querySelector(".work-item"));
-      assert.match(
-        document.querySelector(".pane-artifact")!.textContent!,
-        /研究任务的独有成果正文/,
+      assert.ok(document.querySelector(".work-item"));
+      await click(menuButton("删除会话"));
+      await click(
+        Array.from(document.querySelectorAll('[role="dialog"] button')).find(
+          (button) => button.textContent === "永久删除",
+        ),
+      );
+      assert.equal(document.querySelector(".work-item"), null);
+      assert.equal(document.querySelector('[role="dialog"]'), null);
+      assert.equal(document.querySelector(".work-history"), null);
+      assert.equal(document.querySelector(".pane-main .task-overview"), null);
+      assert.doesNotMatch(
+        document.querySelector(".sidebar")!.textContent!,
+        /最近删除/,
       );
       assert.deepEqual(
         commands.filter((command) =>
@@ -1468,7 +1634,6 @@ test("recent-work menus archive and recover deleted work without executing it or
           { type: "task.archive", taskId: task.id },
           { type: "task.restore", taskId: task.id },
           { type: "task.delete", taskId: task.id },
-          { type: "task.restore", taskId: task.id },
         ],
       );
       assert.ok(

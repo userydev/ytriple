@@ -81,6 +81,7 @@ export interface Task {
   id: string;
   projectId?: string;
   archivedAt?: string;
+  /** Legacy persisted data only; Store permanently removes these conversation records when opened. */
   deletedAt?: string;
   title: string;
   goal: string;

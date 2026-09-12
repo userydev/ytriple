@@ -256,3 +256,105 @@ test("historical exchanges retain their own run state when a later run pauses", 
   );
   assert.equal(exchanges[2].status, "paused");
 });
+
+test("process sources distinguish citations, search hits, explicit reads and failed reads", async () => {
+  const {
+    buildProcessSources,
+    publicReportDetails,
+    publicAnalysisSection,
+    publicSearchQueries,
+  } = await import("../src/shared/progress.js");
+  const events = [
+    event("progress_reported", {
+      stage: "finding",
+      sourceIds: ["local"],
+      detail: "可公开解释",
+      method: "交叉对照",
+      questions: ["样本是否可比？"],
+      reasoning: "PRIVATE",
+    }),
+    event("progress_reported", {
+      hosted: true,
+      progressKind: "search",
+      queries: ["actual query"],
+      webSources: [
+        {
+          title: "Search",
+          url: "https://example.com/search",
+          status: "searched",
+        },
+        {
+          title: "Citation",
+          url: "https://example.com/citation",
+          status: "cited",
+        },
+        {
+          title: "Blocked",
+          url: "https://example.com/blocked",
+          status: "unavailable",
+        },
+      ],
+    }),
+    event("progress_reported", {
+      hosted: true,
+      progressKind: "source",
+      webSources: [
+        { title: "Search", url: "https://example.com/search", status: "read" },
+        { url: "javascript:bad", status: "read" },
+        { url: "https://example.com/prototype", status: "__proto__" },
+      ],
+    }),
+  ];
+  const task = {
+    sources: [
+      {
+        id: "local",
+        title: "Local reference",
+        type: "text" as const,
+        location: "",
+        coverage: "全文已导入",
+        text: "正文",
+        addedAt: "",
+      },
+    ],
+  };
+  const sources = buildProcessSources(task, events);
+  assert.equal(sources.length, 4);
+  assert.equal(
+    sources.find((source) => source.sourceId === "local")?.status,
+    "cited",
+  );
+  assert.equal(
+    sources.find((source) => source.url.endsWith("/search"))?.status,
+    "read",
+  );
+  assert.equal(
+    sources.find((source) => source.url.endsWith("/citation"))?.status,
+    "cited",
+  );
+  assert.equal(
+    sources.find((source) => source.url.endsWith("/blocked"))?.status,
+    "unavailable",
+  );
+  const readSources = buildProcessSources(task, [
+    ...events,
+    event("tool_completed", { tool: "read_source", sourceId: "local" }),
+  ]);
+  assert.equal(
+    readSources.find((source) => source.sourceId === "local")?.status,
+    "read",
+  );
+  assert.deepEqual(publicReportDetails(events[0]), {
+    detail: "可公开解释",
+    method: "交叉对照",
+    questions: ["样本是否可比？"],
+  });
+  assert.deepEqual(publicSearchQueries(events), ["actual query"]);
+  assert.equal(
+    publicAnalysisSection(
+      event("progress_reported", { hosted: true, progressKind: "analysis" }),
+    ),
+    "provider",
+  );
+  assert.doesNotMatch(JSON.stringify(sources), /PRIVATE|javascript|prototype/);
+});

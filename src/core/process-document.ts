@@ -2,7 +2,11 @@ import type { MemberId, Task, TaskEvent } from "../shared/types.js";
 import {
   ANALYSIS_SECTIONS,
   buildPublicExchanges,
+  buildProcessSources,
+  publicReportDetails,
+  publicSearchQueries,
   publicAnalysisSection,
+  SOURCE_STATUS_NAMES,
 } from "../shared/progress.js";
 
 const labels: Record<MemberId, string> = {
@@ -12,6 +16,7 @@ const labels: Record<MemberId, string> = {
 };
 const stages: Record<string, string> = {
   framing: "问题理解",
+  method: "方法",
   plan: "计划",
   evidence: "依据",
   finding: "发现",
@@ -77,6 +82,26 @@ const eventType = (event: TaskEvent) => event.type.replaceAll(".", "_");
 function distinct(items: string[], limit = 30): string[] {
   return [...new Set(items)].slice(-limit);
 }
+function reportLines(event: TaskEvent): string[] {
+  const { detail, method, questions } = publicReportDetails(event);
+  const lines = [
+    `- **${memberLabel(event.member)} · ${event.data?.hosted === true ? "Google 公开摘要" : (stages[String(event.data?.stage)] ?? "进展")}**：${plain(event.summary)}`,
+  ];
+  if (method) lines.push("", `  **核查方法**：${plain(method, 2000)}`);
+  if (detail && detail !== event.summary)
+    lines.push(
+      "",
+      "  **展开说明**：",
+      "",
+      ...detail.split(/\r?\n/).map((line) => `  > ${plain(line, 6000)}`),
+    );
+  if (questions.length)
+    lines.push(
+      "",
+      `  **仍待解决**：${questions.map((question) => plain(question, 300)).join("；")}`,
+    );
+  return lines;
+}
 
 /** Summarize only named public fields; SDK state, raw payloads and tool bodies never enter the document. */
 export function buildProcessDocument(
@@ -121,12 +146,7 @@ export function buildProcessDocument(
         lines.push(
           `### ${section.title}`,
           "",
-          ...distinct(
-            entries.map(
-              (event) =>
-                `- **${memberLabel(event.member)} · ${stages[String(event.data?.stage)] ?? "进展"}**：${plain(event.summary)}`,
-            ),
-          ),
+          ...entries.slice(-30).flatMap(reportLines),
           "",
         );
     }
@@ -174,6 +194,31 @@ export function buildProcessDocument(
         );
       lines.push("");
     }
+  }
+  const processSources = buildProcessSources(task, events);
+  const queries = publicSearchQueries(events);
+  if (queries.length)
+    lines.push(
+      "## 实际检索词",
+      "",
+      ...queries.slice(-40).map((query) => `- ${plain(query, 1000)}`),
+      "",
+    );
+  if (processSources.length) {
+    lines.push(
+      "## 核查资料与网站",
+      "",
+      "搜索结果和引用来源不等于已访问；读取状态依据实际工具或服务商记录。",
+      "",
+    );
+    for (const source of processSources.slice(-100)) {
+      const label = plain(source.title, 200);
+      lines.push(
+        `- **${source.url ? `[${label}](${source.url.replace(/[()<>]/g, (char) => "%" + char.charCodeAt(0).toString(16))})` : label}** · ${SOURCE_STATUS_NAMES[source.status]} · ${source.origin === "google" ? "Google 返回" : "任务资料"}`,
+      );
+      if (source.snippet) lines.push(`  ${plain(source.snippet, 1600)}`);
+    }
+    lines.push("");
   }
   const questions = distinct(
     events

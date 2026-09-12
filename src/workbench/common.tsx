@@ -1,9 +1,14 @@
 import { useEffect, useRef, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
-import { normalizeMathDelimiters, remarkHeadingIds } from "../shared/markdown";
+import {
+  normalizeMathDelimiters,
+  remarkHeadingIds,
+  remarkSafeLineBreaks,
+} from "../shared/markdown";
 import { X } from "lucide-react";
 import {
   MEMBERS,
@@ -52,7 +57,12 @@ export function Markdown({
   return (
     <div className="markdown" ref={container}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath, remarkHeadingIds]}
+        remarkPlugins={[
+          remarkGfm,
+          remarkMath,
+          remarkHeadingIds,
+          remarkSafeLineBreaks,
+        ]}
         rehypePlugins={[
           [
             rehypeKatex,
@@ -137,6 +147,8 @@ export function Modal({
   wide?: boolean;
 }) {
   const container = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
   useEffect(() => {
     const previousFocus = document.activeElement as HTMLElement | null;
     const focusable = () =>
@@ -147,7 +159,7 @@ export function Modal({
       );
     focusable()[0]?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") close.current();
       if (event.key === "Tab") {
         const items = focusable();
         const first = items[0];
@@ -164,10 +176,10 @@ export function Modal({
     document.addEventListener("keydown", onKeyDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      previousFocus?.focus();
+      if (previousFocus?.isConnected) previousFocus.focus();
     };
-  }, [onClose]);
-  return (
+  }, []);
+  return createPortal(
     <div
       className="modal-backdrop"
       onMouseDown={(event) => {
@@ -196,6 +208,7 @@ export function Modal({
         </header>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

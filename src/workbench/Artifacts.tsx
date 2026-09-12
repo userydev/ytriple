@@ -1,4 +1,11 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import {
   Archive,
   ArrowUpRight,
@@ -23,12 +30,31 @@ import {
 } from "lucide-react";
 import type { Artifact, Source, Task } from "../shared/types";
 import { formatDate, formatTime, Markdown, type Dispatch } from "./common";
-import { useDocumentDraft } from "./drafts";
+import { discardTaskDocumentDrafts, useDocumentDraft } from "./drafts";
 
 const refinementDrafts = new Map<
   string,
   { instruction: string; hash: string }
 >();
+const pendingEdits = new Map<string, "save" | "refine">();
+const pendingListeners = new Set<() => void>();
+const subscribePending = (listener: () => void) => {
+  pendingListeners.add(listener);
+  return () => {
+    pendingListeners.delete(listener);
+  };
+};
+function setPending(key: string, action?: "save" | "refine") {
+  if (action) pendingEdits.set(key, action);
+  else pendingEdits.delete(key);
+  pendingListeners.forEach((listener) => listener());
+}
+export function discardTaskArtifactDrafts(taskId: string) {
+  discardTaskDocumentDrafts(taskId);
+  for (const key of refinementDrafts.keys()) {
+    if (key.startsWith(`${taskId}:`)) refinementDrafts.delete(key);
+  }
+}
 
 export function SourceList({
   sources,
@@ -182,6 +208,7 @@ export function ArtifactView({
   const {
     draft: editState,
     setDraft: setEditState,
+    completeDraft,
     changedExternally,
   } = useDocumentDraft(
     `artifact:${task.id}:${artifact.id}`,
@@ -192,13 +219,23 @@ export function ArtifactView({
   const setEditing = (editing: boolean) =>
     setEditState((current) => ({ ...current, editing }));
   const refinementKey = `${task.id}:${artifact.id}`;
+  const readPending = useCallback(
+    () => pendingEdits.get(refinementKey),
+    [refinementKey],
+  );
+  const pending = useSyncExternalStore(
+    subscribePending,
+    readPending,
+    readPending,
+  );
+  const saving = pending === "save";
+  const processing = pending === "refine";
   const [refining, setRefining] = useState(() =>
     refinementDrafts.has(refinementKey),
   );
   const [instruction, setInstruction] = useState(
     () => refinementDrafts.get(refinementKey)?.instruction ?? "",
   );
-  const [processing, setProcessing] = useState(false);
   const [collecting, setCollecting] = useState(false);
   const [collectedHash, setCollectedHash] = useState<string | null>(null);
   const [refineHash, setRefineHash] = useState(
@@ -209,17 +246,24 @@ export function ArtifactView({
       refinementDrafts.set(refinementKey, { instruction, hash: refineHash });
     else refinementDrafts.delete(refinementKey);
   }, [refinementKey, instruction, refineHash]);
-  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (!pending && !refinementDrafts.has(refinementKey)) {
+      setInstruction("");
+      setRefining(false);
+    }
+  }, [pending, refinementKey]);
   const [history, setHistory] = useState(false);
   const [saved, setSaved] = useState(false);
   const [exporting, setExporting] = useState<"png" | "pptx" | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  useEffect(
-    () => () => {
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
       if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
+    };
+  }, []);
   const beginEdit = () => {
     setEditState({
       content: artifact.content ?? "",
@@ -229,20 +273,25 @@ export function ArtifactView({
     setSaved(false);
   };
   const save = async () => {
-    if (saving) return;
-    setSaving(true);
-    const result = await dispatch({
-      type: "artifact.save",
-      taskId: task.id,
-      artifactId: artifact.id,
-      content: draft,
-      expectedHash: baseHash,
-    });
-    setSaving(false);
-    if (result) {
-      setEditing(false);
-      setSaved(true);
-      timer.current = setTimeout(() => setSaved(false), 2400);
+    if (pendingEdits.has(refinementKey)) return;
+    setPending(refinementKey, "save");
+    try {
+      const result = await dispatch({
+        type: "artifact.save",
+        taskId: task.id,
+        artifactId: artifact.id,
+        content: draft,
+        expectedHash: baseHash,
+      });
+      if (result) {
+        completeDraft(editState);
+        if (mounted.current) {
+          setSaved(true);
+          timer.current = setTimeout(() => setSaved(false), 2400);
+        }
+      }
+    } finally {
+      setPending(refinementKey);
     }
   };
   const exportArtifact = async (format: "png" | "pptx") => {
@@ -268,19 +317,23 @@ export function ArtifactView({
     if (result) setCollectedHash(artifact.hash);
   };
   const refine = async () => {
-    if (!instruction.trim() || processing) return;
-    setProcessing(true);
-    const result = await dispatch({
-      type: "artifact.refine",
-      taskId: task.id,
-      artifactId: artifact.id,
-      instruction: instruction.trim(),
-      expectedHash: refineHash,
-    });
-    setProcessing(false);
-    if (result) {
-      setInstruction("");
-      setRefining(false);
+    if (!instruction.trim() || pendingEdits.has(refinementKey)) return;
+    setPending(refinementKey, "refine");
+    try {
+      const result = await dispatch({
+        type: "artifact.refine",
+        taskId: task.id,
+        artifactId: artifact.id,
+        instruction: instruction.trim(),
+        expectedHash: refineHash,
+      });
+      if (result) {
+        refinementDrafts.delete(refinementKey);
+        setInstruction("");
+        setRefining(false);
+      }
+    } finally {
+      setPending(refinementKey);
     }
   };
   return (
@@ -312,6 +365,7 @@ export function ArtifactView({
                 </button>
                 <button
                   className="text-button"
+                  disabled={saving}
                   onClick={() => setEditing(false)}
                 >
                   <X size={13} />
@@ -323,6 +377,7 @@ export function ArtifactView({
                 <button
                   className="button secondary small"
                   disabled={
+                    processing ||
                     Boolean(artifact.readError) ||
                     artifact.content === undefined
                   }
@@ -336,6 +391,7 @@ export function ArtifactView({
                   aria-expanded={refining}
                   aria-controls={`refine-form-${artifact.id}`}
                   disabled={
+                    processing ||
                     Boolean(artifact.readError) ||
                     artifact.content === undefined
                   }
@@ -444,6 +500,7 @@ export function ArtifactView({
           </label>
           <textarea
             id={`refine-${artifact.id}`}
+            disabled={processing}
             value={instruction}
             onChange={(event) => setInstruction(event.target.value)}
             placeholder="例如：保留结论，补上反方观点；或把第二段改得更简洁。"
@@ -507,6 +564,7 @@ export function ArtifactView({
       {editing ? (
         <textarea
           className="artifact-editor"
+          disabled={saving}
           aria-label={
             artifact.format === "html" ? "HTML 原文编辑" : "Markdown 原文编辑"
           }

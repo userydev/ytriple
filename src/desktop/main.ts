@@ -88,10 +88,7 @@ function desktopChanged(): void {
   if (latest) publish(latest);
 }
 function selectTask(taskId: string | null): void {
-  if (
-    taskId &&
-    !latest?.tasks.some((t) => t.id === taskId && !t.deletedAt && !t.archivedAt)
-  )
+  if (taskId && !latest?.tasks.some((t) => t.id === taskId && !t.archivedAt))
     throw new Error("任务不存在。");
   if (layout.taskId !== taskId) {
     layout.taskId = taskId;
@@ -135,6 +132,16 @@ function decorate(snapshot: Snapshot): Snapshot {
   };
 }
 function publish(snapshot: Snapshot): Snapshot {
+  if (
+    layout.taskId &&
+    !snapshot.tasks.some(
+      (task) => task.id === layout.taskId && !task.archivedAt,
+    )
+  ) {
+    layout.taskId = null;
+    desktopRevision++;
+    void persistLayout();
+  }
   latest = decorate(snapshot);
   if (mainWindow && !mainWindow.isDestroyed())
     mainWindow.webContents.send("ytriple:snapshot", latest);
@@ -552,10 +559,14 @@ app
         ? decorate(result)
         : publish(result);
     });
-    if (layout.taskId && !latest?.tasks.some((t) => t.id === layout.taskId))
+    if (
+      layout.taskId &&
+      !latest?.tasks.some((t) => t.id === layout.taskId && !t.archivedAt)
+    )
       layout.taskId = null;
-    if (savedLayout === undefined && latest?.tasks.length)
-      layout.taskId = latest.tasks[0].id;
+    if (savedLayout === undefined)
+      layout.taskId =
+        latest?.tasks.find((task) => !task.archivedAt)?.id ?? null;
     openWindow();
     const recoverDisplays = () => {
       layout = restoreLayout(

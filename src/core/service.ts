@@ -68,6 +68,8 @@ export class WorkbenchService {
   private projectBrowser?: Snapshot["projectBrowser"];
   private browserSequence = 0;
   private browserScope = 0;
+  private readonly taskCommands = new Map<string, Set<Promise<Snapshot>>>();
+  private readonly taskDeletions = new Map<string, Promise<Snapshot>>();
   private readonly documentSaves = new Map<string, Promise<void>>();
   private readonly projectInitializations = new Map<string, Promise<void>>();
   private projectTimer?: ReturnType<typeof setTimeout>;
@@ -110,10 +112,12 @@ export class WorkbenchService {
         ),
       readKey,
       appendEvent: (id, event) => {
+        if (!this.store.hasTask(id)) return;
         this.store.event(id, event);
         this.notify();
       },
       addAssistantMessage: (id, member, content, goalVersion) => {
+        if (!this.store.hasTask(id)) return;
         this.store.updateTask(id, (task) => {
           if (task.goalVersion !== goalVersion) return;
           task.messages.push({
@@ -143,9 +147,11 @@ export class WorkbenchService {
         return result;
       },
       loadCheckpoint: (id) => this.store.checkpoint<RuntimeCheckpoint>(id),
-      saveCheckpoint: (id, checkpoint) =>
-        this.store.saveCheckpoint(id, checkpoint),
+      saveCheckpoint: (id, checkpoint) => {
+        if (this.store.hasTask(id)) this.store.saveCheckpoint(id, checkpoint);
+      },
       setStatus: (id, status, error) => {
+        if (!this.store.hasTask(id)) return;
         this.store.updateTask(id, (task) => {
           task.status = status;
           task.error = error;
@@ -238,7 +244,7 @@ export class WorkbenchService {
     return {
       version: "0.1.0",
       dataPath: this.store.dataPath,
-      tasks,
+      tasks: tasks.filter((task) => this.store.hasTask(task.id)),
       profiles,
       settings: this.store.settings(),
       system: this.system!,
@@ -250,10 +256,11 @@ export class WorkbenchService {
   }
   private start(id: string): void {
     const task = this.store.task(id);
-    if (task.archivedAt || task.deletedAt)
-      throw new Error("请先恢复这项工作，再继续处理。");
+    if (this.taskDeletions.has(id)) throw new Error("这项工作正在永久删除。");
+    if (task.archivedAt) throw new Error("请先恢复这项工作，再继续处理。");
     if (this.runtime.isRunning(id)) return;
     void this.runtime.run(id).catch((error) => {
+      if (!this.store.hasTask(id)) return;
       this.store.updateTask(id, (task) => {
         task.status = "failed";
         task.error = safeError(error);
@@ -285,6 +292,58 @@ export class WorkbenchService {
     this.store.saveCheckpoint(id, null);
   }
   async execute(command: InternalCommand): Promise<Snapshot> {
+    if (this.closing) throw new Error("工作台正在关闭。");
+    const taskId =
+      "taskId" in command
+        ? command.taskId
+        : command.type === "project.initialize"
+          ? command.input.taskId
+          : undefined;
+    if (command.type === "task.delete") {
+      const existing = this.taskDeletions.get(command.taskId);
+      if (existing) return existing;
+      this.store.task(command.taskId);
+      // Register deletion synchronously, before a queued send/save can start new work.
+      const pending = Promise.resolve().then(async () => {
+        await this.runtime.stop(command.taskId);
+        await Promise.allSettled([
+          ...(this.taskCommands.get(command.taskId) ?? []),
+        ]);
+        await this.runtime.stop(command.taskId);
+        this.store.deleteTask(command.taskId);
+        if (this.closing) throw new Error("工作台正在关闭。");
+        const snapshot = await this.snapshot();
+        this.changed(snapshot);
+        return snapshot;
+      });
+      this.taskDeletions.set(command.taskId, pending);
+      try {
+        return await pending;
+      } finally {
+        if (this.taskDeletions.get(command.taskId) === pending)
+          this.taskDeletions.delete(command.taskId);
+      }
+    }
+    if (taskId) {
+      if (this.taskDeletions.has(taskId))
+        throw new Error("这项工作正在永久删除，请等待删除完成。");
+      this.store.task(taskId);
+    }
+    const pending = Promise.resolve().then(() => this.executeCommand(command));
+    if (!taskId) return pending;
+    const commands =
+      this.taskCommands.get(taskId) ?? new Set<Promise<Snapshot>>();
+    commands.add(pending);
+    this.taskCommands.set(taskId, commands);
+    try {
+      return await pending;
+    } finally {
+      commands.delete(pending);
+      if (!commands.size && this.taskCommands.get(taskId) === commands)
+        this.taskCommands.delete(taskId);
+    }
+  }
+  private async executeCommand(command: InternalCommand): Promise<Snapshot> {
     if (this.closing) throw new Error("工作台正在关闭。");
     let browserReply: Snapshot["projectBrowser"];
     let replyScope: number | undefined;
@@ -336,15 +395,14 @@ export class WorkbenchService {
         });
         break;
       case "task.archive":
-      case "task.delete":
       case "task.restore": {
         await this.runtime.stop(command.taskId);
         this.store.updateTask(command.taskId, (task) => {
           if (command.type === "task.restore") {
+            if (!task.archivedAt)
+              throw new Error("这项工作没有归档，无需恢复。");
             delete task.archivedAt;
-            delete task.deletedAt;
-          } else if (command.type === "task.archive") task.archivedAt = now();
-          else task.deletedAt = now();
+          } else task.archivedAt = now();
         });
         break;
       }
@@ -457,7 +515,7 @@ export class WorkbenchService {
       }
       case "task.send": {
         const existingTask = this.store.task(command.taskId);
-        if (existingTask.archivedAt || existingTask.deletedAt)
+        if (existingTask.archivedAt)
           throw new Error("请先恢复这项工作，再发送消息。");
         const content = requireText(command.text, 40000, "消息");
         await this.runtime.stop(command.taskId);
@@ -887,6 +945,12 @@ export class WorkbenchService {
       this.runtime.stopAll(),
       this.scanning,
       this.stopProbes(),
+      ...[...this.taskDeletions.values()].map((pending) =>
+        pending.catch(() => undefined),
+      ),
+      ...[...this.taskCommands.values()]
+        .flatMap((commands) => [...commands])
+        .map((pending) => pending.catch(() => undefined)),
       ...this.documentSaves.values(),
       ...this.projectInitializations.values(),
     ]);

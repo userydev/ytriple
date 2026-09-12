@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   MemberSettings,
   MemberSettingsMap,
@@ -158,6 +158,25 @@ function MemberModelStatus({
   );
 }
 
+type ProfileDraft = { profile: ModelProfile; key: string; dirty: boolean };
+const connectionFields = [
+  "name",
+  "provider",
+  "protocol",
+  "modelId",
+  "baseURL",
+  "apiKeyEnv",
+] as const;
+function sameConnectionConfiguration(
+  profile: ModelProfile,
+  original?: ModelProfile,
+) {
+  if (!original) return false;
+  return (
+    connectionFields.every((field) => profile[field] === original[field]) &&
+    (profile.execution ?? "model") === (original.execution ?? "model")
+  );
+}
 function ProfileEditor({
   original,
   dispatch,
@@ -165,7 +184,11 @@ function ProfileEditor({
   connected,
   initial,
   onBusy,
+  draft,
+  onDraft,
 }: {
+  draft?: ProfileDraft;
+  onDraft: (draft: ProfileDraft) => void;
   original?: ModelProfile;
   initial?: ModelProfile;
   onBusy?: (busy: boolean) => void;
@@ -174,33 +197,43 @@ function ProfileEditor({
   connected: boolean;
 }) {
   const [profile, setProfile] = useState<ModelProfile>(() =>
-    original || initial
-      ? { ...(original ?? initial)! }
-      : {
-          id: crypto.randomUUID(),
-          name: "",
-          provider: "gemini",
-          protocol: "google",
-          baseURL: PROVIDERS.gemini.baseURL,
-          modelId: "",
-          apiKeyEnv: PROVIDERS.gemini.keyEnv,
-          hasKey: false,
-          status: "unconfigured",
-        },
+    draft?.dirty
+      ? { ...draft.profile }
+      : original || initial
+        ? { ...(original ?? initial)! }
+        : {
+            id: crypto.randomUUID(),
+            name: "",
+            provider: "gemini",
+            protocol: "google",
+            baseURL: PROVIDERS.gemini.baseURL,
+            modelId: "",
+            apiKeyEnv: PROVIDERS.gemini.keyEnv,
+            hasKey: false,
+            status: "unconfigured",
+          },
   );
-  const [key, setKey] = useState("");
+  const [key, setKey] = useState(draft?.key ?? "");
   const [saving, setSaving] = useState(false);
   const [probing, setProbing] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [dirty, setDirty] = useState(false);
+  const dirty = key !== "" || !sameConnectionConfiguration(profile, original);
+  const previousOriginal = useRef(original);
+  useEffect(() => {
+    onDraft({ profile, key, dirty });
+  }, [profile, key, dirty, onDraft]);
+  useEffect(() => {
+    const previous = previousOriginal.current;
+    previousOriginal.current = original;
+    if (original && !key && sameConnectionConfiguration(profile, previous))
+      setProfile(original);
+  }, [profile, key, original]);
   const updateProfile = (patch: Partial<ModelProfile>) => {
     setProfile((current) => ({ ...current, ...patch }));
     setSaved(false);
-    setDirty(true);
   };
   const changeProvider = (provider: ModelProfile["provider"]) => {
     setKey("");
-    setDirty(true);
     setProfile({
       ...profile,
       provider,
@@ -235,9 +268,12 @@ function ProfileEditor({
         });
         setSaving(false);
         if (!result) return;
+        const committed =
+          result.profiles.find((item) => item.id === profile.id) ?? profile;
+        onDraft({ profile: committed, key: "", dirty: false });
+        setProfile(committed);
         setKey("");
         setSaved(true);
-        setDirty(false);
       }
       if (probe) {
         setProbing(true);
@@ -533,7 +569,6 @@ function ProfileEditor({
               value={key}
               onInput={(event) => {
                 setKey(event.currentTarget.value);
-                setDirty(true);
                 setSaved(false);
               }}
               placeholder={
@@ -1124,7 +1159,7 @@ export function Settings({
   const [localSection, setLocalSection] = useState<SettingsSection>("models");
   const tab = section ?? localSection;
   const openModels = (profileId?: string) => {
-    if (profileId) {
+    if (profileId && !profileBusy) {
       setSelected(profileId);
       setSelectionInitialized(true);
     }
@@ -1138,28 +1173,34 @@ export function Settings({
     snapshot !== null,
   );
   const [newProfile, setNewProfile] = useState<ModelProfile>();
-  const [catalogChoice, setCatalogChoice] = useState("");
+  // Unsaved credentials stay only in this mounted settings instance, never in browser storage.
+  const profileDrafts = useRef(new Map<string, ProfileDraft>());
   const [profileBusy, setProfileBusy] = useState(false);
-  const addConnection = (presetId?: string) => {
+  const addConnection = () => {
     setSelectionInitialized(true);
-    const preset = GOOGLE_CATALOG.find((item) => item.id === presetId);
+    if (
+      newProfile &&
+      !snapshot?.profiles.some((profile) => profile.id === newProfile.id)
+    ) {
+      setSelected(null);
+      return;
+    }
     const google = snapshot?.profiles.find(
       (item) => item.provider === "gemini" && item.protocol === "google",
     );
     setNewProfile({
       id: crypto.randomUUID(),
-      name: preset?.name ?? "",
+      name: "",
       provider: "gemini",
       protocol: "google",
-      execution: preset?.execution ?? "model",
-      modelId: preset?.id ?? "",
+      execution: "model",
+      modelId: "",
       baseURL: google?.baseURL || PROVIDERS.gemini.baseURL,
       apiKeyEnv: google?.apiKeyEnv || PROVIDERS.gemini.keyEnv,
       hasKey: false,
       status: "unconfigured",
     });
     setSelected(null);
-    setCatalogChoice("");
   };
   if (!selectionInitialized && snapshot) {
     setSelectionInitialized(true);
@@ -1265,56 +1306,25 @@ export function Settings({
             </p>
           </aside>
           <div className="profile-workspace">
-            <section className="catalog-new-connection">
-              <div>
-                <h3>从 Google 目录添加连接</h3>
-                <p>为通用模型或专项 Agent 单独配置，保留现有连接。</p>
-              </div>
-              <div className="catalog-add-actions">
-                <select
-                  aria-label="用于新连接的 Google 模型目录"
-                  value={catalogChoice}
-                  disabled={!connected || profileBusy}
-                  onChange={(event) =>
-                    setCatalogChoice(event.currentTarget.value)
-                  }
-                >
-                  <option value="">选择模型或专项 Agent</option>
-                  <optgroup label="通用模型">
-                    {GOOGLE_CATALOG.filter(
-                      (item) => item.execution === "model",
-                    ).map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                  <optgroup label="Google 专项 Agent">
-                    {GOOGLE_CATALOG.filter(
-                      (item) => item.execution === "google-agent",
-                    ).map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </optgroup>
-                </select>
-                <button
-                  className="button secondary small"
-                  disabled={!connected || profileBusy || !catalogChoice}
-                  onClick={() => addConnection(catalogChoice)}
-                >
-                  <Plus size={13} />
-                  添加为新连接
-                </button>
-              </div>
-            </section>
             <ProfileEditor
               key={original?.id ?? newProfile?.id ?? "new"}
+              draft={profileDrafts.current.get(
+                original?.id ?? newProfile?.id ?? "new",
+              )}
+              onDraft={(draft) =>
+                profileDrafts.current.set(
+                  original?.id ?? newProfile?.id ?? "new",
+                  draft,
+                )
+              }
               original={original}
               initial={newProfile}
               dispatch={dispatch}
-              onSaved={setSelected}
+              onSaved={(id) =>
+                setSelected((current) =>
+                  current === null && newProfile?.id === id ? id : current,
+                )
+              }
               onBusy={setProfileBusy}
               connected={connected}
             />

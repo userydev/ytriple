@@ -618,3 +618,121 @@
     padding: 9px 12px;
   }
 }
+
+.project-explorer-layout {
+  grid-template-columns:
+    minmax(145px, min(var(--project-tree-width, 220px), calc(100% - 190px)))
+    6px minmax(0, 1fr);
+}
+.project-file-search > button {
+  border: 0;
+  background: transparent;
+  display: flex;
+  padding: 0;
+  color: #95a187;
+  cursor: pointer;
+}
+.project-tree-heading {
+  align-items: center;
+  min-height: 26px;
+  margin-bottom: 4px;
+  padding: 0 10px 0 14px;
+}
+.project-tree-tools,
+.project-preview-tools {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.project-tree-tools button,
+.project-preview-tools button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #8c9b7e;
+  padding: 5px;
+  cursor: pointer;
+  box-shadow: none;
+}
+.project-tree-tools button:hover,
+.project-preview-tools button:hover {
+  background: #edf2e5;
+  color: #617b4e;
+}
+.project-tree-tools button:disabled,
+.project-preview-tools button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.project-tree-project-button > .project-tree-disclosure {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  overflow: visible;
+}
+.project-tree-disclosure:hover {
+  background: #dae5ce;
+}
+.project-tree-project-button:focus-visible,
+.project-tree-file:focus-visible {
+  outline: 1px solid #8ca876;
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 1px #8ca87640;
+}
+.project-file-branch [role="treeitem"][aria-busy="true"] {
+  opacity: 0.7;
+}
+.project-tree-note .text-button {
+  display: block;
+  font-size: 10px;
+  padding: 4px 0;
+}
+.project-tree-empty {
+  padding: 28px 14px;
+  color: #9ca78f;
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  text-align: center;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.project-tree-empty p {
+  margin: 10px 0;
+}
+.project-tree-empty button {
+  font-size: 10px;
+}
+.project-preview-tools {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.project-preview-tools .project-preview-readonly {
+  padding-left: 5px;
+}
+.project-preview-error[role="alert"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.project-preview-error[role="alert"] > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.project-preview-error[role="alert"] .text-button {
+  flex-shrink: 0;
+  font-size: 10px;
+}
+.project-file-loading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}

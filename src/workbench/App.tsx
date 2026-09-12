@@ -58,7 +58,11 @@ import {
   type WindowKind,
 } from "../shared/types";
 import { decisionExcerpt } from "./decision-summary";
-import { ArtifactList, SourceList } from "./Artifacts";
+import {
+  ArtifactList,
+  SourceList,
+  discardTaskArtifactDrafts,
+} from "./Artifacts";
 import { Settings } from "./Settings";
 import { Library } from "./Library";
 import { ProcessView } from "./ProcessView";
@@ -220,17 +224,39 @@ function TaskNavigationItem({
   dispatch: Dispatch;
 }) {
   const [renaming, setRenaming] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [title, setTitle] = useState(task.title);
   const [pending, setPending] = useState(false);
+  const archived = Boolean(task.archivedAt || task.deletedAt);
   const menu = useRef<HTMLDetailsElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [menuPosition, setMenuPosition] = useState({ left: 0, top: 0 });
   const act = async (command: Command) => {
+    if (pending) return;
     menu.current?.removeAttribute("open");
     setPending(true);
     const result = await dispatch(command);
     setPending(false);
     if (result) setRenaming(false);
   };
+  useEffect(() => {
+    if (!menuOpen) return;
+    const close = (event: Event) => {
+      if (
+        event.type !== "pointerdown" ||
+        !menu.current?.contains(event.target as Node)
+      )
+        menu.current?.removeAttribute("open");
+    };
+    document.addEventListener("pointerdown", close);
+    window.addEventListener("resize", close);
+    document.addEventListener("scroll", close, true);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      window.removeEventListener("resize", close);
+      document.removeEventListener("scroll", close, true);
+    };
+  }, [menuOpen]);
   return (
     <div className={`work-item-row ${active ? "active" : ""}`}>
       {renaming ? (
@@ -246,7 +272,11 @@ function TaskNavigationItem({
             value={title}
             maxLength={120}
             onChange={(event) => setTitle(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setRenaming(false);
+            }}
             autoFocus
+            disabled={pending}
           />
           <button
             type="submit"
@@ -257,6 +287,7 @@ function TaskNavigationItem({
           </button>
           <button
             type="button"
+            disabled={pending}
             onClick={() => setRenaming(false)}
             aria-label="取消重命名"
           >
@@ -266,8 +297,15 @@ function TaskNavigationItem({
       ) : (
         <>
           <button
-            className={`work-item ${active ? "active" : ""}`}
-            onClick={() => onTask(task.id)}
+            className={`${archived ? "archived-work-item" : "work-item"} ${active ? "active" : ""}`}
+            onClick={() =>
+              archived
+                ? void act({ type: "task.restore", taskId: task.id })
+                : onTask(task.id)
+            }
+            title={archived ? `恢复工作：${task.title}` : task.title}
+            aria-label={archived ? `恢复工作：${task.title}` : task.title}
+            disabled={pending}
           >
             <span className={`work-dot ${task.status}`} />
             <span className="work-title">{task.title}</span>
@@ -277,8 +315,10 @@ function TaskNavigationItem({
           </button>
           <details
             className="work-item-menu"
+            name="task-actions"
             ref={menu}
             onToggle={(event) => {
+              setMenuOpen(event.currentTarget.open);
               if (event.currentTarget.open) {
                 const rect = event.currentTarget.getBoundingClientRect();
                 setMenuPosition({
@@ -308,38 +348,81 @@ function TaskNavigationItem({
               <MoreHorizontal size={15} />
             </summary>
             <div className="work-item-popover" style={menuPosition}>
+              {!archived ? (
+                <>
+                  <button
+                    disabled={pending}
+                    onClick={() => {
+                      setTitle(task.title);
+                      setRenaming(true);
+                    }}
+                  >
+                    <Pencil size={13} />
+                    重命名
+                  </button>
+                  <button
+                    disabled={pending}
+                    onClick={() =>
+                      void act({ type: "task.archive", taskId: task.id })
+                    }
+                  >
+                    <Archive size={13} />
+                    归档
+                  </button>
+                </>
+              ) : (
+                <button
+                  disabled={pending}
+                  onClick={() =>
+                    void act({ type: "task.restore", taskId: task.id })
+                  }
+                >
+                  <RotateCcw size={13} />
+                  恢复到最近工作
+                </button>
+              )}
               <button
                 disabled={pending}
+                className="destructive-menu-item"
                 onClick={() => {
-                  setTitle(task.title);
-                  setRenaming(true);
+                  menu.current?.removeAttribute("open");
+                  setConfirmingDelete(true);
                 }}
               >
-                <Pencil size={13} />
-                重命名
-              </button>
-              <button
-                disabled={pending}
-                onClick={() =>
-                  void act({ type: "task.archive", taskId: task.id })
-                }
-              >
-                <Archive size={13} />
-                归档
-              </button>
-              <button
-                disabled={pending}
-                onClick={() =>
-                  void act({ type: "task.delete", taskId: task.id })
-                }
-              >
                 <Trash2 size={13} />
-                移到最近删除
+                删除会话
               </button>
             </div>
           </details>
         </>
       )}
+      {confirmingDelete ? (
+        <Modal
+          title="删除这段会话？"
+          description="会话与过程记录将永久删除。已保存的成果、Lib 和项目文件保留。"
+          onClose={() => {
+            if (!pending) setConfirmingDelete(false);
+          }}
+        >
+          <p className="delete-task-title">{task.title}</p>
+          <div className="modal-actions">
+            <button
+              className="button secondary"
+              disabled={pending}
+              onClick={() => setConfirmingDelete(false)}
+            >
+              取消
+            </button>
+            <button
+              className="button danger"
+              disabled={pending}
+              onClick={() => void act({ type: "task.delete", taskId: task.id })}
+            >
+              {pending ? "正在删除…" : "永久删除"}
+            </button>
+          </div>
+        </Modal>
+      ) : null}
     </div>
   );
 }
@@ -374,9 +457,11 @@ function Sidebar({
   const recent =
     snapshot?.tasks.filter((task) => !task.archivedAt && !task.deletedAt) ?? [];
   const archived =
-    snapshot?.tasks.filter((task) => task.archivedAt && !task.deletedAt) ?? [];
-  const deleted = snapshot?.tasks.filter((task) => task.deletedAt) ?? [];
+    snapshot?.tasks.filter((task) => task.archivedAt || task.deletedAt) ?? [];
   const [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => {
+    if (isSettingsPage(page)) setSettingsOpen(true);
+  }, [page]);
   return (
     <aside className={`sidebar ${collapsed ? "sidebar-hidden" : ""}`}>
       <div className="sidebar-brand">
@@ -449,37 +534,26 @@ function Sidebar({
         )}
       </div>
       <div className="sidebar-bottom">
-        {[
-          { label: "归档", items: archived },
-          { label: "最近删除", items: deleted },
-        ].map((group) =>
-          group.items.length ? (
-            <details className="work-history" key={group.label}>
-              <summary>
-                {group.label}
-                <span>{group.items.length}</span>
-              </summary>
-              {group.items.map((item) => (
-                <div key={item.id}>
-                  <span title={item.title}>{item.title}</span>
-                  <button
-                    className="icon-button"
-                    title="恢复工作"
-                    aria-label={`恢复工作：${item.title}`}
-                    onClick={() =>
-                      void dispatch({ type: "task.restore", taskId: item.id })
-                    }
-                  >
-                    <RotateCcw size={13} />
-                  </button>
-                </div>
-              ))}
-            </details>
-          ) : null,
-        )}
+        {archived.length ? (
+          <details className="work-history">
+            <summary>
+              <span>已归档</span>
+              <span>{archived.length}</span>
+            </summary>
+            {archived.map((item) => (
+              <TaskNavigationItem
+                key={item.id}
+                task={item}
+                active={false}
+                onTask={onTask}
+                dispatch={dispatch}
+              />
+            ))}
+          </details>
+        ) : null}
         <details
           className="sidebar-settings-group"
-          open={settingsOpen || isSettingsPage(page)}
+          open={settingsOpen}
           onToggle={(event) => setSettingsOpen(event.currentTarget.open)}
         >
           <summary>
@@ -1035,12 +1109,11 @@ function Conversation({
   const stickToBottom = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
   const lastMessage = task.messages.at(-1);
-  const lastEvent = task.events.at(-1);
   useEffect(() => {
     if (stickToBottom.current)
       bottomRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
     else setShowLatest(true);
-  }, [lastMessage?.id, lastMessage?.content, lastEvent?.id]);
+  }, [lastMessage?.id, lastMessage?.content, task.status]);
   return (
     <div
       className="conversation-scroll"
@@ -1090,61 +1163,60 @@ function Conversation({
               <br />
               准备好后让团队开始。
             </p>
-            <button
-              className="button secondary small"
-              onClick={() =>
-                void dispatch({ type: "task.run", taskId: task.id })
-              }
-            >
-              开始研究
-              <ArrowRight size={14} />
-            </button>
           </div>
         ) : null}
         <div className="messages">
-          {task.messages.map((message) => (
-            <article
-              className={`message ${message.role} ${message.goalVersion !== task.goalVersion ? "superseded" : ""}`}
-              key={message.id}
-            >
-              <div className="message-byline">
-                <span className={`message-avatar ${message.role}`}>
-                  {message.role === "user" ? "Y" : <Layers2 size={14} />}
-                </span>
-                <strong>
-                  {message.role === "user" ? "你" : memberName(message.member)}
-                </strong>
-                <time dateTime={message.createdAt}>
-                  {formatTime(message.createdAt)}
-                </time>
-                {message.goalVersion !== task.goalVersion ? (
-                  <span className="old-goal">
-                    此前目标 v{message.goalVersion}
+          {task.messages.map((message) => {
+            const report =
+              message.role === "assistant"
+                ? decisionExcerpt(message.content)
+                : null;
+            return (
+              <article
+                className={`message ${message.role} ${message.goalVersion !== task.goalVersion ? "superseded" : ""}`}
+                key={message.id}
+              >
+                <div className="message-byline">
+                  <span className={`message-avatar ${message.role}`}>
+                    {message.role === "user" ? "Y" : <Layers2 size={14} />}
                   </span>
-                ) : null}
-              </div>
-              <div className="message-content">
-                {message.role === "assistant" ? (
-                  <>
-                    <Markdown dispatch={dispatch} onArtifactLink={onArtifact}>
-                      {decisionExcerpt(message.content).text}
-                    </Markdown>
-                    {decisionExcerpt(message.content).detailed ? (
-                      <button
-                        className="decision-detail-link"
-                        onClick={() => onDetail?.(message)}
-                      >
-                        查看完整内容
-                        <ArrowUpRight size={13} />
-                      </button>
-                    ) : null}
-                  </>
-                ) : (
-                  <p>{userMessageText(task, message)}</p>
-                )}
-              </div>
-            </article>
-          ))}
+                  <strong>
+                    {message.role === "user"
+                      ? "你"
+                      : memberName(message.member)}
+                  </strong>
+                  <time dateTime={message.createdAt}>
+                    {formatTime(message.createdAt)}
+                  </time>
+                  {message.goalVersion !== task.goalVersion ? (
+                    <span className="old-goal">
+                      此前目标 v{message.goalVersion}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="message-content">
+                  {message.role === "assistant" ? (
+                    <>
+                      <Markdown dispatch={dispatch} onArtifactLink={onArtifact}>
+                        {report!.text}
+                      </Markdown>
+                      {report!.detailed && onDetail ? (
+                        <button
+                          className="decision-detail-link"
+                          onClick={() => onDetail?.(message)}
+                        >
+                          查看完整内容
+                          <ArrowUpRight size={13} />
+                        </button>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p>{userMessageText(task, message)}</p>
+                  )}
+                </div>
+              </article>
+            );
+          })}
         </div>
         {task.status === "running" || task.status === "waiting" ? (
           <div className="decision-progress-note">
@@ -1158,15 +1230,6 @@ function Conversation({
             <div>
               <strong>这一步需要处理</strong>
               <p>{task.error}</p>
-              <button
-                className="text-button"
-                onClick={() =>
-                  void dispatch({ type: "task.run", taskId: task.id })
-                }
-              >
-                重试并继续
-                <ArrowRight size={13} />
-              </button>
             </div>
           </div>
         ) : null}
@@ -1476,6 +1539,8 @@ export function App() {
     title: string;
     content: string;
   } | null>(null);
+  const messageDetailRef = useRef(messageDetail);
+  messageDetailRef.current = messageDetail;
   const [artifactFocus, setArtifactFocus] = useState<{
     taskId: string;
     artifactId: string;
@@ -1485,6 +1550,8 @@ export function App() {
   >(() => (window.ytriple ? "loading" : "unavailable"));
   const [page, setPage] = useState<Page>("work");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const selectedTaskRef = useRef(selectedTaskId);
+  selectedTaskRef.current = selectedTaskId;
   const [sidebarPinned, setSidebarPinned] = useState(readPinnedSidebar);
   const [sidebarOpen, setSidebarOpen] = useState(readPinnedSidebar);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
@@ -1608,14 +1675,23 @@ export function App() {
         )
           acceptSnapshot(result);
         if (command.type === "task.archive" || command.type === "task.delete") {
-          if (result.desktop?.taskId === command.taskId) {
+          if (selectedTaskRef.current === command.taskId) {
+            selectedTaskRef.current = null;
             setSelectedTaskId(null);
             setComposerDraft({ ...EMPTY_DRAFT });
-            void window.ytriple
-              .invoke({ type: "window.select", taskId: null })
-              .then(acceptSnapshot)
-              .catch(() => {});
+            if (result.desktop?.taskId === command.taskId)
+              void window.ytriple
+                .invoke({ type: "window.select", taskId: null })
+                .then(acceptSnapshot)
+                .catch(() => {});
           }
+          if (command.type === "task.delete") {
+            composerDrafts.current.delete(command.taskId);
+            discardTaskArtifactDrafts(command.taskId);
+          }
+          setArtifactFocus((current) =>
+            current?.taskId === command.taskId ? null : current,
+          );
           setMessageDetail((current) =>
             current?.taskId === command.taskId ? null : current,
           );
@@ -1628,9 +1704,19 @@ export function App() {
                 event.type === "message.saved" &&
                 event.data?.messageId === command.messageId,
             )?.data?.artifactId;
-          if (typeof artifactId === "string") {
+          if (
+            typeof artifactId === "string" &&
+            selectedTaskRef.current === command.taskId &&
+            messageDetailRef.current?.taskId === command.taskId &&
+            messageDetailRef.current.id === command.messageId
+          ) {
             setArtifactFocus({ taskId: command.taskId, artifactId });
-            setMessageDetail(null);
+            setMessageDetail((current) =>
+              current?.taskId === command.taskId &&
+              current.id === command.messageId
+                ? null
+                : current,
+            );
           }
         }
         if (command.type === "process.save") {

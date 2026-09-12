@@ -16,6 +16,10 @@ import {
   MessageSquare,
   RefreshCw,
   Search,
+  ChevronsDownUp,
+  LocateFixed,
+  X,
+  LoaderCircle,
 } from "lucide-react";
 import type { ProjectInfo, Snapshot } from "../shared/types";
 import type {
@@ -49,6 +53,9 @@ function FileTree({
   worktreePath,
   onDirectory,
   onFile,
+  focusedId,
+  onFocusRow,
+  onRetry,
 }: {
   directory: string;
   depth: number;
@@ -60,6 +67,9 @@ function FileTree({
   worktreePath: string;
   onDirectory: (entry: ProjectFileEntry) => void;
   onFile: (entry: ProjectFileEntry) => void;
+  focusedId: string;
+  onFocusRow: (id: string) => void;
+  onRetry: (directory: string) => void;
 }) {
   const key = keyFor(projectId, worktreePath, directory),
     state = cache[key];
@@ -75,6 +85,9 @@ function FileTree({
       {state.error ? (
         <p className="project-tree-note error" role="status">
           {state.error}
+          <button className="text-button" onClick={() => onRetry(directory)}>
+            重试
+          </button>
         </p>
       ) : null}
       {!state.error && !state.entries.length ? (
@@ -94,6 +107,23 @@ function FileTree({
                 entry.kind === "file" ? selectedPath === entry.path : undefined
               }
               title={entry.path}
+              role="treeitem"
+              aria-level={depth + 1}
+              aria-selected={
+                entry.kind === "file" && selectedPath === entry.path
+              }
+              data-tree-row={entryKey}
+              data-tree-project={projectId}
+              data-tree-root={worktreePath}
+              data-tree-path={entry.path}
+              data-tree-parent={
+                directory
+                  ? keyFor(projectId, worktreePath, directory)
+                  : `project:${projectId}`
+              }
+              data-tree-kind={entry.kind}
+              tabIndex={focusedId === entryKey ? 0 : -1}
+              onFocus={() => onFocusRow(entryKey)}
               onClick={() =>
                 entry.kind === "directory" ? onDirectory(entry) : onFile(entry)
               }
@@ -114,6 +144,13 @@ function FileTree({
                 </>
               )}
               <span>{entry.name}</span>
+              {entry.kind === "directory" && loading.has(entryKey) ? (
+                <LoaderCircle
+                  className="spin"
+                  size={11}
+                  aria-label="正在读取"
+                />
+              ) : null}
             </button>
             {entry.kind === "directory" && open ? (
               <FileTree
@@ -126,6 +163,9 @@ function FileTree({
                   worktreePath,
                   onDirectory,
                   onFile,
+                  focusedId,
+                  onFocusRow,
+                  onRetry,
                 }}
                 directory={entry.path}
                 depth={depth + 1}
@@ -282,11 +322,24 @@ export function ProjectExplorer({
     Record<string, DirectoryState>
   >({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [openProjects, setOpenProjects] = useState<Set<string>>(
+    () => new Set(selectedProjectId ? [selectedProjectId] : []),
+  );
+  const [focusedId, setFocusedId] = useState("");
+  const tree = useRef<HTMLDivElement>(null);
+  const previewScroll = useRef<HTMLDivElement>(null);
+  const focusAfterLoad = useRef<string | null>(null);
   const [loading, setLoading] = useState<Set<string>>(() => new Set());
   const [previews, setPreviews] = useState<
     Record<string, ProjectFilePreview | undefined>
   >({});
   const [previewPending, setPreviewPending] = useState(false);
+  const [pendingPath, setPendingPath] = useState<string | null>(null);
+  const lastRead = useRef<{
+    project: ProjectInfo;
+    root: string;
+    path: string;
+  } | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [treeWidth, setTreeWidth] = useState(() => {
     try {
@@ -304,12 +357,15 @@ export function ProjectExplorer({
   const drag = useRef<{
     start: number;
     width: number;
+    initial: number;
     pointerId: number;
   } | null>(null);
   const requests = useRef(0),
     loaded = useRef(new Set<string>());
   const project = projects.find(
-    (item) => item.id === (selectedProjectId ?? localSelection),
+    (item) =>
+      item.id ===
+      (selectedProjectId === undefined ? localSelection : selectedProjectId),
   );
   const worktreePath = project
     ? (worktrees[project.id] ?? project.devPath)
@@ -318,9 +374,13 @@ export function ProjectExplorer({
   const currentSelection = useRef(selectionKey);
   currentSelection.current = selectionKey;
   const preview = previews[selectionKey];
+  const browsing = loading.size > 0;
   const visibleProjects = projects.filter((item) =>
     `${item.name} ${item.root}`.toLowerCase().includes(query.toLowerCase()),
   );
+
+  const effectiveFocusId =
+    focusedId || (visibleProjects[0] ? `project:${visibleProjects[0].id}` : "");
 
   const remember = useCallback((state: ProjectBrowserState) => {
     const key = keyFor(state.projectId, state.worktreePath, state.directory);
@@ -359,7 +419,17 @@ export function ProjectExplorer({
           browser.directory === directory
         )
           remember(browser);
-        else loaded.current.delete(key);
+        else {
+          loaded.current.delete(key);
+          setDirectories((value) => ({
+            ...value,
+            [key]: {
+              entries: [],
+              truncated: false,
+              error: "目录未能读取，请重试。",
+            },
+          }));
+        }
       } finally {
         setLoading((value) => {
           const next = new Set(value);
@@ -372,12 +442,36 @@ export function ProjectExplorer({
   );
   useEffect(() => {
     setPreviewPending(false);
+    setPendingPath(null);
     setPreviewError(null);
     if (project) void browse(project, worktreePath, "");
   }, [project?.id, worktreePath, browse]);
+  useEffect(() => {
+    if (project?.id) setOpenProjects((value) => new Set(value).add(project.id));
+  }, [project?.id]);
+  useEffect(() => {
+    previewScroll.current?.scrollTo?.({ top: 0 });
+  }, [selectionKey, preview?.path]);
+  useEffect(() => {
+    const rows = Array.from(
+      tree.current?.querySelectorAll<HTMLButtonElement>("[data-tree-row]") ??
+        [],
+    );
+    const node = rows.find(
+      (element) => element.dataset.treeRow === focusAfterLoad.current,
+    );
+    if (node) {
+      node.focus();
+      node.scrollIntoView?.({ block: "nearest" });
+      focusAfterLoad.current = null;
+    } else if (rows.length && !rows.some((element) => element.tabIndex === 0))
+      setFocusedId(rows[0].dataset.treeRow!);
+  }, [directories, expanded, openProjects, query]);
 
   const read = async (item: ProjectInfo, file: string, root = worktreePath) => {
     const request = ++requests.current;
+    lastRead.current = { project: item, root, path: file };
+    setPendingPath(file);
     setPreviewPending(true);
     setPreviewError(null);
     const targetKey = keyFor(item.id, root, "");
@@ -389,18 +483,26 @@ export function ProjectExplorer({
         path: file,
       });
       const state = result?.projectBrowser;
-      if (state?.projectId !== item.id || state.worktreePath !== root) return;
-      remember(state);
+      if (state?.projectId !== item.id || state.worktreePath !== root) {
+        if (
+          request === requests.current &&
+          currentSelection.current === targetKey
+        )
+          setPreviewError(`未能读取 ${filename(file)}，请重试。`);
+        return;
+      }
+      if (!state.error) remember(state);
       if (
         request !== requests.current ||
         currentSelection.current !== targetKey
       )
         return;
       if (state.error) {
-        setPreviewError(state.error);
+        setPreviewError(`${filename(file)}：${state.error}`);
         return;
       }
       if (state.preview?.path === file) {
+        setOpenProjects((value) => new Set(value).add(item.id));
         setPreviews((value) => ({ ...value, [targetKey]: state.preview }));
         const pieces = file.split("/").slice(0, -1);
         setExpanded((value) => {
@@ -413,8 +515,131 @@ export function ProjectExplorer({
           void browse(item, root, pieces.slice(0, index).join("/"));
       }
     } finally {
-      if (request === requests.current) setPreviewPending(false);
+      if (request === requests.current) {
+        setPreviewPending(false);
+        setPendingPath(null);
+      }
     }
+  };
+  const selectProject = (item: ProjectInfo) => {
+    setLocalSelection(item.id);
+    currentSelection.current = keyFor(
+      item.id,
+      worktrees[item.id] ?? item.devPath,
+      "",
+    );
+    if (item.id !== project?.id) onSelectProject?.(item);
+  };
+  const toggleProject = (item: ProjectInfo, force?: boolean) => {
+    const open = force ?? !openProjects.has(item.id);
+    if (!open) setFocusedId(`project:${item.id}`);
+    setOpenProjects((value) => {
+      const next = new Set(value);
+      if (open) next.add(item.id);
+      else next.delete(item.id);
+      return next;
+    });
+    if (open) void browse(item, worktrees[item.id] ?? item.devPath, "");
+  };
+  const toggleDirectory = (
+    item: ProjectInfo,
+    root: string,
+    directory: string,
+    force?: boolean,
+  ) => {
+    const key = keyFor(item.id, root, directory),
+      open = force ?? !expanded.has(key);
+    if (!open) setFocusedId(key);
+    setExpanded((value) => {
+      const next = new Set(value);
+      if (open) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+    if (open) void browse(item, root, directory);
+  };
+  const refreshTree = async () => {
+    if (!project) return;
+    for (const key of loaded.current) {
+      const [id, root] = JSON.parse(key) as string[];
+      if (id === project.id && root === worktreePath)
+        loaded.current.delete(key);
+    }
+    await Promise.all([
+      browse(project, worktreePath, "", true),
+      ...Array.from(expanded).flatMap((key) => {
+        const [id, root, directory] = JSON.parse(key) as string[];
+        return id === project.id && root === worktreePath
+          ? [browse(project, root, directory, true)]
+          : [];
+      }),
+    ]);
+  };
+  const revealFile = () => {
+    if (!project || !preview) return;
+    setQuery("");
+    setOpenProjects((value) => new Set(value).add(project.id));
+    const parts = preview.path.split("/").slice(0, -1);
+    setExpanded((value) => {
+      const next = new Set(value);
+      for (let index = 1; index <= parts.length; index++)
+        next.add(
+          keyFor(project.id, worktreePath, parts.slice(0, index).join("/")),
+        );
+      return next;
+    });
+    focusAfterLoad.current = keyFor(project.id, worktreePath, preview.path);
+    setFocusedId(focusAfterLoad.current);
+    for (let index = 0; index <= parts.length; index++)
+      void browse(project, worktreePath, parts.slice(0, index).join("/"));
+  };
+  const treeKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const target = (event.target as HTMLElement).closest<HTMLButtonElement>(
+      "[data-tree-row]",
+    );
+    if (!target) return;
+    const rows = Array.from(
+      tree.current?.querySelectorAll<HTMLButtonElement>("[data-tree-row]") ??
+        [],
+    );
+    const index = rows.indexOf(target),
+      kind = target.dataset.treeKind;
+    let next: HTMLButtonElement | undefined;
+    if (event.key === "ArrowDown")
+      next = rows[Math.min(rows.length - 1, index + 1)];
+    else if (event.key === "ArrowUp") next = rows[Math.max(0, index - 1)];
+    else if (event.key === "Home") next = rows[0];
+    else if (event.key === "End") next = rows.at(-1);
+    else if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+      const item = projects.find(
+        (item) => item.id === target.dataset.treeProject,
+      );
+      if (!item) return;
+      const open = target.getAttribute("aria-expanded") === "true";
+      const expandable = kind === "project" || kind === "directory";
+      const expand = event.key === "ArrowRight";
+      if (expandable && open !== expand) {
+        if (kind === "project") toggleProject(item, expand);
+        else
+          toggleDirectory(
+            item,
+            target.dataset.treeRoot!,
+            target.dataset.treePath!,
+            expand,
+          );
+      } else if (expand && open)
+        next = rows.find(
+          (row) => row.dataset.treeParent === target.dataset.treeRow,
+        );
+      else if (!expand)
+        next = rows.find(
+          (row) => row.dataset.treeRow === target.dataset.treeParent,
+        );
+    } else if (event.key === "Enter" || event.key === " ") target.click();
+    else return;
+    event.preventDefault();
+    next?.focus();
+    next?.scrollIntoView?.({ block: "nearest" });
   };
   const persistWidth = (value: number) => {
     try {
@@ -444,7 +669,7 @@ export function ProjectExplorer({
     };
     const cancel = () => {
       if (!drag.current) return;
-      width.current = drag.current.width;
+      width.current = drag.current.initial;
       setTreeWidth(width.current);
       drag.current = null;
       setDragging(false);
@@ -475,131 +700,193 @@ export function ProjectExplorer({
           <input
             aria-label="搜索本机项目"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setFocusedId("");
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setQuery("");
+            }}
             placeholder="查找项目"
           />
-        </label>
-        <div className="project-tree-scroll">
-          <p className="project-tree-heading">
-            项目 <span>{visibleProjects.length}</span>
-          </p>
-          {visibleProjects.map((item) => (
-            <div
-              key={`${item.id}:${item.root}`}
-              className="project-tree-project"
+          {query ? (
+            <button
+              type="button"
+              aria-label="清除项目搜索"
+              onClick={() => setQuery("")}
             >
-              <button
-                className={`project-tree-project-button ${project?.id === item.id ? "selected" : ""}`}
-                aria-label={`选择项目 ${item.name}`}
-                aria-expanded={project?.id === item.id}
-                onClick={() => {
-                  setLocalSelection(item.id);
-                  onSelectProject?.(item);
-                }}
-                title={item.root}
+              <X size={12} />
+            </button>
+          ) : null}
+        </label>
+        <div className="project-tree-heading">
+          <span>文件</span>
+          <div className="project-tree-tools" aria-label="文件树操作">
+            <button
+              title="刷新当前项目文件树"
+              aria-label="刷新文件树"
+              disabled={!project || browsing}
+              onClick={() => void refreshTree()}
+            >
+              <RefreshCw size={13} className={browsing ? "spin" : ""} />
+            </button>
+            <button
+              title="收起全部项目与目录"
+              aria-label="收起全部"
+              disabled={!openProjects.size}
+              onClick={() => {
+                setOpenProjects(new Set());
+                setExpanded(new Set());
+                setFocusedId(
+                  `project:${visibleProjects.find((item) => item.id === project?.id)?.id ?? visibleProjects[0]?.id ?? ""}`,
+                );
+              }}
+            >
+              <ChevronsDownUp size={13} />
+            </button>
+          </div>
+        </div>
+        <div
+          className="project-tree-scroll"
+          ref={tree}
+          role="tree"
+          aria-label="项目与文件"
+          onKeyDown={treeKeyDown}
+        >
+          {visibleProjects.map((item) => {
+            const itemRoot = worktrees[item.id] ?? item.devPath;
+            const open = openProjects.has(item.id),
+              selected = project?.id === item.id;
+            const rowId = `project:${item.id}`;
+            return (
+              <div
+                key={`${item.id}:${item.root}`}
+                className="project-tree-project"
               >
-                {project?.id === item.id ? (
-                  <ChevronDown size={12} />
-                ) : (
-                  <ChevronRight size={12} />
-                )}
-                <Folder size={15} />
-                <span>{item.name}</span>
-                {item.observation?.state === "attention" ? (
-                  <i
-                    className="project-tree-attention"
-                    aria-label="有待留意状态"
-                  />
-                ) : null}
-              </button>
-              {project?.id === item.id ? (
-                <>
-                  <label className="project-tree-worktree">
-                    <GitBranch size={12} />
-                    <select
-                      aria-label="项目工作目录"
-                      value={worktreePath}
-                      onChange={(event) =>
-                        setWorktrees((value) => ({
-                          ...value,
-                          [item.id]: event.target.value,
-                        }))
-                      }
-                    >
-                      {Array.from(
-                        new Set([
-                          item.devPath,
-                          ...(item.observation?.worktrees.map(
-                            (tree) => tree.path,
-                          ) ?? []),
-                        ]),
-                      ).map((root) => (
-                        <option key={root} value={root}>
-                          {filename(root)}
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      title="刷新文件树"
-                      aria-label="刷新文件树"
-                      onClick={() => {
-                        for (const key of loaded.current) {
-                          if (
-                            key.startsWith(
-                              JSON.stringify([item.id, worktreePath]).slice(
-                                0,
-                                -1,
-                              ),
-                            )
-                          )
-                            loaded.current.delete(key);
-                        }
-                        void browse(item, worktreePath, "", true);
-                        for (const key of expanded) {
-                          const [id, root, directory] = JSON.parse(
-                            key,
-                          ) as string[];
-                          if (id === item.id && root === worktreePath)
-                            void browse(item, root, directory, true);
-                        }
-                      }}
-                    >
-                      <RefreshCw size={12} />
-                    </button>
-                  </label>
-                  <FileTree
-                    directory=""
-                    depth={1}
-                    cache={directories}
-                    expanded={expanded}
-                    loading={loading}
-                    selectedPath={preview?.path}
-                    projectId={item.id}
-                    worktreePath={worktreePath}
-                    onDirectory={(entry) => {
-                      const key = keyFor(item.id, worktreePath, entry.path);
-                      setExpanded((value) => {
-                        const next = new Set(value);
-                        if (next.has(key)) next.delete(key);
-                        else next.add(key);
-                        return next;
-                      });
-                      if (!expanded.has(key))
-                        void browse(item, worktreePath, entry.path);
+                <button
+                  className={`project-tree-project-button ${selected ? "selected" : ""}`}
+                  role="treeitem"
+                  aria-level={1}
+                  aria-selected={selected}
+                  aria-label={`选择项目 ${item.name}`}
+                  aria-expanded={open}
+                  data-tree-row={rowId}
+                  data-tree-project={item.id}
+                  data-tree-kind="project"
+                  tabIndex={effectiveFocusId === rowId ? 0 : -1}
+                  onFocus={() => setFocusedId(rowId)}
+                  onClick={() => {
+                    selectProject(item);
+                    toggleProject(item, selected ? !open : true);
+                  }}
+                  title={item.root}
+                >
+                  <span
+                    className="project-tree-disclosure"
+                    aria-hidden="true"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleProject(item);
                     }}
-                    onFile={(entry) => void read(item, entry.path)}
-                  />
-                </>
+                  >
+                    {open ? (
+                      <ChevronDown size={12} />
+                    ) : (
+                      <ChevronRight size={12} />
+                    )}
+                  </span>
+                  {open ? <FolderOpen size={15} /> : <Folder size={15} />}
+                  <span>{item.name}</span>
+                  {loading.has(keyFor(item.id, itemRoot, "")) ? (
+                    <LoaderCircle
+                      size={11}
+                      className="spin"
+                      aria-label="正在读取"
+                    />
+                  ) : item.observation?.state === "attention" ? (
+                    <i
+                      className="project-tree-attention"
+                      aria-label="有待留意状态"
+                    />
+                  ) : null}
+                </button>
+                {open ? (
+                  <>
+                    <div className="project-tree-worktree">
+                      <GitBranch size={12} />
+                      <select
+                        aria-label={`${item.name} 工作目录`}
+                        value={itemRoot}
+                        onChange={(event) => {
+                          const root = event.target.value;
+                          setWorktrees((value) => ({
+                            ...value,
+                            [item.id]: root,
+                          }));
+                          selectProject(item);
+                          currentSelection.current = keyFor(item.id, root, "");
+                          void browse(item, root, "");
+                        }}
+                      >
+                        {Array.from(
+                          new Set([
+                            item.devPath,
+                            ...(item.observation?.worktrees.map(
+                              (worktree) => worktree.path,
+                            ) ?? []),
+                          ]),
+                        ).map((root) => (
+                          <option key={root} value={root}>
+                            {filename(root)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <FileTree
+                      directory=""
+                      depth={1}
+                      cache={directories}
+                      expanded={expanded}
+                      loading={loading}
+                      selectedPath={selected ? preview?.path : undefined}
+                      projectId={item.id}
+                      worktreePath={itemRoot}
+                      focusedId={effectiveFocusId}
+                      onFocusRow={setFocusedId}
+                      onRetry={(directory) =>
+                        void browse(item, itemRoot, directory, true)
+                      }
+                      onDirectory={(entry) =>
+                        toggleDirectory(item, itemRoot, entry.path)
+                      }
+                      onFile={(entry) => {
+                        selectProject(item);
+                        void read(item, entry.path, itemRoot);
+                      }}
+                    />
+                  </>
+                ) : null}
+              </div>
+            );
+          })}
+          {!visibleProjects.length ? (
+            <div className="project-tree-empty" role="status">
+              <Folder size={22} strokeWidth={1.3} />
+              <p>
+                {!snapshot || snapshot.projectDiscovery?.status === "scanning"
+                  ? "正在发现本机项目…"
+                  : query
+                    ? "没有匹配的项目"
+                    : "暂未发现本机项目"}
+              </p>
+              {query ? (
+                <button className="text-button" onClick={() => setQuery("")}>
+                  清除搜索
+                </button>
               ) : null}
             </div>
-          ))}
-          {!visibleProjects.length ? (
-            <p className="project-tree-note">没有找到匹配的项目</p>
           ) : null}
         </div>
-        <p className="project-tree-footer">
-          只读浏览 · 略过隐藏文件、依赖与常见凭据文件
-        </p>
       </aside>
       <div
         className="project-file-splitter"
@@ -610,6 +897,14 @@ export function ProjectExplorer({
         aria-valuemin={treeWidths.min}
         aria-valuemax={treeWidths.max}
         aria-valuenow={Math.round(treeWidth)}
+        aria-valuetext={`文件树宽度 ${Math.round(treeWidth)} 像素`}
+        onLostPointerCapture={() => {
+          if (!drag.current) return;
+          width.current = drag.current.initial;
+          setTreeWidth(width.current);
+          drag.current = null;
+          setDragging(false);
+        }}
         onDoubleClick={() => {
           width.current = treeWidths.initial;
           setTreeWidth(width.current);
@@ -621,13 +916,25 @@ export function ProjectExplorer({
           event.preventDefault();
           drag.current = {
             start: event.clientX,
-            width: treeWidth,
+            width:
+              layout.current
+                ?.querySelector<HTMLElement>(".project-file-sidebar")
+                ?.getBoundingClientRect().width || treeWidth,
+            initial: treeWidth,
             pointerId: event.pointerId,
           };
           setDragging(true);
           event.currentTarget.setPointerCapture?.(event.pointerId);
         }}
         onKeyDown={(event) => {
+          if (event.key === "Escape" && drag.current) {
+            event.preventDefault();
+            width.current = drag.current.initial;
+            setTreeWidth(width.current);
+            drag.current = null;
+            setDragging(false);
+            return;
+          }
           if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
             return;
           event.preventDefault();
@@ -665,23 +972,73 @@ export function ProjectExplorer({
               {preview.name}
             </span>
           ) : null}
-          <span className="project-preview-readonly">只读</span>
+          <div className="project-preview-tools">
+            {preview ? (
+              <>
+                <button
+                  aria-label="在文件树中定位"
+                  title="在文件树中定位"
+                  onClick={revealFile}
+                >
+                  <LocateFixed size={14} />
+                </button>
+                <button
+                  aria-label="重新读取文件"
+                  title="重新读取文件"
+                  disabled={previewPending || !project}
+                  onClick={() => project && void read(project, preview.path)}
+                >
+                  <RefreshCw
+                    size={13}
+                    className={previewPending ? "spin" : ""}
+                  />
+                </button>
+              </>
+            ) : null}
+            <span className="project-preview-readonly" title="项目文件只读预览">
+              只读
+            </span>
+          </div>
         </header>
         {previewPending ? (
           <div className="project-file-loading" role="status">
-            正在读取文件…
+            <LoaderCircle size={12} className="spin" /> 正在读取{" "}
+            {pendingPath ? filename(pendingPath) : "文件"}…
           </div>
         ) : null}
         {previewError ? (
           <div className="project-preview-error" role="alert">
-            {previewError}
+            <span>{previewError}</span>
+            {lastRead.current &&
+            currentSelection.current ===
+              keyFor(lastRead.current.project.id, lastRead.current.root, "") ? (
+              <button
+                className="text-button"
+                disabled={previewPending}
+                onClick={() => {
+                  const value = lastRead.current;
+                  if (value) void read(value.project, value.path, value.root);
+                }}
+              >
+                重试
+              </button>
+            ) : null}
+            <button
+              className="text-button"
+              aria-label="关闭预览提示"
+              onClick={() => setPreviewError(null)}
+            >
+              <X size={12} />
+            </button>
           </div>
         ) : null}
-        <div className="project-preview-content">
+        <div className="project-preview-content" ref={previewScroll}>
           {preview ? (
             <>
               <div className="project-preview-meta">
-                <span title={preview.path}>{preview.path}</span>
+                <span title={`${worktreePath}/${preview.path}`}>
+                  {filename(worktreePath)} / {preview.path}
+                </span>
                 <small>
                   {new Intl.NumberFormat("zh-CN").format(preview.bytes)} 字节
                 </small>

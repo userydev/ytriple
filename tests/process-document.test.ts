@@ -109,7 +109,7 @@ test("process document summarizes only allowlisted public evidence for the curre
   assert.match(content, /已读取正文片段/);
   assert.match(content, /需求核查结果/);
   assert.doesNotMatch(
-    content,
+    content.replaceAll("\\_", "_"),
     /SECRET|PRIVATE_|read_source|operationId|reasoning|\/private/,
   );
 });

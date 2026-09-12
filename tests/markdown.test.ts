@@ -9,6 +9,15 @@ const render = (content: string) =>
     createElement(Markdown, { children: content, dispatch: async () => null }),
   );
 
+test("table line breaks render without enabling raw HTML or rewriting code examples", () => {
+  const html = render(
+    "| 方案 | 内容 |\n| --- | --- |\n| A | 第一行<br>第二行 |\n\n`<br>`\n\n<script>unsafe()</script>",
+  );
+  assert.match(html, /第一行<br\/>\n第二行/);
+  assert.match(html, /<code>&lt;br&gt;<\/code>/);
+  assert.doesNotMatch(html, /<script>/);
+});
+
 test("Markdown renders model and standard TeX delimiters as accessible inline and display mathematics", () => {
   const html = render(String.raw`Inline $x^2$ and \(\frac{a}{b}\).
 

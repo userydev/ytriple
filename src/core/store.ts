@@ -22,11 +22,19 @@ export class Store {
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS deleted_task_ids (id TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS checkpoints (task_id TEXT PRIMARY KEY, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS library_entries (id TEXT PRIMARY KEY, root TEXT NOT NULL, collection_key TEXT NOT NULL, body TEXT NOT NULL, UNIQUE(root, collection_key));
       CREATE TABLE IF NOT EXISTS library_operations (id TEXT PRIMARY KEY, root TEXT NOT NULL, body TEXT NOT NULL);`);
     for (const task of this.tasks()) {
+      let changed = false;
+      // A deletion in earlier versions now has the same permanent meaning.
+      // Archived conversations remain recoverable; independent files and Lib stay intact.
+      if (task.deletedAt) {
+        this.deleteTask(task.id);
+        continue;
+      }
       if (task.status === "running" || task.status === "waiting") {
         task.status = "paused";
         task.events.push({
@@ -36,8 +44,28 @@ export class Store {
           createdAt: now(),
           goalVersion: task.goalVersion,
         });
-        this.saveTask(task);
+        changed = true;
       }
+      if (changed) this.saveTask(task);
+    }
+  }
+  hasTask(id: string): boolean {
+    return Boolean(this.db.prepare("SELECT 1 FROM tasks WHERE id=?").get(id));
+  }
+  /** Remove conversation records atomically; independently saved files and Lib entries remain. */
+  deleteTask(id: string): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db
+        .prepare("INSERT OR IGNORE INTO deleted_task_ids(id) VALUES(?)")
+        .run(id);
+      this.db.prepare("DELETE FROM checkpoints WHERE task_id=?").run(id);
+      this.db.prepare("DELETE FROM operations WHERE task_id=?").run(id);
+      this.db.prepare("DELETE FROM tasks WHERE id=?").run(id);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
     }
   }
   tasks(): Task[] {
@@ -54,6 +82,10 @@ export class Store {
     return JSON.parse(row.body) as Task;
   }
   saveTask(task: Task): void {
+    if (
+      this.db.prepare("SELECT 1 FROM deleted_task_ids WHERE id=?").get(task.id)
+    )
+      throw new Error("这项工作已永久删除，不能重新写入。");
     const stored = structuredClone(task);
     for (const artifact of stored.artifacts) {
       delete artifact.content;
@@ -169,14 +201,17 @@ export class Store {
   saveCheckpoint(id: string, checkpoint: unknown | null): void {
     if (checkpoint === null)
       this.db.prepare("DELETE FROM checkpoints WHERE task_id=?").run(id);
-    else
+    else {
+      this.task(id);
       this.db
         .prepare(
           "INSERT INTO checkpoints(task_id,body) VALUES(?,?) ON CONFLICT(task_id) DO UPDATE SET body=excluded.body",
         )
         .run(id, JSON.stringify(checkpoint));
+    }
   }
   operation(id: string, taskId: string, data: unknown): void {
+    this.task(taskId);
     this.db
       .prepare(
         "INSERT INTO operations(id,task_id,body) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body",

@@ -4542,3 +4542,67 @@ button {
   position: fixed;
   right: auto;
 }
+
+/* Meeting reports keep the information needed to make a decision. */
+.workspace-panels .message-content .markdown,
+.project-decision .message-content .markdown {
+  font-size: 13px;
+  line-height: 1.9;
+}
+.message-content .markdown :is(h1, h2, h3, h4) {
+  font-size: 14px;
+  line-height: 1.65;
+  margin: 20px 0 8px;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+.message-content .markdown :is(ul, ol) {
+  padding-left: 22px;
+}
+.message-content .markdown li {
+  margin: 5px 0;
+}
+.message-content .markdown li > p {
+  margin: 4px 0;
+}
+.task-overview-meta {
+  flex-wrap: wrap;
+  row-gap: 5px;
+}
+.work-item-row > .archived-work-item {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 3px 8px 6px;
+  color: var(--muted);
+  text-align: left;
+  font-size: 11px;
+}
+.work-item-popover .destructive-menu-item {
+  color: #a05243;
+}
+.work-item-popover .destructive-menu-item:hover {
+  background: #f8eee8;
+}
+.button.danger {
+  background: #a65345;
+  border-color: #a65345;
+  color: white;
+}
+.button.danger:hover {
+  background: #8f4539;
+}
+.delete-task-title {
+  margin: 14px 0 24px;
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+}
+.work-item-menu > summary:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+.sidebar-settings-group[open] > summary > svg:last-child {
+  transform: rotate(180deg);
+}

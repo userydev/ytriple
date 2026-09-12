@@ -23,7 +23,7 @@ async function teamProbe(profile: ModelProfile): Promise<void> {
     events: [],
     messages: [],
     artifacts: [],
-    goal: "这是合成联调。统筹必须调用研究员读取 source-synthetic 的完整内容并返回核查结果；再调用 CTO 审视这份样本的一条技术判断；然后根据两位成员真实返回的结果写一份简短 Markdown 成果，包含校验词 ORCHID_42 和验证结论。用 report_progress 简短说明资料依据及方案取舍，不重复执行动作；主回复只需一句结论和实际成果链接。不要请求用户补充，不要联网或创建更深的专项团队。",
+    goal: "这是合成联调。统筹必须调用研究员读取 source-synthetic 的完整内容并返回核查结果；再调用 CTO 审视这份样本的一条技术判断；然后根据两位成员真实返回的结果写一份简短 Markdown 成果，包含校验词 ORCHID_42 和验证结论。用 report_progress 简短说明资料依据及方案取舍，不重复执行动作；主回复像给负责人开会汇报，说明结论、关键依据和一个需要留意的取舍，并附实际成果链接。不要请求用户补充，不要联网或创建更深的专项团队。",
     sources: [
       {
         id: "source-synthetic",
@@ -127,8 +127,10 @@ async function teamProbe(profile: ModelProfile): Promise<void> {
         publicAnalysis: publicAnalysis.map((event) => ({
           stage: event.data?.stage,
           summary: event.summary,
+          detail: event.data?.detail,
+          method: event.data?.method,
         })),
-        conciseReply: task.messages.at(-1)?.content,
+        meetingReport: task.messages.at(-1)?.content,
         modelResponses: task.events.filter((e) => e.type === "model_usage")
           .length,
         error: task.error,

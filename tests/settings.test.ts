@@ -368,23 +368,19 @@ test("environment bootstrap commits only changed directory fields and preserves 
 test("Google catalog creates an independent Agent connection without replacing the default Gemini or copying credentials", async () => {
   await withSettings(async ({ document, window, commands, current, act }) => {
     const original = structuredClone(current().profiles[0]);
+    assert.equal(
+      document.querySelector(".catalog-new-connection"),
+      null,
+      "editing an existing connection does not show a competing new-connection catalog",
+    );
+    await act(async () =>
+      click(window, document.querySelector(".add-profile")),
+    );
     await act(async () =>
       select(
         window,
-        document.querySelector('[aria-label="用于新连接的 Google 模型目录"]'),
+        document.querySelector('[aria-label="Google 模型目录"]'),
         "deep-research-preview-04-2026",
-      ),
-    );
-    assert.equal(
-      (field(document, "模型 ID", ".profile-form") as HTMLInputElement).value,
-      "gemini-3.8-flash",
-    );
-    await act(async () =>
-      click(
-        window,
-        Array.from(
-          document.querySelectorAll(".catalog-new-connection button"),
-        ).find((button) => button.textContent?.includes("添加为新连接")),
       ),
     );
     assert.equal(
@@ -741,5 +737,189 @@ test("member model status follows assigned profile and opens that exact connecti
     },
     fixture(),
     "team",
+  );
+});
+
+test("connection drafts survive switching connections and pages; saved keys are cleared without replacing another dirty draft", async () => {
+  await withSettings(
+    async ({ document, window, current, emit, commands, navigate, act }) => {
+      const name = () =>
+        field(document, "连接名称", ".profile-form") as HTMLInputElement;
+      const secret = () =>
+        document.querySelector<HTMLInputElement>(
+          '.profile-form input[type="password"]',
+        )!;
+      const choose = async (label: string) => {
+        const target = Array.from(
+          document.querySelectorAll(".profile-item"),
+        ).find((item) => item.textContent!.includes(label));
+        await act(async () => click(window, target));
+      };
+      await act(async () => input(window, name(), "Gemini 未保存名称"));
+      await act(async () => input(window, secret(), "synthetic-unsaved-key"));
+      await choose("DeepSeek");
+      await act(async () => input(window, name(), "DeepSeek 未保存名称"));
+      const updated = structuredClone(current());
+      updated.profiles[0]!.name = "来自较新快照的名称";
+      await act(async () => emit(updated));
+      await choose("来自较新快照");
+      assert.equal(name().value, "Gemini 未保存名称");
+      assert.equal(secret().value, "synthetic-unsaved-key");
+      await act(async () => navigate("team"));
+      await act(async () => navigate("models"));
+      assert.equal(secret().value, "synthetic-unsaved-key");
+      await act(async () =>
+        document
+          .querySelector(".profile-form")!
+          .dispatchEvent(
+            new window.Event("submit", { bubbles: true, cancelable: true }),
+          ),
+      );
+      assert.equal(secret().value, "");
+      const saved = commands.find((command) => command.type === "profile.save");
+      assert.equal(saved?.type, "profile.save");
+      if (saved?.type === "profile.save")
+        assert.equal(saved.apiKey, "synthetic-unsaved-key");
+      await choose("DeepSeek");
+      assert.equal(name().value, "DeepSeek 未保存名称");
+      await choose("Gemini 未保存名称");
+      assert.equal(
+        secret().value,
+        "",
+        "saving a connection also clears its in-memory cached key",
+      );
+      assert.equal(name().value, "Gemini 未保存名称");
+      assert.equal(
+        commands.filter((command) => command.type === "profile.save").length,
+        1,
+      );
+    },
+    fixture(),
+    "models",
+  );
+});
+
+test("an unfinished new connection returns intact after inspecting an existing connection", async () => {
+  await withSettings(async ({ document, window, act, commands }) => {
+    await act(async () =>
+      click(window, document.querySelector(".add-profile")),
+    );
+    await act(async () =>
+      input(
+        window,
+        field(document, "连接名称", ".profile-form"),
+        "尚未完成的新连接",
+      ),
+    );
+    await act(async () =>
+      input(
+        window,
+        document.querySelector('.profile-form input[type="password"]'),
+        "synthetic-new-key",
+      ),
+    );
+    await act(async () =>
+      click(window, document.querySelector(".profile-item")),
+    );
+    await act(async () =>
+      click(window, document.querySelector(".add-profile")),
+    );
+    assert.equal(
+      (field(document, "连接名称", ".profile-form") as HTMLInputElement).value,
+      "尚未完成的新连接",
+    );
+    assert.equal(
+      document.querySelector<HTMLInputElement>(
+        '.profile-form input[type="password"]',
+      )!.value,
+      "synthetic-new-key",
+    );
+    assert.equal(commands.length, 0);
+  });
+});
+
+test("reverting connection edits and clearing an unused key restores testing without an unnecessary save", async () => {
+  await withSettings(
+    async ({ document, window, current, emit, commands, act }) => {
+      const name = () => field(document, "连接名称", ".profile-form");
+      const panel = () => document.querySelector(".connection-test-panel")!;
+      const secret = () =>
+        document.querySelector('.profile-form input[type="password"]');
+      await act(async () =>
+        click(
+          window,
+          Array.from(document.querySelectorAll(".profile-item")).find((item) =>
+            item.textContent!.includes("DeepSeek"),
+          ),
+        ),
+      );
+      await act(async () => input(window, name(), "DeepSeek 调试名称"));
+      assert.match(panel().textContent!, /保存并测试/);
+      const tested = structuredClone(current());
+      tested.profiles[1] = {
+        ...tested.profiles[1]!,
+        hasKey: true,
+        status: "ready",
+        testedAt: "2026-09-11T13:00:00.000Z",
+        capabilities: { text: true, tools: true, streaming: true },
+      };
+      await act(async () => emit(tested));
+      assert.equal((name() as HTMLInputElement).value, "DeepSeek 调试名称");
+      await act(async () => input(window, name(), "DeepSeek"));
+      assert.doesNotMatch(
+        document.querySelector(".profile-form")!.textContent!,
+        /有未保存修改|保存并测试/,
+      );
+      assert.match(panel().textContent!, /文本响应 · 通过/);
+      assert.match(panel().textContent!, /工具调用 · 通过/);
+      await act(async () => input(window, secret(), "synthetic-unused-key"));
+      assert.match(panel().textContent!, /保存并测试/);
+      await act(async () => input(window, secret(), ""));
+      assert.doesNotMatch(panel().textContent!, /保存并测试/);
+      await act(async () => click(window, panel().querySelector("button")));
+      assert.deepEqual(commands, [
+        { type: "profile.probe", profileId: "deepseek" },
+      ]);
+    },
+  );
+});
+
+test("connection dirtiness compares editable values and treats an omitted execution mode as the displayed default", async () => {
+  const initial = fixture();
+  delete initial.profiles[0]!.execution;
+  await withSettings(
+    async ({ document, window, current, emit, commands, act }) => {
+      const panel = () => document.querySelector(".connection-test-panel")!;
+      const execution = () => document.querySelector('[aria-label="执行方式"]');
+      await act(async () => select(window, execution(), "google-agent"));
+      assert.match(panel().textContent!, /保存并测试/);
+      await act(async () => select(window, execution(), "model"));
+      assert.doesNotMatch(panel().textContent!, /保存并测试/);
+      for (const [label, changed, restored] of [
+        ["模型 ID", "gemini-custom", "gemini-3.8-flash"],
+        ["API 地址", "https://example.com/v1", initial.profiles[0]!.baseURL],
+        ["密钥环境变量", "ANOTHER_GOOGLE_KEY", "GOOGLE_API_KEY"],
+      ]) {
+        await act(async () =>
+          input(window, field(document, label, ".profile-form"), changed),
+        );
+        assert.match(panel().textContent!, /保存并测试/);
+        await act(async () =>
+          input(window, field(document, label, ".profile-form"), restored),
+        );
+        assert.doesNotMatch(panel().textContent!, /保存并测试/);
+      }
+      const refreshed = structuredClone(current());
+      refreshed.profiles[0]!.name = "来自最新配置的 Gemini";
+      await act(async () => emit(refreshed));
+      assert.equal(
+        (field(document, "连接名称", ".profile-form") as HTMLInputElement)
+          .value,
+        refreshed.profiles[0]!.name,
+      );
+      assert.doesNotMatch(panel().textContent!, /保存并测试/);
+      assert.equal(commands.length, 0);
+    },
+    initial,
   );
 });

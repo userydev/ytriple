@@ -400,3 +400,104 @@ test("process defaults to all current-goal history and can switch to the latest 
     );
   });
 });
+
+test("rich public process details collapse independently and websites keep truthful source states", async () => {
+  await withDom(async ({ document, window, root, act, createElement }) => {
+    const { ProcessView } = await import("../src/workbench/ProcessView.js");
+    const task = fixture();
+    task.events = [
+      {
+        id: "analysis",
+        type: "progress_reported",
+        summary: "先核查样本是否可比。",
+        member: "coordinator",
+        goalVersion: 2,
+        createdAt: task.createdAt,
+        data: {
+          stage: "method",
+          detail: "公开详细说明：比较样本、时间范围与统计口径。",
+          method: "检查原始定义并交叉对照。",
+          questions: ["是否缺少样本？"],
+          privateReasoning: "PRIVATE_CHAIN",
+        },
+      },
+      {
+        id: "google",
+        type: "progress_reported",
+        summary: "返回搜索资料",
+        member: "researcher",
+        goalVersion: 2,
+        createdAt: task.createdAt,
+        data: {
+          hosted: true,
+          progressKind: "source",
+          queries: ["sample comparison methods"],
+          webSources: [
+            {
+              title: "仅搜索命中",
+              url: "https://example.com/hit",
+              status: "searched",
+              snippet: "Search snippet",
+            },
+            {
+              title: "已核查网站",
+              url: "https://example.com/read",
+              status: "read",
+              snippet: "A verified excerpt",
+            },
+          ],
+        },
+      },
+    ];
+    const commands: string[] = [];
+    await act(async () =>
+      root.render(
+        createElement(ProcessView, {
+          task,
+          dispatch: async (command) => {
+            if (command.type === "url.open") commands.push(command.url);
+            return null;
+          },
+        }),
+      ),
+    );
+    const details = document.querySelector<HTMLDetailsElement>(
+      ".analysis-full-detail",
+    )!;
+    assert.ok(details);
+    assert.equal(Boolean(details.open), false);
+    assert.match(details.textContent!, /检查原始定义并交叉对照/);
+    assert.match(details.textContent!, /是否缺少样本/);
+    assert.doesNotMatch(document.body.textContent!, /PRIVATE_CHAIN/);
+    await act(async () => click(window, document, "全部展开"));
+    assert.equal(details.open, true);
+    await act(async () => click(window, document, "全部收起"));
+    assert.equal(details.open, false);
+    const sourceTab = Array.from(
+      document.querySelectorAll(".process-layer-tabs button"),
+    ).find((button) => button.textContent?.startsWith("资料与网站"))!;
+    await act(async () =>
+      sourceTab.dispatchEvent(new window.Event("click", { bubbles: true })),
+    );
+    const cards = Array.from(document.querySelectorAll(".process-source-card"));
+    assert.equal(cards.length, 2);
+    assert.match(
+      cards[0].querySelector(".source-read-state")!.textContent!,
+      /搜索结果/,
+    );
+    assert.match(
+      cards[1].querySelector(".source-read-state")!.textContent!,
+      /已读取/,
+    );
+    assert.match(
+      document.querySelector(".process-search-queries")!.textContent!,
+      /sample comparison methods/,
+    );
+    await act(async () =>
+      cards[0]
+        .querySelector("button")!
+        .dispatchEvent(new window.Event("click", { bubbles: true })),
+    );
+    assert.deepEqual(commands, ["https://example.com/hit"]);
+  });
+});

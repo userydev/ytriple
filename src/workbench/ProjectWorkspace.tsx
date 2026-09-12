@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 const storageKey = "ytriple.projects.viewer-width.v1";
 const clamp = (value: number) => Math.max(0.35, Math.min(0.8, value));
 export function ProjectWorkspace({
@@ -16,50 +22,73 @@ export function ProjectWorkspace({
     }
   });
   const ratioRef = useRef(ratio);
-  ratioRef.current = ratio;
   const root = useRef<HTMLDivElement>(null);
   const drag = useRef<{
     left: number;
     width: number;
     initial: number;
     pointerId: number;
+    target: HTMLDivElement;
   } | null>(null);
   const [dragging, setDragging] = useState(false);
-  const save = (value: number) => {
+  const save = useCallback((value: number) => {
     setRatio(value);
     ratioRef.current = value;
     try {
       window.localStorage.setItem(storageKey, String(value));
     } catch {}
-  };
-  useEffect(() => {
-    const finish = (event: PointerEvent) => {
-      if (!drag.current || event.pointerId !== drag.current.pointerId) return;
-      drag.current = null;
-      setDragging(false);
-      save(ratioRef.current);
-    };
-    const cancel = () => {
-      if (!drag.current) return;
-      const initial = drag.current.initial;
-      drag.current = null;
-      setRatio(initial);
-      setDragging(false);
-    };
-    window.addEventListener("pointerup", finish);
-    window.addEventListener("blur", cancel);
-    return () => {
-      window.removeEventListener("pointerup", finish);
-      window.removeEventListener("blur", cancel);
-    };
   }, []);
-  useEffect(() => {
-    if (hidden && drag.current) {
-      setRatio(drag.current.initial);
+  const finish = useCallback(
+    (cancel = false, pointerId?: number) => {
+      const current = drag.current;
+      if (
+        !current ||
+        (pointerId !== undefined && current.pointerId !== pointerId)
+      )
+        return;
       drag.current = null;
       setDragging(false);
-    }
-  }, [hidden]);
+      if (current.target.hasPointerCapture?.(current.pointerId))
+        current.target.releasePointerCapture(current.pointerId);
+      if (cancel) {
+        ratioRef.current = current.initial;
+        setRatio(current.initial);
+      } else save(ratioRef.current);
+    },
+    [save],
+  );
+  useEffect(() => {
+    const move = (event: PointerEvent) => {
+      const current = drag.current;
+      if (
+        !current ||
+        event.pointerId !== current.pointerId ||
+        current.width <= 0
+      )
+        return;
+      ratioRef.current = clamp((event.clientX - current.left) / current.width);
+      setRatio(ratioRef.current);
+    };
+    const up = (event: PointerEvent) => finish(false, event.pointerId);
+    const mouseup = () => finish();
+    const cancel = (event: PointerEvent) => finish(true, event.pointerId);
+    const blur = () => finish(true);
+    window.addEventListener("pointermove", move, true);
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("mouseup", mouseup, true);
+    window.addEventListener("pointercancel", cancel, true);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("mouseup", mouseup, true);
+      window.removeEventListener("pointercancel", cancel, true);
+      window.removeEventListener("blur", blur);
+    };
+  }, [finish]);
+  useEffect(() => {
+    if (hidden) finish(true);
+  }, [hidden, finish]);
   return (
     <div
       ref={root}
@@ -77,53 +106,44 @@ export function ProjectWorkspace({
         aria-valuemin={35}
         aria-valuemax={80}
         aria-valuenow={Math.round(ratio * 100)}
+        aria-valuetext={`项目查看区 ${Math.round(ratio * 100)}%，决策区 ${Math.round((1 - ratio) * 100)}%`}
         tabIndex={0}
         onPointerDown={(event) => {
-          if (event.button !== 0) return;
+          if (event.button !== 0 || hidden) return;
+          const box = root.current?.getBoundingClientRect();
+          if (!box || box.width <= 0) return;
           event.currentTarget.focus();
-          const box = root.current!.getBoundingClientRect();
+          event.preventDefault();
           drag.current = {
             left: box.left,
             width: box.width,
-            initial: ratio,
+            initial: ratioRef.current,
             pointerId: event.pointerId,
+            target: event.currentTarget,
           };
           event.currentTarget.setPointerCapture?.(event.pointerId);
           setDragging(true);
-          event.preventDefault();
         }}
-        onPointerMove={(event) => {
-          const current = drag.current;
-          if (!current || event.pointerId !== current.pointerId) return;
-          const next = clamp((event.clientX - current.left) / current.width);
-          setRatio(next);
-          ratioRef.current = next;
-        }}
-        onPointerCancel={() => {
-          if (drag.current) {
-            setRatio(drag.current.initial);
-            drag.current = null;
-            setDragging(false);
-          }
-        }}
-        onLostPointerCapture={() => {
-          if (drag.current) {
-            setRatio(drag.current.initial);
-            drag.current = null;
-            setDragging(false);
-          }
-        }}
+        onLostPointerCapture={() => finish(true)}
         onKeyDown={(event) => {
-          if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+          if (event.key === "Escape" && drag.current) {
             event.preventDefault();
-            save(clamp(ratio + (event.key === "ArrowLeft" ? -0.02 : 0.02)));
-          } else if (event.key === "Home") {
-            event.preventDefault();
-            save(0.35);
-          } else if (event.key === "End") {
-            event.preventDefault();
-            save(0.8);
+            finish(true);
+            return;
           }
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key))
+            return;
+          event.preventDefault();
+          save(
+            event.key === "Home"
+              ? 0.35
+              : event.key === "End"
+                ? 0.8
+                : clamp(
+                    ratioRef.current +
+                      (event.key === "ArrowLeft" ? -0.02 : 0.02),
+                  ),
+          );
         }}
         onDoubleClick={() => save(0.65)}
       >

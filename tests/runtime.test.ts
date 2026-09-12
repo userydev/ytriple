@@ -165,6 +165,9 @@ test("SDK executes member delegation, reads evidence, consumes returned results 
           {
             stage: "finding",
             summary: "资料 source-1 已核对，关键结果为 ORCHID 42。",
+            detail: "资料正文提供了结果，仍需要独立核查样本范围。",
+            method: "先读正文，再对照统计口径。",
+            questions: ["样本范围是否完整？"],
             sourceIds: ["source-1"],
             artifactIds: [],
           },
@@ -243,6 +246,12 @@ test("SDK executes member delegation, reads evidence, consumes returned results 
   assert.equal(report.data?.invocationId, read.data?.invocationId);
   assert.deepEqual(report.data?.sourceIds, ["source-1"]);
   assert.equal(report.data?.stage, "finding");
+  assert.equal(
+    report.data?.detail,
+    "资料正文提供了结果，仍需要独立核查样本范围。",
+  );
+  assert.equal(report.data?.method, "先读正文，再对照统计口径。");
+  assert.deepEqual(report.data?.questions, ["样本范围是否完整？"]);
   assert.ok(
     !read.data?.result,
     "source body must not be copied into the event log",
@@ -1313,3 +1322,74 @@ test(
     ]);
   },
 );
+
+test("real hosted adapter callback persists public summaries and verified source metadata in task events", async () => {
+  const f = fixture();
+  hostedProfile(f, "coordinator");
+  await new TeamRuntime(f.hooks, {
+    googleAgentFactory: (profile, key, options) =>
+      createGoogleAgentModel(profile, key, {
+        ...options,
+        fetch: async () =>
+          new Response(
+            JSON.stringify({
+              id: "public-details",
+              status: "completed",
+              steps: [
+                {
+                  type: "thought",
+                  summary: [
+                    { type: "text", text: "先比较证据覆盖，再确认局限。" },
+                  ],
+                  text: "PRIVATE_THOUGHT",
+                  signature: "PRIVATE_SIGNATURE",
+                },
+                {
+                  type: "url_context_result",
+                  result: [
+                    {
+                      url: "https://example.com/evidence",
+                      title: "Evidence",
+                      status: "success",
+                      snippet: "Public excerpt",
+                    },
+                  ],
+                },
+                {
+                  type: "model_output",
+                  content: [
+                    {
+                      type: "text",
+                      text: "# Public report\nA sourced conclusion.",
+                    },
+                  ],
+                },
+              ],
+            }),
+          ),
+      }),
+  }).run(f.task.id);
+  assert.equal(f.task.status, "completed", f.task.error);
+  const summary = f.task.events.find(
+    (event) => event.data?.progressKind === "analysis",
+  )!;
+  assert.equal(summary.data?.detail, "先比较证据覆盖，再确认局限。");
+  assert.equal(summary.data?.hosted, true);
+  const sources = f.task.events.find((event) =>
+    Array.isArray(event.data?.webSources),
+  )!;
+  assert.equal(
+    (sources.data?.webSources as { status: string }[])[0].status,
+    "read",
+  );
+  assert.doesNotMatch(
+    JSON.stringify(f.task.events),
+    /PRIVATE_THOUGHT|PRIVATE_SIGNATURE/,
+  );
+  const { buildProcessDocument } =
+    await import("../src/core/process-document.js");
+  const document = buildProcessDocument(f.task).content;
+  assert.match(document, /研究进展说明/);
+  assert.match(document, /example.com\/evidence/);
+  assert.match(document, /已读取/);
+});

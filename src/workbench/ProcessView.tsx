@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -17,8 +17,12 @@ import {
   ANALYSIS_SECTIONS,
   buildAgentProgress,
   buildPublicExchanges,
+  buildProcessSources,
   currentProgressEvents,
   publicAnalysisSection,
+  publicReportDetails,
+  publicSearchQueries,
+  SOURCE_STATUS_NAMES,
   type ProgressStatus,
 } from "../shared/progress";
 import type { MemberId, Task, TaskEvent } from "../shared/types";
@@ -50,6 +54,54 @@ function isPublicEvent(event: TaskEvent) {
     event.type,
   );
 }
+function AnalysisDetails({
+  report,
+  dispatch,
+  onArtifactOpen,
+}: {
+  report: TaskEvent;
+  dispatch: Dispatch;
+  onArtifactOpen: (id: string) => void;
+}) {
+  const { detail, method, questions } = publicReportDetails(report);
+  if (!detail && !method && !questions.length) return null;
+  return (
+    <details className="analysis-full-detail">
+      <summary>
+        展开分析与方法
+        <ChevronDown size={12} />
+      </summary>
+      {method ? (
+        <div className="analysis-detail-block">
+          <strong>核查方法</strong>
+          <Markdown dispatch={dispatch} onArtifactLink={onArtifactOpen}>
+            {method}
+          </Markdown>
+        </div>
+      ) : null}
+      {detail ? (
+        <div className="analysis-detail-block">
+          <strong>
+            {report.data?.hosted === true ? "Google 公开分析摘要" : "展开说明"}
+          </strong>
+          <Markdown dispatch={dispatch} onArtifactLink={onArtifactOpen}>
+            {detail}
+          </Markdown>
+        </div>
+      ) : null}
+      {questions.length ? (
+        <div className="analysis-detail-block">
+          <strong>仍待解决</strong>
+          <ul>
+            {questions.map((question, index) => (
+              <li key={index}>{question}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </details>
+  );
+}
 export function ProcessView({
   task,
   dispatch,
@@ -61,13 +113,31 @@ export function ProcessView({
   compact?: boolean;
   onArtifactOpen?: (id: string) => void;
 }) {
-  const [layer, setLayer] = useState<"analysis" | "conversation" | "execution">(
-    "analysis",
-  );
+  const [layer, setLayer] = useState<
+    "analysis" | "sources" | "conversation" | "execution"
+  >("analysis");
   const [member, setMember] = useState<MemberId | "all">("all");
   const [scope, setScope] = useState<"goal" | "run">("goal");
   const [saving, setSaving] = useState<MemberId | "team" | null>(null);
   const [allRecords, setAllRecords] = useState(false);
+  const [allExpanded, setAllExpanded] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState<
+    "all" | "read" | "unavailable"
+  >("all");
+  const container = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const section = container.current;
+    const updateExpanded = () => {
+      const details = Array.from(section?.querySelectorAll("details") ?? []);
+      setAllExpanded(details.length > 0 && details.every((item) => item.open));
+    };
+    section?.addEventListener("toggle", updateExpanded, true);
+    return () => section?.removeEventListener("toggle", updateExpanded, true);
+  }, []);
+  const expand = (open: boolean) =>
+    container.current?.querySelectorAll("details").forEach((details) => {
+      details.open = open;
+    });
   const saveSummary = async (member?: MemberId) => {
     if (saving) return;
     setSaving(member ?? "team");
@@ -108,16 +178,16 @@ export function ProcessView({
       exchange.receiver === member,
   );
   const records = allRecords ? visibleEvents : visibleEvents.slice(-80);
+  const sources = buildProcessSources(task, visibleEvents);
+  const queries = publicSearchQueries(visibleEvents);
   return (
     <section
       className={`process-view layered-process ${compact ? "compact" : ""}`}
       aria-label="Agent 协作过程"
+      ref={container}
     >
       <div className="process-heading">
-        <div>
-          <span className="eyebrow">TEAM AT WORK</span>
-          <strong>{task.title}</strong>
-        </div>
+        <strong title={task.title}>团队过程</strong>
         <span className={`process-state state-${task.status}`}>
           <Layers2 size={13} />
           目标 v{task.goalVersion}
@@ -172,6 +242,12 @@ export function ProcessView({
             onClick={() => setLayer("analysis")}
           >
             思路摘要 <span>{analysis.length}</span>
+          </button>
+          <button
+            aria-pressed={layer === "sources"}
+            onClick={() => setLayer("sources")}
+          >
+            资料与网站 <span>{sources.length}</span>
           </button>
           <button
             aria-pressed={layer === "conversation"}
@@ -241,18 +317,51 @@ export function ProcessView({
             {saving ? "整理中…" : "保存过程文档"}
           </button>
         </div>
+        <div
+          className="process-reading-controls"
+          role="group"
+          aria-label="过程阅读方式"
+        >
+          <span>摘要浏览，按需展开</span>
+          <button
+            className="text-button"
+            onClick={() => {
+              expand(!allExpanded);
+              setAllExpanded(!allExpanded);
+            }}
+          >
+            {allExpanded ? "全部收起" : "全部展开"}
+          </button>
+        </div>
       </div>
       {layer === "analysis" ? (
         <div className="process-analysis" aria-label="公开分析摘要">
           <p className="process-layer-note">
-            成员对问题、依据和取舍的公开说明。点击分类展开查看。
+            从问题、方法到依据和判断。简述留在这里，完整解释可展开查看。
           </p>
+          {sources.length || queries.length ? (
+            <button
+              className="process-source-overview"
+              onClick={() => setLayer("sources")}
+            >
+              <Search size={14} />
+              <span>
+                <strong>{sources.length} 项资料与网站</strong>
+                <small>
+                  {sources.filter((source) => source.status === "read").length}{" "}
+                  项有读取记录
+                  {queries.length ? ` · ${queries.length} 个实际检索词` : ""}
+                </small>
+              </span>
+              <ArrowUpRight size={13} />
+            </button>
+          ) : null}
           {!analysis.length ? (
             <div className="process-empty-summary">
               <strong>还没有公开分析摘要</strong>
               <p>
                 {currentEvents.some((event) => event.data?.hosted === true)
-                  ? "当前托管成员只回传运行状态与最终报告；这些状态保留在执行记录中。"
+                  ? "这段记录尚未收到服务商的公开分析摘要。已返回的检索与来源可在「资料与网站」查看。"
                   : "成员后续会在有实质发现或判断时补充说明；已有执行记录不会被改写为分析。"}
               </p>
             </div>
@@ -261,6 +370,7 @@ export function ProcessView({
             const reports = analysis.filter(
               (event) => publicAnalysisSection(event) === section.id,
             );
+            if (!reports.length) return null;
             return (
               <details
                 className="analysis-section"
@@ -285,6 +395,9 @@ export function ProcessView({
                           {report.member ? memberName(report.member) : "工作台"}
                         </strong>
                         <time>{formatTime(report.createdAt)}</time>
+                        {report.data?.hosted === true ? (
+                          <span>Google 公开摘要</span>
+                        ) : null}
                       </div>
                       <Markdown
                         dispatch={dispatch}
@@ -292,6 +405,11 @@ export function ProcessView({
                       >
                         {report.summary}
                       </Markdown>
+                      <AnalysisDetails
+                        report={report}
+                        dispatch={dispatch}
+                        onArtifactOpen={openArtifact}
+                      />
                       <div className="analysis-references">
                         {Array.isArray(report.data?.sourceIds)
                           ? report.data.sourceIds.flatMap((id) => {
@@ -355,6 +473,115 @@ export function ProcessView({
               </details>
             );
           })}
+        </div>
+      ) : layer === "sources" ? (
+        <div className="process-sources" aria-label="核查资料与网站">
+          <p className="process-layer-note">
+            读取、搜索与引用分别标识；搜索结果和引用链接不代表已访问全文。
+          </p>
+          {queries.length ? (
+            <details className="process-search-queries">
+              <summary>
+                <Search size={13} />
+                实际检索词 · {queries.length}
+                <ChevronDown size={12} />
+              </summary>
+              <ol>
+                {queries.map((query) => (
+                  <li key={query}>{query}</li>
+                ))}
+              </ol>
+            </details>
+          ) : null}
+          <div
+            className="process-source-filters"
+            role="group"
+            aria-label="资料状态筛选"
+          >
+            {(
+              [
+                ["all", "全部"],
+                ["read", "已读取"],
+                ["unavailable", "未能读取"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                aria-pressed={sourceFilter === value}
+                onClick={() => setSourceFilter(value)}
+              >
+                {label}{" "}
+                {
+                  sources.filter(
+                    (source) => value === "all" || source.status === value,
+                  ).length
+                }
+              </button>
+            ))}
+          </div>
+          {sources
+            .filter(
+              (source) =>
+                sourceFilter === "all" || source.status === sourceFilter,
+            )
+            .map((source) => (
+              <details className="process-source-card" key={source.id}>
+                <summary>
+                  <FileText size={14} />
+                  <span>
+                    <strong>{source.title}</strong>
+                    <small>
+                      {source.url
+                        ? new URL(source.url).hostname
+                        : "本地任务资料"}
+                    </small>
+                  </span>
+                  <span className={`source-read-state source-${source.status}`}>
+                    {SOURCE_STATUS_NAMES[source.status]}
+                  </span>
+                  <ChevronDown size={12} />
+                </summary>
+                <div className="process-source-body">
+                  <p className="process-source-origin">
+                    {source.origin === "google" ? "Google 返回" : "任务资料"}
+                    {source.members.length
+                      ? ` · ${source.members.map(memberName).join("、")}`
+                      : ""}
+                  </p>
+                  {source.snippet ? (
+                    <p className="process-source-snippet">{source.snippet}</p>
+                  ) : (
+                    <p className="analysis-empty">
+                      此记录没有返回可展示的正文节选。
+                    </p>
+                  )}
+                  {source.url ? (
+                    <button
+                      className="text-button"
+                      onClick={() =>
+                        void dispatch({ type: "url.open", url: source.url })
+                      }
+                    >
+                      打开来源
+                      <ArrowUpRight size={12} />
+                    </button>
+                  ) : null}
+                </div>
+              </details>
+            ))}
+          {!sources.length ? (
+            <div className="process-empty-summary">
+              <strong>尚无可核查的来源记录</strong>
+              <p>
+                成员实际阅读任务资料、返回搜索结果或核查网站后，依据会整理到这里。
+              </p>
+            </div>
+          ) : !sources.some(
+              (source) =>
+                sourceFilter === "all" || source.status === sourceFilter,
+            ) ? (
+            <p className="analysis-empty">当前没有这一状态的资料。</p>
+          ) : null}
         </div>
       ) : layer === "conversation" ? (
         <div className="process-conversations" aria-label="实际成员对话">
