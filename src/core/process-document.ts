@@ -1,4 +1,9 @@
 import type { MemberId, Task, TaskEvent } from "../shared/types.js";
+import {
+  ANALYSIS_SECTIONS,
+  buildPublicExchanges,
+  publicAnalysisSection,
+} from "../shared/progress.js";
 
 const labels: Record<MemberId, string> = {
   coordinator: "统筹",
@@ -6,8 +11,11 @@ const labels: Record<MemberId, string> = {
   researcher: "研究员",
 };
 const stages: Record<string, string> = {
+  framing: "问题理解",
   plan: "计划",
+  evidence: "依据",
   finding: "发现",
+  alternatives: "方案取舍",
   decision: "判断",
 };
 const statuses: Record<Task["status"], string> = {
@@ -105,20 +113,67 @@ export function buildProcessDocument(
   );
   lines.push("## 工作摘要", "");
   if (reports.length) {
-    lines.push(
-      ...distinct(
-        reports.map(
-          (event) =>
-            `- **${memberLabel(event.member)} · ${stages[String(event.data?.stage)] ?? "进展"}**：${plain(event.summary)}`,
-        ),
-      ),
-      "",
+    for (const section of ANALYSIS_SECTIONS) {
+      const entries = reports.filter(
+        (event) => publicAnalysisSection(event) === section.id,
+      );
+      if (entries.length)
+        lines.push(
+          `### ${section.title}`,
+          "",
+          ...distinct(
+            entries.map(
+              (event) =>
+                `- **${memberLabel(event.member)} · ${stages[String(event.data?.stage)] ?? "进展"}**：${plain(event.summary)}`,
+            ),
+          ),
+          "",
+        );
+    }
+    const uncategorized = reports.filter(
+      (event) => !publicAnalysisSection(event),
     );
+    if (uncategorized.length)
+      lines.push(
+        "### 其他公开进展",
+        "",
+        ...distinct(
+          uncategorized.map(
+            (event) =>
+              `- **${memberLabel(event.member)}**：${plain(event.summary)}`,
+          ),
+        ),
+        "",
+      );
   } else {
     lines.push(
       "尚未记录成员的计划、发现或判断摘要；以下按实际执行记录整理。",
       "",
     );
+  }
+  const exchanges = buildPublicExchanges(events, task.status);
+  if (exchanges.length) {
+    lines.push(
+      "## 成员对话",
+      "",
+      "以下为实际委派与回复，较长内容可能是运行时保留的节选。",
+      "",
+    );
+    for (const exchange of exchanges.slice(-20)) {
+      lines.push(
+        `### ${memberLabel(exchange.sender)} → ${exchange.specialist ? "专项成员" : memberLabel(exchange.receiver)}`,
+        "",
+      );
+      if (exchange.request)
+        lines.push(`- **委派**：${plain(exchange.request, 4000)}`);
+      if (exchange.response)
+        lines.push(`- **回复**：${plain(exchange.response, 12000)}`);
+      else
+        lines.push(
+          `- ${exchange.status === "running" ? "尚在等待回复。" : "此记录没有保留回复正文。"}`,
+        );
+      lines.push("");
+    }
   }
   const questions = distinct(
     events

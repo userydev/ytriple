@@ -14,6 +14,8 @@ import {
   History,
   Image,
   Pencil,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Presentation,
   Save,
@@ -22,6 +24,11 @@ import {
 import type { Artifact, Source, Task } from "../shared/types";
 import { formatDate, formatTime, Markdown, type Dispatch } from "./common";
 import { useDocumentDraft } from "./drafts";
+
+const refinementDrafts = new Map<
+  string,
+  { instruction: string; hash: string }
+>();
 
 export function SourceList({
   sources,
@@ -184,12 +191,24 @@ export function ArtifactView({
   const { editing, content: draft, baseHash } = editState;
   const setEditing = (editing: boolean) =>
     setEditState((current) => ({ ...current, editing }));
-  const [refining, setRefining] = useState(false);
-  const [instruction, setInstruction] = useState("");
+  const refinementKey = `${task.id}:${artifact.id}`;
+  const [refining, setRefining] = useState(() =>
+    refinementDrafts.has(refinementKey),
+  );
+  const [instruction, setInstruction] = useState(
+    () => refinementDrafts.get(refinementKey)?.instruction ?? "",
+  );
   const [processing, setProcessing] = useState(false);
   const [collecting, setCollecting] = useState(false);
   const [collectedHash, setCollectedHash] = useState<string | null>(null);
-  const [refineHash, setRefineHash] = useState(artifact.hash);
+  const [refineHash, setRefineHash] = useState(
+    () => refinementDrafts.get(refinementKey)?.hash ?? artifact.hash,
+  );
+  useEffect(() => {
+    if (instruction)
+      refinementDrafts.set(refinementKey, { instruction, hash: refineHash });
+    else refinementDrafts.delete(refinementKey);
+  }, [refinementKey, instruction, refineHash]);
   const [saving, setSaving] = useState(false);
   const [history, setHistory] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -555,20 +574,36 @@ export function ArtifactList({
   dispatch,
   compact = false,
   preferredArtifactId,
+  detail,
+  onCloseDetail,
+  onSaveDetail,
 }: {
   task: Task;
   dispatch: Dispatch;
   compact?: boolean;
   preferredArtifactId?: string;
+  detail?: { id: string; title: string; content: string };
+  onCloseDetail?: () => void;
+  onSaveDetail?: () => void | Promise<void>;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
+  const [catalog, setCatalog] = useState(true);
+  const [query, setQuery] = useState("");
+  const [savingDetail, setSavingDetail] = useState(false);
+  const [visited, setVisited] = useState<Set<string>>(() => new Set());
   useEffect(() => {
     if (preferredArtifactId) setSelected(preferredArtifactId);
   }, [preferredArtifactId]);
   const artifact =
     task.artifacts.find((item) => item.id === selected) ??
     task.artifacts.at(-1);
-  if (!artifact)
+  useEffect(() => {
+    if (artifact)
+      setVisited((current) =>
+        current.has(artifact.id) ? current : new Set([...current, artifact.id]),
+      );
+  }, [artifact?.id]);
+  if (!artifact && !detail)
     return (
       <div className="panel-empty">
         <div className="empty-symbol">
@@ -583,30 +618,172 @@ export function ArtifactList({
         <span className="empty-footnote">从一项真实工作开始</span>
       </div>
     );
+  const visible = task.artifacts.filter((item) =>
+    `${item.title} ${item.format}`
+      .toLowerCase()
+      .includes(query.trim().toLowerCase()),
+  );
+  const groups = [
+    { key: "documents", label: "文档", formats: ["md", "html"] },
+    { key: "images", label: "图片", formats: ["png"] },
+    { key: "slides", label: "演示文稿", formats: ["pptx"] },
+  ];
+  const choose = (id: string) => {
+    setSelected(id);
+    onCloseDetail?.();
+  };
+  const saveDetail = async () => {
+    if (savingDetail || !onSaveDetail) return;
+    setSavingDetail(true);
+    try {
+      await onSaveDetail();
+    } finally {
+      setSavingDetail(false);
+    }
+  };
   return (
-    <>
-      {task.artifacts.length > 1 ? (
-        <label className="artifact-selector">
-          <span className="sr-only">选择成果</span>
-          <select
-            value={artifact.id}
-            onChange={(event) => setSelected(event.target.value)}
-          >
-            {task.artifacts.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.title} · {item.format.toUpperCase()} · v{item.version}
-              </option>
+    <section className="artifact-workspace" aria-label="成果目录与查看器">
+      <div className="artifact-library-toolbar">
+        <button
+          className="text-button"
+          aria-label={catalog ? "收起成果目录" : "展开成果目录"}
+          aria-expanded={catalog}
+          onClick={() => setCatalog(!catalog)}
+        >
+          {catalog ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
+          成果目录 <span>{task.artifacts.length}</span>
+        </button>
+        <span>
+          {detail
+            ? "对话详情"
+            : `${artifact?.format.toUpperCase()} · v${artifact?.version}`}
+        </span>
+      </div>
+      <div
+        className={`artifact-library-layout ${catalog ? "catalog-open" : ""}`}
+      >
+        {catalog ? (
+          <aside className="artifact-catalog" aria-label="成果目录">
+            <label className="artifact-catalog-search">
+              <span className="sr-only">搜索成果</span>
+              <input
+                placeholder="查找成果…"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </label>
+            {detail ? (
+              <div className="artifact-catalog-detail">
+                <span>对话详情</span>
+                <button
+                  className="artifact-catalog-item selected"
+                  aria-current="page"
+                >
+                  <FileText size={13} />
+                  <span>
+                    <strong>{detail.title}</strong>
+                    <small>尚未保存为文档</small>
+                  </span>
+                </button>
+              </div>
+            ) : null}
+            {groups.map((group) => {
+              const entries = visible.filter((item) =>
+                group.formats.includes(item.format),
+              );
+              return entries.length ? (
+                <details
+                  className="artifact-catalog-group"
+                  open
+                  key={group.key}
+                >
+                  <summary>
+                    {group.label}
+                    <span>{entries.length}</span>
+                  </summary>
+                  {entries.toReversed().map((item) => (
+                    <button
+                      key={item.id}
+                      className={`artifact-catalog-item ${!detail && artifact?.id === item.id ? "selected" : ""}`}
+                      aria-current={
+                        !detail && artifact?.id === item.id ? "page" : undefined
+                      }
+                      onClick={() => choose(item.id)}
+                      title={item.title}
+                    >
+                      <FileText size={13} />
+                      <span>
+                        <strong>{item.title}</strong>
+                        <small>
+                          v{item.version} · {formatDate(item.updatedAt)}
+                          {item.goalVersion !== task.goalVersion
+                            ? ` · 旧目标 v${item.goalVersion}`
+                            : ""}
+                        </small>
+                      </span>
+                    </button>
+                  ))}
+                </details>
+              ) : null;
+            })}
+            {!visible.length && task.artifacts.length ? (
+              <p className="analysis-empty">没有匹配的成果</p>
+            ) : null}
+          </aside>
+        ) : null}
+        <div className="artifact-reader">
+          {detail ? (
+            <div
+              className="artifact-view conversation-detail"
+              aria-label="对话完整内容"
+            >
+              <div className="artifact-heading">
+                <div>
+                  <span className="eyebrow">对话详情</span>
+                  <h3>{detail.title}</h3>
+                </div>
+              </div>
+              <div className="artifact-actions">
+                <button
+                  className="button secondary small"
+                  disabled={savingDetail || !onSaveDetail}
+                  onClick={() => void saveDetail()}
+                >
+                  <Save size={13} />
+                  {savingDetail ? "保存中…" : "保存为文档"}
+                </button>
+                <button className="text-button" onClick={onCloseDetail}>
+                  <X size={13} />
+                  关闭详情
+                </button>
+              </div>
+              <Markdown
+                dispatch={dispatch}
+                onArtifactLink={(id) => {
+                  if (task.artifacts.some((item) => item.id === id)) choose(id);
+                }}
+              >
+                {detail.content}
+              </Markdown>
+            </div>
+          ) : null}
+          {task.artifacts
+            .filter((item) => item.id === artifact?.id || visited.has(item.id))
+            .map((item) => (
+              <div
+                hidden={Boolean(detail) || item.id !== artifact?.id}
+                key={item.id}
+              >
+                <ArtifactView
+                  artifact={item}
+                  task={task}
+                  dispatch={dispatch}
+                  compact={compact}
+                />
+              </div>
             ))}
-          </select>
-        </label>
-      ) : null}
-      <ArtifactView
-        key={artifact.id}
-        artifact={artifact}
-        task={task}
-        dispatch={dispatch}
-        compact={compact}
-      />
-    </>
+        </div>
+      </div>
+    </section>
   );
 }

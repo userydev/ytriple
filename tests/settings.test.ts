@@ -475,20 +475,16 @@ test("an existing Google connection can save and verify with the default API add
     );
     const verify = Array.from(
       document.querySelectorAll<HTMLButtonElement>(".profile-form button"),
-    ).find((button) => button.textContent === "保存并验证");
+    ).find((button) => button.textContent === "测试连接");
     assert.ok(verify);
     assert.equal(verify.disabled, false);
     await act(async () => click(window, verify));
-    assert.equal(commands[0].type, "profile.save");
-    if (commands[0].type === "profile.save") {
-      assert.equal(commands[0].profile.id, "gemini");
-      assert.equal(commands[0].profile.baseURL, "");
-      assert.ok(!("apiKey" in commands[0]));
-    }
-    assert.deepEqual(commands[1], {
-      type: "profile.probe",
-      profileId: "gemini",
-    });
+    assert.deepEqual(commands, [
+      {
+        type: "profile.probe",
+        profileId: "gemini",
+      },
+    ]);
   }, initial);
 });
 
@@ -686,5 +682,64 @@ test("an explicitly started new connection is preserved when the first snapshot 
     fixture(),
     "models",
     false,
+  );
+});
+
+test("connection test is visible before configuration and reports partial capability results without claiming a broken connection", async () => {
+  const initial = fixture();
+  initial.profiles[0] = {
+    ...initial.profiles[0]!,
+    status: "failed",
+    capabilities: { text: true, tools: false, streaming: true },
+    testedAt: "2026-09-11T12:00:00.000Z",
+    lastError: "工具：未完成真实工具回读",
+  };
+  await withSettings(async ({ document, window, commands, act }) => {
+    const panel = document.querySelector(".connection-test-panel")!;
+    assert.ok(panel);
+    assert.match(panel.textContent!, /文本响应 · 通过/);
+    assert.match(panel.textContent!, /工具调用 · 未通过/);
+    assert.match(panel.textContent!, /流式响应 · 通过/);
+    assert.match(
+      document.querySelector(".profile-item.active")!.textContent!,
+      /文本可用/,
+    );
+    assert.match(panel.textContent!, /最近测试/);
+    await act(async () => click(window, panel.querySelector("button")));
+    assert.deepEqual(commands, [
+      { type: "profile.probe", profileId: "gemini" },
+    ]);
+  }, initial);
+});
+
+test("member model status follows assigned profile and opens that exact connection for testing", async () => {
+  await withSettings(
+    async ({ document, window, commands, act }) => {
+      const ctoCard =
+        Array.from(document.querySelectorAll(".member-settings-card")).find(
+          (card) => card.textContent!.includes("技术负责人"),
+        ) ?? document.querySelectorAll(".member-settings-card")[1]!;
+      const status = ctoCard.querySelector(".member-model-status")!;
+      assert.match(status.textContent!, /DeepSeek/);
+      assert.match(status.textContent!, /未配置密钥/);
+      await act(async () => click(window, status.querySelector("button")));
+      assert.equal(document.querySelector("h1")!.textContent, "AI 模型");
+      assert.match(
+        document.querySelector(".profile-item.active")!.textContent!,
+        /DeepSeek/,
+      );
+      assert.equal(
+        (field(document, "连接名称", ".profile-form") as HTMLInputElement)
+          .value,
+        "DeepSeek",
+      );
+      assert.equal(
+        commands.length,
+        0,
+        "navigation must not save settings or execute paid calls",
+      );
+    },
+    fixture(),
+    "team",
   );
 });

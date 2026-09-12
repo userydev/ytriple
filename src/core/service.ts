@@ -4,6 +4,7 @@ import {
   normalizeTeamSettings,
 } from "../shared/member-settings.js";
 import { buildProcessDocument } from "./process-document.js";
+import { ProjectFiles } from "./project-files.js";
 import { ProjectDiscovery } from "./projects.js";
 import { createGoogleAgentModel } from "./google-agents.js";
 import { Agent, Runner } from "@openai/agents";
@@ -38,11 +39,12 @@ import {
 } from "./library.js";
 import { importFile, importURL } from "./sources.js";
 import { TeamRuntime, type RuntimeCheckpoint } from "./runtime.js";
-import { probeProfile } from "./models.js";
+import { probeProfile, type ModelFactory } from "./models.js";
 import { inspectSystem, bootstrapSystem, initializeProject } from "./system.js";
 
 export type InternalCommand =
   | Command
+  | { type: "profile.save"; profile: ModelProfile; keyChanged?: boolean }
   | { type: "source.import.paths"; taskId: string; paths: string[] }
   | {
       type: "artifact.exportPNG";
@@ -62,6 +64,12 @@ export class WorkbenchService {
   readonly runtime: TeamRuntime;
   private system?: Snapshot["system"];
   private readonly projectScanner = new ProjectDiscovery();
+  private readonly projectFiles = new ProjectFiles();
+  private projectBrowser?: Snapshot["projectBrowser"];
+  private browserSequence = 0;
+  private browserScope = 0;
+  private readonly documentSaves = new Map<string, Promise<void>>();
+  private readonly projectInitializations = new Map<string, Promise<void>>();
   private projectTimer?: ReturnType<typeof setTimeout>;
   private scanning?: Promise<void>;
   private closing = false;
@@ -78,6 +86,7 @@ export class WorkbenchService {
     readonly changed: (snapshot: Snapshot) => void = () => {},
     readonly options: {
       googleAgentFactory?: typeof createGoogleAgentModel;
+      modelFactory?: ModelFactory;
     } = {},
   ) {
     this.store = new Store(dataPath);
@@ -235,10 +244,14 @@ export class WorkbenchService {
       system: this.system!,
       projects: this.projectScanner.snapshot.projects,
       projectDiscovery: this.projectScanner.snapshot.discovery,
+      projectBrowser: this.projectBrowser,
       library: listLibrary(this.store, this.store.settings().aiRoot),
     };
   }
   private start(id: string): void {
+    const task = this.store.task(id);
+    if (task.archivedAt || task.deletedAt)
+      throw new Error("请先恢复这项工作，再继续处理。");
     if (this.runtime.isRunning(id)) return;
     void this.runtime.run(id).catch((error) => {
       this.store.updateTask(id, (task) => {
@@ -273,12 +286,110 @@ export class WorkbenchService {
   }
   async execute(command: InternalCommand): Promise<Snapshot> {
     if (this.closing) throw new Error("工作台正在关闭。");
+    let browserReply: Snapshot["projectBrowser"];
+    let replyScope: number | undefined;
     switch (command.type) {
       case "snapshot":
         break;
       case "project.refresh":
         await this.refreshProjects();
         break;
+      case "project.browse":
+      case "project.read": {
+        const project = this.projectScanner.snapshot.projects.find(
+          (item) => item.id === command.projectId,
+        );
+        if (!project) throw new Error("项目列表已变化，请刷新项目。");
+        const request = ++this.browserSequence;
+        const scope = this.browserScope;
+        const codeRoot = this.store.settings().codeRoot;
+        const browser =
+          command.type === "project.read"
+            ? await this.projectFiles.read(
+                project,
+                codeRoot,
+                command.worktreePath,
+                command.path,
+              )
+            : await this.projectFiles.browse(
+                project,
+                codeRoot,
+                command.worktreePath,
+                command.path,
+              );
+        if (this.closing) throw new Error("工作台正在关闭。");
+        if (
+          scope !== this.browserScope ||
+          this.store.settings().codeRoot !== codeRoot
+        )
+          throw new Error("项目目录设置已变化，请重新选择文件。");
+        if (request === this.browserSequence) this.projectBrowser = browser;
+        // Every request needs its own directory result, even if a newer request
+        // already owns the shared preview. Broadcast only the latest selection.
+        browserReply = browser;
+        replyScope = scope;
+        break;
+      }
+      case "task.rename":
+        this.store.updateTask(command.taskId, (task) => {
+          task.title = requireText(command.title, 120, "工作名称");
+        });
+        break;
+      case "task.archive":
+      case "task.delete":
+      case "task.restore": {
+        await this.runtime.stop(command.taskId);
+        this.store.updateTask(command.taskId, (task) => {
+          if (command.type === "task.restore") {
+            delete task.archivedAt;
+            delete task.deletedAt;
+          } else if (command.type === "task.archive") task.archivedAt = now();
+          else task.deletedAt = now();
+        });
+        break;
+      }
+      case "message.save": {
+        const key = `${command.taskId}:${command.messageId}`;
+        let pending = this.documentSaves.get(key);
+        if (!pending) {
+          pending = (async () => {
+            const task = this.store.task(command.taskId);
+            const message = task.messages.find(
+              (item) =>
+                item.id === command.messageId && item.role === "assistant",
+            );
+            if (!message) throw new Error("找不到这份对话详情。");
+            const artifact = await writeArtifact(this.store, task.id, {
+              title: `${task.title} · 对话详情`,
+              content: message.content,
+              format: "md",
+              goalVersion: task.goalVersion,
+              operationId: `message-document:${task.id}:${message.id}:${hash(message.content)}`,
+            });
+            if (
+              !task.events.some(
+                (event) =>
+                  event.type === "message.saved" &&
+                  event.data?.messageId === message.id,
+              )
+            )
+              this.store.event(task.id, {
+                type: "message.saved",
+                goalVersion: task.goalVersion,
+                summary: "已将对话详情保存为文档。",
+                data: { messageId: message.id, artifactId: artifact.id },
+              });
+          })();
+          this.documentSaves.set(key, pending);
+        }
+        try {
+          await pending;
+        } finally {
+          if (this.documentSaves.get(key) === pending)
+            this.documentSaves.delete(key);
+        }
+        break;
+      }
       case "process.save": {
         const task = this.store.task(command.taskId);
         const document = buildProcessDocument(task, command.member);
@@ -345,6 +456,9 @@ export class WorkbenchService {
         break;
       }
       case "task.send": {
+        const existingTask = this.store.task(command.taskId);
+        if (existingTask.archivedAt || existingTask.deletedAt)
+          throw new Error("请先恢复这项工作，再发送消息。");
         const content = requireText(command.text, 40000, "消息");
         await this.runtime.stop(command.taskId);
         this.store.updateTask(command.taskId, (task) => {
@@ -528,19 +642,31 @@ export class WorkbenchService {
         break;
       }
       case "profile.save": {
-        await Promise.all([
-          this.runtime.stopAll(),
-          this.stopProbes(command.profile.id),
-        ]);
         const p = validateProfile(command.profile);
+        const previous = this.store.profiles().find((old) => old.id === p.id);
+        const changed =
+          !previous ||
+          profileConnectionKey(previous) !== profileConnectionKey(p) ||
+          ("keyChanged" in command && command.keyChanged) ||
+          ("apiKey" in command && command.apiKey !== undefined);
+        if (changed)
+          await Promise.all([this.runtime.stopAll(), this.stopProbes(p.id)]);
+        const hasKey = Boolean(await this.readKey(p));
+        const evidence = this.store.profiles().find((old) => old.id === p.id);
         const profiles = this.store.profiles().filter((old) => old.id !== p.id);
         profiles.push({
           ...p,
-          hasKey: Boolean(await this.readKey(p)),
-          status: "untested",
-          lastError: undefined,
-          testedAt: undefined,
-          capabilities: undefined,
+          hasKey,
+          status: !hasKey
+            ? "unconfigured"
+            : changed
+              ? "untested"
+              : evidence?.status === "unconfigured"
+                ? "untested"
+                : (evidence?.status ?? "untested"),
+          lastError: changed ? undefined : evidence?.lastError,
+          testedAt: changed ? undefined : evidence?.testedAt,
+          capabilities: changed ? undefined : evidence?.capabilities,
         });
         this.store.setConfig("profiles", profiles);
         break;
@@ -550,29 +676,38 @@ export class WorkbenchService {
           .profiles()
           .find((p) => p.id === command.profileId);
         if (!profile) throw new Error("连接不存在。");
-        const result =
-          profile.execution === "google-agent"
-            ? await this.startGoogleProbe(profile)
-            : await probeProfile(profile, this.readKey);
+        const hasKey = Boolean(await this.readKey(profile));
+        const result = hasKey
+          ? await this.startProfileProbe(profile)
+          : {
+              capabilities: { text: false, tools: false, streaming: false },
+              error: "未找到密钥，请先配置密钥或对应环境变量。",
+            };
         if (this.closing) throw new Error("工作台正在关闭，连接检查已停止。");
         this.store.setConfig(
           "profiles",
           this.store.profiles().map((p) =>
-            p.id === profile.id
+            p.id === profile.id &&
+            profileConnectionKey(p) === profileConnectionKey(profile)
               ? {
                   ...p,
-                  status:
-                    "incomplete" in result && result.incomplete
-                      ? "untested"
-                      : result.error
-                        ? "failed"
-                        : "ready",
+                  hasKey,
+                  status: !hasKey
+                    ? "unconfigured"
+                    : result.capabilities.text
+                      ? "ready"
+                      : "incomplete" in result && result.incomplete
+                        ? "untested"
+                        : "failed",
                   lastError: result.error,
                   capabilities:
-                    "incomplete" in result && result.incomplete
+                    !hasKey ||
+                    ("incomplete" in result &&
+                      result.incomplete &&
+                      !result.capabilities.text)
                       ? undefined
                       : result.capabilities,
-                  testedAt: now(),
+                  testedAt: hasKey ? now() : undefined,
                 }
               : p,
           ),
@@ -587,6 +722,14 @@ export class WorkbenchService {
         if (JSON.stringify(before) !== JSON.stringify(after))
           await this.runtime.stopAll();
         this.store.setConfig("settings", settings);
+        if (
+          previous.codeRoot !== settings.codeRoot ||
+          previous.aiRoot !== settings.aiRoot
+        ) {
+          this.browserScope++;
+          this.browserSequence++;
+          this.projectBrowser = undefined;
+        }
         this.scheduleProjects();
         await recoverLibrary(this.store, settings.aiRoot);
         await this.refreshSystem();
@@ -599,60 +742,89 @@ export class WorkbenchService {
         break;
       }
       case "project.initialize": {
-        const settings = this.store.settings();
-        const input = { ...command.input };
-        const initializedGoalVersion = input.taskId
-          ? this.store.task(input.taskId).goalVersion
-          : undefined;
-        if (input.taskId) {
-          const task = this.runtimeTask(input.taskId);
-          const current = task.artifacts
-            .filter(
-              (a) =>
-                a.format === "md" &&
-                a.content &&
-                a.goalVersion === task.goalVersion,
-            )
-            .map((a) => `## ${a.title}\n${a.content}`)
-            .join("\n\n");
-          input.description =
-            `${input.description}\n\n## 团队讨论目标\n${task.goal}\n\n${current}`.slice(
-              0,
-              150000,
-            );
+        const key = command.input.taskId ?? uid();
+        if (this.projectInitializations.has(key))
+          throw new Error("这个讨论正在创建项目，请等待当前创建完成。");
+        const pending = (async () => {
+          const settings = this.store.settings();
+          const input = { ...command.input };
+          if (input.taskId) {
+            const linked = this.store.task(input.taskId);
+            const priorId =
+              linked.projectId ??
+              linked.events.findLast(
+                (event) => event.type === "project.initialized",
+              )?.data?.projectId;
+            if (priorId)
+              throw new Error(
+                "这项工作已经关联项目，请在项目页查看和继续讨论。",
+              );
+          }
+          const initializedGoalVersion = input.taskId
+            ? this.store.task(input.taskId).goalVersion
+            : undefined;
+          if (input.taskId) {
+            const task = this.runtimeTask(input.taskId);
+            const current = task.artifacts
+              .filter(
+                (a) =>
+                  a.format === "md" &&
+                  a.content &&
+                  a.goalVersion === task.goalVersion,
+              )
+              .map((a) => `## ${a.title}\n${a.content}`)
+              .join("\n\n");
+            input.description =
+              `${input.description}\n\n## 团队讨论目标\n${task.goal}\n\n${current}`.slice(
+                0,
+                150000,
+              );
+          }
+          const result = await initializeProject(
+            settings.aiRoot,
+            settings.codeRoot,
+            input,
+          );
+          if (input.taskId)
+            this.store.event(input.taskId, {
+              type: "project.initialized",
+              member: "cto",
+              summary:
+                this.store.task(input.taskId).goalVersion ===
+                initializedGoalVersion
+                  ? `已建立项目 ${result.project.name}，可交给 Codex。`
+                  : `已按目标版本 ${initializedGoalVersion} 建立项目 ${result.project.name}；目标后来有更新，请审阅项目文档。`,
+              goalVersion: initializedGoalVersion!,
+              data: {
+                projectId: result.project.id,
+                devPath: result.project.devPath,
+                checks: result.checks,
+              },
+            });
+          await this.refreshSystem();
+        })();
+        this.projectInitializations.set(key, pending);
+        try {
+          await pending;
+        } finally {
+          this.projectInitializations.delete(key);
         }
-        const result = await initializeProject(
-          settings.aiRoot,
-          settings.codeRoot,
-          input,
-        );
-        if (input.taskId)
-          this.store.event(input.taskId, {
-            type: "project.initialized",
-            member: "cto",
-            summary:
-              this.store.task(input.taskId).goalVersion ===
-              initializedGoalVersion
-                ? `已建立项目 ${result.project.name}，可交给 Codex。`
-                : `已按目标版本 ${initializedGoalVersion} 建立项目 ${result.project.name}；目标后来有更新，请审阅项目文档。`,
-            goalVersion: initializedGoalVersion!,
-            data: {
-              projectId: result.project.id,
-              devPath: result.project.devPath,
-              checks: result.checks,
-            },
-          });
-        await this.refreshSystem();
         break;
       }
       default:
         throw new Error("此操作需要桌面应用。");
     }
+    if (this.closing) throw new Error("工作台正在关闭。");
     const snapshot = await this.snapshot();
+    if (replyScope !== undefined && replyScope !== this.browserScope)
+      throw new Error("项目目录设置已变化，请重新选择文件。");
+    snapshot.projectBrowser = this.projectBrowser;
     this.changed(snapshot);
-    return snapshot;
+    return browserReply
+      ? { ...snapshot, projectBrowser: browserReply }
+      : snapshot;
   }
-  private startGoogleProbe(profile: ModelProfile): Promise<HostedProbeResult> {
+  private startProfileProbe(profile: ModelProfile): Promise<HostedProbeResult> {
     const existing = this.probes.get(profile.id);
     if (existing) return existing.promise;
     const controller = new AbortController();
@@ -660,9 +832,14 @@ export class WorkbenchService {
       controller.signal,
       AbortSignal.timeout(90_000),
     ]);
-    const promise = this.probeGoogleAgent(profile, signal).finally(() =>
-      this.probes.delete(profile.id),
-    );
+    const promise = (
+      profile.execution === "google-agent"
+        ? this.probeGoogleAgent(profile, signal)
+        : probeProfile(profile, this.readKey, {
+            signal,
+            modelFactory: this.options.modelFactory,
+          })
+    ).finally(() => this.probes.delete(profile.id));
     this.probes.set(profile.id, { controller, promise });
     return promise;
   }
@@ -710,10 +887,25 @@ export class WorkbenchService {
       this.runtime.stopAll(),
       this.scanning,
       this.stopProbes(),
+      ...this.documentSaves.values(),
+      ...this.projectInitializations.values(),
     ]);
     if (this.updateTimer) clearTimeout(this.updateTimer);
     this.store.close();
   }
+}
+function profileConnectionKey(profile: ModelProfile): string {
+  return JSON.stringify([
+    profile.provider,
+    profile.protocol,
+    profile.execution ?? "model",
+    profile.baseURL.trim().replace(/\/$/, "") ||
+      (profile.protocol === "google"
+        ? "https://generativelanguage.googleapis.com/v1beta"
+        : ""),
+    profile.modelId.trim(),
+    profile.apiKeyEnv.trim(),
+  ]);
 }
 function requireText(value: unknown, max: number, label: string): string {
   if (typeof value !== "string" || !value.trim() || value.length > max)

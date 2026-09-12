@@ -640,7 +640,7 @@ test("process view exposes real delegation and public summaries without raw reas
   ];
   await withWorkbench(workbenchSnapshot([task]), async ({ document }) => {
     assert.equal(document.querySelectorAll(".agent-lane").length, 2);
-    assert.ok(document.body.textContent?.includes("统筹 委派"));
+    assert.ok(document.body.textContent?.includes("由统筹委派"));
     assert.ok(
       document.body.textContent?.includes(
         "两份资料的统计口径不同，需要分别比较。",
@@ -1085,7 +1085,7 @@ test("project discussions keep separate drafts, attach a project on send, and le
       );
     };
     await click(".primary-nav button:nth-child(2)");
-    await click(".local-project-card:nth-child(1) .local-project-title");
+    await click('[aria-label="选择项目 alpha"]');
     assert.equal(
       document.querySelector(".project-decision-header h2")?.textContent,
       "alpha",
@@ -1094,14 +1094,14 @@ test("project discussions keep separate drafts, attach a project on send, and le
     const draftA = document.querySelector<HTMLTextAreaElement>(
       ".project-decision textarea",
     )!.value;
-    await click(".local-project-card:nth-child(2) .local-project-title");
+    await click('[aria-label="选择项目 beta"]');
     assert.equal(
       document.querySelector<HTMLTextAreaElement>(".project-decision textarea")!
         .value,
       "",
     );
     await click(".project-discussion-seeds button:nth-child(2)");
-    await click(".local-project-card:nth-child(1) .local-project-title");
+    await click('[aria-label="选择项目 alpha"]');
     assert.equal(
       document.querySelector<HTMLTextAreaElement>(".project-decision textarea")!
         .value ||
@@ -1206,7 +1206,7 @@ test("a delayed project creation preserves a newer returned-to-project draft and
         return concurrent;
       };
       await click(".primary-nav button:nth-child(2)");
-      await click(".local-project-card:nth-child(1) .local-project-title");
+      await click('[aria-label="选择项目 alpha"]');
       await click(".project-discussion-seeds button:nth-child(1)");
       const submittedText = text();
       await act(async () =>
@@ -1222,8 +1222,8 @@ test("a delayed project creation preserves a newer returned-to-project draft and
         commands.filter((command) => command.type === "task.run").length,
         0,
       );
-      await click(".local-project-card:nth-child(2) .local-project-title");
-      await click(".local-project-card:nth-child(1) .local-project-title");
+      await click('[aria-label="选择项目 beta"]');
+      await click('[aria-label="选择项目 alpha"]');
       await click(".project-discussion-seeds button:nth-child(2)");
       const newerText = text();
       assert.notEqual(newerText, submittedText);
@@ -1233,8 +1233,8 @@ test("a delayed project creation preserves a newer returned-to-project draft and
         newerText,
         "the old component cannot replace the newer mounted draft",
       );
-      await click(".local-project-card:nth-child(2) .local-project-title");
-      await click(".local-project-card:nth-child(1) .local-project-title");
+      await click('[aria-label="选择项目 beta"]');
+      await click('[aria-label="选择项目 alpha"]');
       assert.equal(
         text(),
         newerText,
@@ -1257,4 +1257,306 @@ test("a delayed project creation preserves a newer returned-to-project draft and
       );
     },
   );
+});
+
+test("long decision replies open intact in results and saving the detail stays pending until the document returns", async () => {
+  const task = taskFixture("decision-detail-regression", false);
+  const detail =
+    "# 分析报告\n\n" +
+    "背景与证据需要保留。".repeat(70) +
+    "\n\n## 结论\n\n先完成核心体验，再扩展外围能力。\n\n完整报告末尾标记：ORCHID-END。";
+  task.messages[1]!.content = detail;
+  const snap = workbenchSnapshot([task]);
+  await withWorkbench(
+    snap,
+    async ({ document, window, commands, emit, act }) => {
+      const decision = document.querySelector(".pane-main .message.assistant")!;
+      assert.match(decision.textContent!, /先完成核心体验/);
+      assert.doesNotMatch(decision.textContent!, /ORCHID-END/);
+      assert.ok(
+        decision.textContent!.length < 250,
+        "the decision surface stays concise while preserving full text elsewhere",
+      );
+      assert.equal(
+        document.querySelector(".pane-main .task-run-control"),
+        null,
+        "a completed task must not offer a redundant continue action",
+      );
+      const invoke = window.ytriple!.invoke;
+      let current = snap;
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      window.ytriple!.invoke = async (command) => {
+        if (command.type === "message.save") {
+          commands.push(command);
+          await gate;
+          const next = structuredClone(current);
+          const savedTask = next.tasks.find(
+            (item) => item.id === command.taskId,
+          )!;
+          const source = savedTask.messages.find(
+            (item) => item.id === command.messageId,
+          )!;
+          const artifact = {
+            ...savedTask.artifacts[0]!,
+            id: "saved-detail-regression",
+            title: "完整答复文档",
+            content: source.content,
+          };
+          savedTask.artifacts.push(artifact);
+          savedTask.events.push({
+            id: "saved-detail-event",
+            type: "message.saved",
+            summary: "已保存为文档",
+            createdAt: savedTask.updatedAt,
+            goalVersion: savedTask.goalVersion,
+            data: { messageId: command.messageId, artifactId: artifact.id },
+          });
+          current = next;
+          emit(next);
+          return next;
+        }
+        const result = await invoke(command);
+        if (command.type === "window.rightMode") {
+          result.desktop!.rightMode = command.mode;
+          emit(result);
+        }
+        current = result;
+        return result;
+      };
+      await act(async () =>
+        decision
+          .querySelector("button")!
+          .dispatchEvent(new window.Event("click", { bubbles: true })),
+      );
+      const right = document.querySelector(
+        '.pane-artifact [aria-label="对话完整内容"]',
+      )!;
+      assert.ok(right, "full answer is shown in the product's result pane");
+      assert.match(right.textContent!, /ORCHID-END/);
+      assert.ok(right.textContent!.includes("背景与证据需要保留。".repeat(70)));
+      assert.ok(
+        commands.some(
+          (command) =>
+            command.type === "window.rightMode" && command.mode === "artifact",
+        ),
+      );
+      const save = Array.from(
+        right.querySelectorAll<HTMLButtonElement>("button"),
+      ).find((button) => button.textContent === "保存为文档")!;
+      await act(async () =>
+        save.dispatchEvent(new window.Event("click", { bubbles: true })),
+      );
+      assert.equal(save.disabled, true);
+      assert.equal(save.textContent, "保存中…");
+      await act(async () =>
+        save.dispatchEvent(new window.Event("click", { bubbles: true })),
+      );
+      assert.equal(
+        commands.filter((command) => command.type === "message.save").length,
+        1,
+        "pending clicks must not create another save request",
+      );
+      await act(async () => release());
+      assert.equal(document.querySelector('[aria-label="对话完整内容"]'), null);
+      assert.match(
+        document.querySelector(
+          ".pane-artifact .artifact-reader > div:not([hidden]) .artifact-heading h3",
+        )!.textContent!,
+        /完整答复文档/,
+      );
+      assert.match(
+        document.querySelector(".pane-artifact")!.textContent!,
+        /ORCHID-END/,
+      );
+      assert.equal(
+        task.messages[1]!.content,
+        detail,
+        "the original answer remains unchanged",
+      );
+    },
+  );
+});
+
+test("recent-work menus archive and recover deleted work without executing it or losing saved artifacts", async () => {
+  const task = taskFixture("managed-work-regression", false);
+  const snap = workbenchSnapshot([task]);
+  await withWorkbench(
+    snap,
+    async ({ document, window, commands, emit, act }) => {
+      const invoke = window.ytriple!.invoke;
+      window.ytriple!.invoke = async (command) => {
+        const result = await invoke(command);
+        if (
+          command.type === "task.archive" ||
+          command.type === "task.delete" ||
+          command.type === "task.restore"
+        ) {
+          const item = result.tasks.find((item) => item.id === command.taskId)!;
+          if (command.type === "task.archive")
+            item.archivedAt = "2026-09-11T12:01:00.000Z";
+          else if (command.type === "task.delete")
+            item.deletedAt = "2026-09-11T12:02:00.000Z";
+          else {
+            delete item.archivedAt;
+            delete item.deletedAt;
+          }
+          emit(result);
+        }
+        return result;
+      };
+      const click = async (element: Element | null | undefined) => {
+        assert.ok(element);
+        await act(async () =>
+          element.dispatchEvent(new window.Event("click", { bubbles: true })),
+        );
+      };
+      const menuButton = (text: string) =>
+        Array.from(
+          document.querySelectorAll(".work-item-row .work-item-popover button"),
+        ).find((button) => button.textContent === text);
+      await click(document.querySelector('.topbar [aria-label="展开侧栏"]'));
+      const menu = document.querySelector(
+        '[aria-label="管理工作：' + task.title + '"]',
+      );
+      assert.ok(menu, "every recent task has an accessible secondary menu");
+      await click(menuButton("重命名"));
+      assert.ok(document.querySelector('[aria-label="工作名称"]'));
+      await click(document.querySelector('[aria-label="取消重命名"]'));
+      assert.ok(
+        !commands.some((command) => command.type === "task.rename"),
+        "canceling a rename does not change the task",
+      );
+      await click(menuButton("归档"));
+      assert.equal(document.querySelector(".work-item"), null);
+      assert.match(
+        document.querySelector(".work-history")!.textContent!,
+        /归档/,
+      );
+      assert.equal(document.querySelector(".pane-main .task-overview"), null);
+      await click(
+        document.querySelector('[aria-label="恢复工作：' + task.title + '"]'),
+      );
+      assert.match(
+        document.querySelector(".work-item")!.textContent!,
+        new RegExp(task.title),
+      );
+      await click(document.querySelector(".work-item"));
+      await click(menuButton("移到最近删除"));
+      assert.equal(document.querySelector(".work-item"), null);
+      assert.match(
+        document.querySelector(".work-history")!.textContent!,
+        /最近删除/,
+      );
+      await click(
+        document.querySelector('[aria-label="恢复工作：' + task.title + '"]'),
+      );
+      await click(document.querySelector(".work-item"));
+      assert.match(
+        document.querySelector(".pane-artifact")!.textContent!,
+        /研究任务的独有成果正文/,
+      );
+      assert.deepEqual(
+        commands.filter((command) =>
+          ["task.archive", "task.delete", "task.restore"].includes(
+            command.type,
+          ),
+        ),
+        [
+          { type: "task.archive", taskId: task.id },
+          { type: "task.restore", taskId: task.id },
+          { type: "task.delete", taskId: task.id },
+          { type: "task.restore", taskId: task.id },
+        ],
+      );
+      assert.ok(
+        !commands.some(
+          (command) =>
+            command.type === "task.run" || command.type === "task.send",
+        ),
+        "restoring work is navigation, not a request to rerun the model",
+      );
+    },
+  );
+});
+
+test("project viewer and decision widths support keyboard resizing and restore the saved split on remount", async () => {
+  const snap = workbenchSnapshot([
+    taskFixture("project-width-regression", true),
+  ]);
+  await withWorkbench(snap, async ({ document, window, commands, act }) => {
+    await act(async () =>
+      document
+        .querySelector(".primary-nav button:nth-child(2)")!
+        .dispatchEvent(new window.Event("click", { bubbles: true })),
+    );
+    const divider = document.querySelector<HTMLElement>(
+      '[aria-label="调整项目查看区与决策区宽度"]',
+    )!;
+    assert.equal(divider.getAttribute("role"), "separator");
+    assert.equal(divider.getAttribute("tabindex"), "0");
+    const initial = Number(divider.getAttribute("aria-valuenow"));
+    await act(async () =>
+      divider.dispatchEvent(keyEvent(window, "ArrowRight")),
+    );
+    const wider = Number(divider.getAttribute("aria-valuenow"));
+    assert.ok(wider > initial);
+    const width = window.localStorage.getItem(
+      "ytriple.projects.viewer-width.v1",
+    );
+    assert.ok(
+      width && Math.round(Number(width) * 100) === wider,
+      "the chosen width is persisted independently from workbench panes",
+    );
+    assert.ok(
+      document
+        .querySelector<HTMLElement>(".projects-layout")!
+        .style.gridTemplateColumns.includes(`${Number(width)}fr`),
+    );
+    const { createElement } = await import("react");
+    const { createRoot } = await import("react-dom/client");
+    const { ProjectWorkspace } =
+      await import("../src/workbench/ProjectWorkspace.js");
+    const mount = document.createElement("div");
+    document.body.append(mount);
+    const root = createRoot(mount);
+    try {
+      await act(async () =>
+        root.render(
+          createElement(ProjectWorkspace, {
+            hidden: false,
+            children: [
+              createElement("div", null, "文件与查看区"),
+              createElement("div", null, "决策区"),
+            ],
+          }),
+        ),
+      );
+      const restored = mount.querySelector('[role="separator"]')!;
+      assert.equal(Number(restored.getAttribute("aria-valuenow")), wider);
+      await act(async () => restored.dispatchEvent(keyEvent(window, "Home")));
+      assert.equal(
+        restored.getAttribute("aria-valuenow"),
+        restored.getAttribute("aria-valuemin"),
+      );
+      await act(async () => restored.dispatchEvent(keyEvent(window, "End")));
+      assert.equal(
+        restored.getAttribute("aria-valuenow"),
+        restored.getAttribute("aria-valuemax"),
+      );
+    } finally {
+      await act(async () => root.unmount());
+      mount.remove();
+    }
+    assert.ok(
+      !commands.some(
+        (command) =>
+          command.type === "window.resize" ||
+          command.type === "task.run" ||
+          command.type === "task.create",
+      ),
+    );
+  });
 });

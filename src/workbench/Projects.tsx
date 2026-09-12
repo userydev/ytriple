@@ -1,244 +1,24 @@
-import { useId, useState } from "react";
+import { useState } from "react";
 import {
   ArrowRight,
-  ArrowUpRight,
-  ChevronDown,
-  FileText,
-  Folder,
-  GitBranch,
   MessageSquare,
   Pause,
   Play,
   Plus,
   RefreshCw,
-  Search,
   Sprout,
 } from "lucide-react";
 import type { ProjectInfo, ProjectInput, Snapshot } from "../shared/types";
-import { type Dispatch } from "./common";
+import { Modal, type Dispatch } from "./common";
+import { ProjectExplorer } from "./ProjectExplorer";
 
-const DOC_NAMES: Record<string, string> = {
-  entry: "项目入口",
-  product: "产品文档",
-  research: "调研",
-  rules: "项目规则",
-  external_ai_writeback: "文档目录",
-};
-const STATE_NAMES = {
-  ready: "已检查",
-  attention: "待留意",
-  missing: "目录缺失",
-  error: "检查失败",
-};
 const clock = (value?: string) =>
   value
     ? new Date(value).toLocaleTimeString("zh-CN", {
         hour: "2-digit",
         minute: "2-digit",
-        second: "2-digit",
       })
     : "尚未读取";
-
-function ProjectCard({
-  project,
-  dispatch,
-  selected,
-  onSelect,
-  onDiscuss,
-}: {
-  project: ProjectInfo;
-  dispatch: Dispatch;
-  selected: boolean;
-  onSelect?: (project: ProjectInfo) => void;
-  onDiscuss?: (project: ProjectInfo) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const detailId = useId();
-  const observation = project.observation;
-  const changed =
-    observation?.worktrees.reduce(
-      (sum, item) => sum + (item.changedFiles ?? 0),
-      0,
-    ) ?? 0;
-  const gitComplete = Boolean(
-    observation?.worktrees.length &&
-    observation.worktrees.every((worktree) => worktree.state === "ready"),
-  );
-  const readableDocuments =
-    observation?.documents.filter((document) => document.state === "present")
-      .length ?? 0;
-  return (
-    <article
-      className={`local-project-card ${selected ? "selected" : ""}`}
-      aria-label={`项目 ${project.name}`}
-    >
-      <div className="local-project-top">
-        <div className="local-project-symbol">
-          <Folder size={21} strokeWidth={1.5} />
-        </div>
-        <div className="local-project-identity">
-          <span className="local-project-category">
-            <span className="series-label">{project.series}</span>
-            <span
-              className={`project-registration ${project.registered ? "registered" : "discovered"}`}
-            >
-              {project.registered ? "已登记" : "本地发现"}
-            </span>
-          </span>
-          <button
-            className="local-project-title"
-            aria-label={`选择项目 ${project.name}`}
-            aria-pressed={onSelect ? selected : undefined}
-            aria-expanded={onSelect ? undefined : expanded}
-            onClick={() =>
-              onSelect ? onSelect(project) : setExpanded((value) => !value)
-            }
-          >
-            {project.name}
-          </button>
-        </div>
-        <span className={`project-health ${observation?.state ?? "unknown"}`}>
-          {observation ? STATE_NAMES[observation.state] : "尚未观察"}
-        </span>
-      </div>
-      <code className="local-project-path" title={project.root}>
-        {project.root}
-      </code>
-      <div className="local-project-summary">
-        <span>
-          <GitBranch size={12} />
-          {observation?.worktrees.length ?? 0} 个工作目录
-        </span>
-        <span>
-          <FileText size={12} />
-          {readableDocuments} 份项目文档
-        </span>
-      </div>
-      <p className={`local-project-git ${changed ? "has-changes" : ""}`}>
-        {!gitComplete
-          ? "Git 状态尚未完整读取"
-          : changed
-            ? `${changed} 项未提交变更`
-            : "暂无未提交变更"}
-      </p>
-      <div
-        className="local-project-actions"
-        aria-label={`${project.name} 项目操作`}
-      >
-        {onDiscuss ? (
-          <button
-            className="project-discuss-button"
-            onClick={() => {
-              onSelect?.(project);
-              onDiscuss(project);
-            }}
-          >
-            <MessageSquare size={13} />
-            讨论项目
-          </button>
-        ) : null}
-        <button
-          className="text-button project-open-directory"
-          aria-label={`打开 ${project.name} 开发目录`}
-          disabled={
-            observation?.state === "missing" || observation?.state === "error"
-          }
-          onClick={() =>
-            void dispatch({ type: "path.reveal", path: project.devPath })
-          }
-        >
-          <Folder size={13} />
-          目录
-        </button>
-        <button
-          className="text-button project-state-button"
-          onClick={() => setExpanded((value) => !value)}
-          aria-expanded={expanded}
-          aria-controls={detailId}
-        >
-          {expanded ? "收起状态" : "查看状态"}
-          <ChevronDown size={13} className={expanded ? "rotate" : ""} />
-        </button>
-      </div>
-      {expanded ? (
-        <div className="local-project-details" id={detailId}>
-          {observation?.issues.length ? (
-            <div className="project-issues">
-              {observation.issues.map((item, index) => (
-                <p key={`${index}:${item}`}>{item}</p>
-              ))}
-            </div>
-          ) : null}
-          {observation?.worktrees.length ? (
-            <section className="project-detail-group" aria-label="工作目录状态">
-              <h3>工作目录</h3>
-              <div className="project-worktrees">
-                {observation.worktrees.map((worktree) => (
-                  <div key={worktree.path}>
-                    <div>
-                      <GitBranch size={13} />
-                      <strong>
-                        {worktree.branch ??
-                          worktree.expectedBranch ??
-                          "分支未知"}
-                      </strong>
-                      <span>
-                        {worktree.head && worktree.head !== "(initial)"
-                          ? worktree.head.slice(0, 8)
-                          : ""}
-                      </span>
-                    </div>
-                    <code>{worktree.path}</code>
-                    <small>
-                      {worktree.state === "ready"
-                        ? `${worktree.changedFiles ?? 0} 项变更${worktree.expectedBranch && worktree.branch !== worktree.expectedBranch ? ` · 登记分支 ${worktree.expectedBranch}` : ""}`
-                        : worktree.error}
-                    </small>
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : null}
-          {observation?.documents.length ? (
-            <section className="project-detail-group" aria-label="项目文档状态">
-              <h3>项目文档</h3>
-              <div className="project-doc-observations">
-                {observation.documents.map((document) => (
-                  <div key={`${document.name}:${document.path}`}>
-                    <FileText size={13} />
-                    <span>{DOC_NAMES[document.name] ?? document.name}</span>
-                    {document.state === "present" ? (
-                      <button
-                        className="text-button"
-                        aria-label={`查看 ${project.name} ${DOC_NAMES[document.name] ?? document.name}`}
-                        onClick={() =>
-                          void dispatch({
-                            type: "path.reveal",
-                            path: document.path,
-                          })
-                        }
-                      >
-                        查看
-                        <ArrowUpRight size={12} />
-                      </button>
-                    ) : (
-                      <small>
-                        {document.state === "missing" ? "未找到" : "不可读取"}
-                      </small>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </section>
-          ) : null}
-          <p className="project-observed-at">
-            本地观察于 {clock(observation?.checkedAt)} · 刷新后更新
-          </p>
-        </div>
-      ) : null}
-    </article>
-  );
-}
 
 function Initialization({
   snapshot,
@@ -427,24 +207,11 @@ export function Projects({
   onSelectProject?: (project: ProjectInfo) => void;
   onDiscussProject?: (project: ProjectInfo) => void;
 }) {
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<"all" | "registered" | "discovered">(
-    "all",
-  );
   const [initializing, setInitializing] = useState(false);
   const [pending, setPending] = useState(false);
-  const projects = snapshot?.projects ?? [],
-    discovery = snapshot?.projectDiscovery;
+  const discovery = snapshot?.projectDiscovery;
   const monitoring = snapshot?.settings.projectMonitoring !== false;
   const scanning = pending || discovery?.status === "scanning";
-  const visible = projects.filter(
-    (project) =>
-      `${project.name} ${project.root}`
-        .toLowerCase()
-        .includes(query.toLowerCase()) &&
-      (filter === "all" ||
-        Boolean(project.registered) === (filter === "registered")),
-  );
   const refresh = async () => {
     setPending(true);
     try {
@@ -465,182 +232,86 @@ export function Projects({
       setPending(false);
     }
   };
+  const issueCount =
+    (discovery?.errors.length ?? 0) + (discovery?.truncated ? 1 : 0);
   return (
-    <div className="collection-page local-projects-page">
-      <div className="page-heading">
-        <span className="eyebrow">LOCAL PROJECTS</span>
-        <div className="heading-with-action">
+    <div className="local-projects-page project-ide-page">
+      <header className="project-ide-heading">
+        <div>
           <h1>本机项目</h1>
-          <button
-            className="button primary"
-            onClick={() => {
-              setInitializing((value) => !value);
-              if (!snapshot) onInitialize?.();
-            }}
-          >
-            <Plus size={15} />
-            {initializing ? "收起初始化" : "新项目"}
-          </button>
+          <span>{snapshot?.projects.length ?? 0} 个项目</span>
         </div>
-        <p>查看本地状态，选择项目后与团队讨论下一步。</p>
-      </div>
+        <button
+          className="button secondary small"
+          onClick={() => {
+            setInitializing(true);
+            if (!snapshot) onInitialize?.();
+          }}
+        >
+          <Plus size={14} />
+          新建项目
+        </button>
+      </header>
       <section className="project-monitor-bar" aria-label="项目监控">
         <div>
           <span
             className={`project-monitor-light ${monitoring ? "enabled" : ""}`}
           />
-          <strong>{monitoring ? "前台监控已开启" : "前台监控已暂停"}</strong>
-          <small>
-            {scanning
-              ? "正在检查本地状态…"
-              : `上次读取 ${clock(discovery?.checkedAt)}`}
-          </small>
+          <strong>{monitoring ? "前台监控" : "监控已暂停"}</strong>
+          <small>{scanning ? "读取中…" : clock(discovery?.checkedAt)}</small>
         </div>
-        <div>
-          <button
-            className="button secondary small"
-            disabled={scanning || !snapshot}
-            onClick={() => void monitor()}
-          >
-            {monitoring ? <Pause size={13} /> : <Play size={13} />}
-            {monitoring ? "暂停" : "开启监控"}
-          </button>
-          <button
-            className="button secondary small"
-            disabled={scanning || !snapshot}
-            onClick={() => void refresh()}
-          >
-            <RefreshCw size={13} />
-            刷新
-          </button>
-        </div>
-        <code>{snapshot?.settings.codeRoot ?? "正在读取目录"}</code>
-      </section>
-      {discovery &&
-      (discovery.errors.length ||
-        discovery.truncated ||
-        discovery.status === "partial") ? (
-        <div className="project-scan-errors" role="status">
-          <strong>
-            {discovery.status === "failed"
-              ? "这次读取未完成"
-              : "部分目录需要留意"}
-          </strong>
-          {discovery.errors.map((error, index) => (
-            <p key={`${index}:${error}`}>{error}</p>
-          ))}
-          {discovery.truncated ? (
-            <p>本轮达到目录、文件或时间上限；当前结果不代表全部扫描完毕。</p>
-          ) : null}
-          {!discovery.errors.length && !discovery.truncated ? (
-            <p>部分项目的 Git 或文档状态不可读取，可展开项目查看详情。</p>
-          ) : null}
-        </div>
-      ) : null}
-      {discovery?.changes.length ? (
-        <details className="project-changes">
-          <summary>最近一次刷新有 {discovery.changes.length} 项变化</summary>
-          {discovery.changes.map((change) => (
-            <p key={`${change.kind}:${change.projectId}`}>{change.summary}</p>
-          ))}
-        </details>
-      ) : null}
-      {initializing && snapshot ? (
-        <Initialization
-          snapshot={snapshot}
-          dispatch={dispatch}
-          onTask={onTask}
-        />
-      ) : null}
-      <div className="project-toolbar" role="search" aria-label="筛选项目">
-        <label className="project-search">
-          <Search size={15} />
-          <input
-            aria-label="搜索本机项目"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索项目或路径"
-          />
-        </label>
-        <div className="project-filter-tabs">
-          {(
-            [
-              ["all", "全部"],
-              ["registered", "已登记"],
-              ["discovered", "本地发现"],
-            ] as const
-          ).map(([value, label]) => (
-            <button
-              className={filter === value ? "active" : ""}
-              aria-pressed={filter === value}
-              key={value}
-              onClick={() => setFilter(value)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <span>{visible.length} 个项目</span>
-      </div>
-      {visible.length ? (
-        <div className="local-project-grid">
-          {visible.map((project) => (
-            <ProjectCard
-              key={`${project.id}:${project.root}`}
-              project={project}
-              dispatch={dispatch}
-              selected={selectedProjectId === project.id}
-              onSelect={onSelectProject}
-              onDiscuss={onDiscussProject}
-            />
-          ))}
-        </div>
-      ) : (
-        <div className="collection-empty">
-          <Folder size={36} strokeWidth={1.2} />
-          <h2>
-            {query
-              ? "没有找到匹配的项目"
-              : scanning
-                ? "正在读取本机项目"
-                : "当前目录还没有发现项目"}
-          </h2>
-          <p>
-            {query
-              ? "换一个名称或路径关键词。"
-              : "可以刷新 Code 目录，或从上方开始初始化项目。"}
-          </p>
-        </div>
-      )}
-      {onTask && snapshot?.tasks.some((task) => task.kind === "project") ? (
-        <section className="related-work">
-          <h3>项目讨论</h3>
-          {snapshot.tasks
-            .filter((task) => task.kind === "project")
-            .map((task) => (
-              <button
-                className="related-task"
-                key={task.id}
-                onClick={() => onTask(task.id)}
-              >
-                <MessageSquare size={15} />
-                <span>{task.title}</span>
-                <small>
-                  {
-                    {
-                      idle: "待开始",
-                      running: "处理中",
-                      waiting: "等待输入",
-                      paused: "已暂停",
-                      failed: "需处理",
-                      completed: "已完成",
-                    }[task.status]
-                  }
-                </small>
-                <ArrowUpRight size={14} />
-              </button>
+        <button
+          className="text-button"
+          disabled={scanning || !snapshot}
+          onClick={() => void monitor()}
+          title={monitoring ? "暂停前台监控" : "开启前台监控"}
+        >
+          {monitoring ? <Pause size={12} /> : <Play size={12} />}
+          {monitoring ? "暂停" : "开启"}
+        </button>
+        <button
+          className="text-button"
+          disabled={scanning || !snapshot}
+          onClick={() => void refresh()}
+        >
+          <RefreshCw size={12} />
+          刷新状态
+        </button>
+        {issueCount || discovery?.status === "partial" ? (
+          <details className="project-monitor-detail">
+            <summary>扫描提醒{issueCount ? ` · ${issueCount}` : ""}</summary>
+            {discovery?.errors.map((message, index) => (
+              <p key={index}>{message}</p>
             ))}
-        </section>
+            {discovery?.truncated ? (
+              <p>本轮达到扫描上限，当前结果不代表全部目录。</p>
+            ) : null}
+            {!issueCount ? (
+              <p>部分项目状态尚未完整读取，在项目概览查看详情。</p>
+            ) : null}
+          </details>
+        ) : null}
+      </section>
+      <ProjectExplorer
+        snapshot={snapshot}
+        dispatch={dispatch}
+        selectedProjectId={selectedProjectId}
+        onSelectProject={onSelectProject}
+        onDiscussProject={onDiscussProject}
+      />
+      {initializing && snapshot ? (
+        <Modal
+          title="新建项目"
+          description="创建新的规则、文档与开发目录。已有项目可直接在文件树中打开。"
+          wide
+          onClose={() => setInitializing(false)}
+        >
+          <Initialization
+            snapshot={snapshot}
+            dispatch={dispatch}
+            onTask={onTask}
+          />
+        </Modal>
       ) : null}
     </div>
   );

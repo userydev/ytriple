@@ -1,6 +1,9 @@
 import { useEffect, useRef, type ReactNode } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from "rehype-katex";
+import { normalizeMathDelimiters, remarkHeadingIds } from "../shared/markdown";
 import { X } from "lucide-react";
 import {
   MEMBERS,
@@ -37,20 +40,59 @@ export const formatDate = (date: string) => {
 export function Markdown({
   children,
   dispatch,
+  onArtifactLink,
+  onDocumentLink,
 }: {
   children: string;
   dispatch: Dispatch;
+  onArtifactLink?: (artifactId: string) => void;
+  onDocumentLink?: (href: string) => void;
 }) {
+  const container = useRef<HTMLDivElement>(null);
   return (
-    <div className="markdown">
+    <div className="markdown" ref={container}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkMath, remarkHeadingIds]}
+        rehypePlugins={[
+          [
+            rehypeKatex,
+            { trust: false, strict: "ignore", maxExpand: 1000, maxSize: 20 },
+          ],
+        ]}
+        urlTransform={(url) =>
+          /^artifact:[a-zA-Z0-9-]+$/.test(url) ? url : defaultUrlTransform(url)
+        }
         components={{
-          a: ({ href, children }) => (
+          a: ({ href, children, node: _node, ...properties }) => (
             <a
+              {...properties}
               href={href}
               onClick={(event) => {
                 event.preventDefault();
+                if (href?.startsWith("#")) {
+                  let id: string;
+                  try {
+                    id = decodeURIComponent(href.slice(1));
+                  } catch {
+                    return;
+                  }
+                  const target = Array.from(
+                    container.current?.querySelectorAll<HTMLElement>("[id]") ??
+                      [],
+                  ).find((element) => element.id === id);
+                  target?.scrollIntoView({
+                    behavior: "smooth",
+                    block: "start",
+                  });
+                } else if (href?.startsWith("artifact:"))
+                  onArtifactLink?.(href.slice(9));
+                else if (
+                  href &&
+                  !/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href) &&
+                  !href.startsWith("/") &&
+                  !href.startsWith("\\")
+                )
+                  onDocumentLink?.(href);
                 if (href && /^https?:\/\//i.test(href))
                   void dispatch({ type: "url.open", url: href });
               }}
@@ -63,9 +105,19 @@ export function Markdown({
               {alt ? `图片：${alt}` : "图片引用"} · 在原始成果中查看
             </span>
           ),
+          table: ({ children }) => (
+            <div
+              className="markdown-table-scroll"
+              tabIndex={0}
+              role="region"
+              aria-label="表格，可横向滚动"
+            >
+              <table>{children}</table>
+            </div>
+          ),
         }}
       >
-        {children}
+        {normalizeMathDelimiters(children)}
       </ReactMarkdown>
     </div>
   );

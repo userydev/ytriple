@@ -49,6 +49,27 @@ const settings = z.object({
 });
 const schemas = z.discriminatedUnion("type", [
   z.object({
+    type: z.literal("project.browse"),
+    projectId: z.string().min(1).max(200),
+    worktreePath: z.string().max(4000).optional(),
+    path: z.string().max(4000).optional(),
+  }),
+  z.object({
+    type: z.literal("project.read"),
+    projectId: z.string().min(1).max(200),
+    worktreePath: z.string().max(4000).optional(),
+    path: z.string().min(1).max(4000),
+  }),
+  z.object({ type: z.literal("message.save"), ...task, messageId: id }),
+  z.object({
+    type: z.literal("task.rename"),
+    ...task,
+    title: z.string().trim().min(1).max(120),
+  }),
+  z.object({ type: z.literal("task.archive"), ...task }),
+  z.object({ type: z.literal("task.delete"), ...task }),
+  z.object({ type: z.literal("task.restore"), ...task }),
+  z.object({
     type: z.literal("window.rightMode"),
     mode: z.enum(["split", "evidence", "artifact"]),
   }),

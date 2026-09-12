@@ -183,3 +183,15 @@ test("rejects Anthropic endpoints as OpenAI and redacts provider error messages"
     /Coding Plan/,
   );
 });
+
+test("a locally stored key does not require an environment variable name", async () => {
+  const configured = { ...profile("https://example.test/v1"), apiKeyEnv: "" };
+  assert.doesNotThrow(() => validateProfile(configured));
+  await assert.doesNotReject(
+    createConfiguredModel(configured, () => "synthetic-local-key"),
+  );
+  await assert.rejects(
+    createConfiguredModel(configured, () => undefined),
+    /未找到密钥/,
+  );
+});

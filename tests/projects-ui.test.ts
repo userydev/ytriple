@@ -40,23 +40,13 @@ const project: ProjectInfo = {
   },
 };
 
-test("project cards select discussion context without starting work and preserve local state actions", async () => {
+test("project explorer reads selected files without starting work and separates preview from discussion", async () => {
   const snapshot: Snapshot = {
     version: "test",
     dataPath: "/unused",
     tasks: [],
     profiles: [],
-    projects: [
-      project,
-      {
-        ...project,
-        id: "local-project",
-        name: "本地项目",
-        root: "/unused/Code/x/local-project",
-        registered: false,
-        observation: { ...project.observation!, state: "missing" },
-      },
-    ],
+    projects: [project],
     settings: {
       aiRoot: "/unused/AI",
       codeRoot: "/unused/Code",
@@ -77,12 +67,17 @@ test("project cards select discussion context without starting work and preserve
     "<!doctype html><html><body><div id='root'></div></body></html>",
   );
   const originals = new Map<string, PropertyDescriptor | undefined>();
+  const stored = new Map<string, string>();
   for (const [key, value] of Object.entries({
     window,
     document,
     HTMLElement: window.HTMLElement,
     Node: window.Node,
     IS_REACT_ACT_ENVIRONMENT: true,
+    localStorage: {
+      getItem: (key: string) => stored.get(key),
+      setItem: (key: string, value: string) => stored.set(key, value),
+    },
   })) {
     originals.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, {
@@ -94,9 +89,56 @@ test("project cards select discussion context without starting work and preserve
   const { act, createElement, useState } = await import("react");
   const { createRoot } = await import("react-dom/client");
   const { Projects } = await import("../src/workbench/Projects.js");
-  const commands: Command[] = [];
-  const selections: string[] = [];
-  const discussions: string[] = [];
+  const commands: Command[] = [],
+    selections: string[] = [],
+    discussions: string[] = [];
+  let delayedFile: string | undefined;
+  let releaseDelayed: (() => void) | undefined;
+  const dispatch = async (command: Command): Promise<Snapshot> => {
+    commands.push(command);
+    if (command.type === "project.read" && command.path === delayedFile) {
+      delayedFile = undefined;
+      await new Promise<void>((resolve) => {
+        releaseDelayed = resolve;
+      });
+    }
+    if (command.type === "project.browse" || command.type === "project.read") {
+      const directory =
+        command.type === "project.browse"
+          ? (command.path ?? "")
+          : command.path.split("/").slice(0, -1).join("/");
+      return {
+        ...snapshot,
+        projectBrowser: {
+          projectId: project.id,
+          worktreePath: project.devPath,
+          directory,
+          truncated: false,
+          entries: directory
+            ? [{ name: "notes.md", path: "docs/notes.md", kind: "file" }]
+            : [
+                { name: "docs", path: "docs", kind: "directory" },
+                { name: "README.md", path: "README.md", kind: "file" },
+              ],
+          preview:
+            command.type === "project.read"
+              ? {
+                  path: command.path,
+                  name: command.path.split("/").at(-1)!,
+                  format: "markdown",
+                  content:
+                    command.path === "README.md"
+                      ? "# 阅读说明\n\n真正的文件正文"
+                      : "# 研究笔记\n\n另一份文件",
+                  bytes: 40,
+                  truncated: false,
+                }
+              : undefined,
+        },
+      };
+    }
+    return snapshot;
+  };
   function Harness() {
     const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
       null,
@@ -104,10 +146,7 @@ test("project cards select discussion context without starting work and preserve
     return createElement(Projects, {
       snapshot,
       selectedProjectId,
-      dispatch: async (command) => {
-        commands.push(command);
-        return snapshot;
-      },
+      dispatch,
       onSelectProject: (value) => {
         selections.push(value.id);
         setSelectedProjectId(value.id);
@@ -116,76 +155,138 @@ test("project cards select discussion context without starting work and preserve
     });
   }
   const root = createRoot(document.getElementById("root")!);
-  const click = async (element: Element | null) => {
-    assert.ok(element, "the requested action must remain reachable");
+  const click = async (element: Element | null | undefined) => {
+    assert.ok(element, "requested action exists");
     await act(async () => {
       element.dispatchEvent(new window.Event("click", { bubbles: true }));
     });
   };
   try {
     await act(async () => root.render(createElement(Harness)));
-    const card = document.querySelector(
-      '.local-project-card[aria-label="项目 阅读工具"]',
-    )!;
-    assert.match(card.textContent!, /2 项未提交变更/);
-    assert.equal(card.querySelector(".local-project-details"), null);
-    await click(card.querySelector(".local-project-title"));
-    assert.deepEqual(selections, [project.id]);
-    assert.equal(card.classList.contains("selected"), true);
-    assert.equal(commands.length, 0, "selection must not start or change work");
-    await click(card.querySelector(".project-discuss-button"));
-    assert.deepEqual(discussions, [project.id]);
     assert.equal(commands.length, 0);
-
-    await click(card.querySelector(".project-state-button"));
-    assert.match(card.textContent!, /产品文档尚未找到/);
-    assert.match(card.textContent!, /12345678/);
-    await click(card.querySelector('[aria-label="查看 阅读工具 项目入口"]'));
+    assert.match(
+      document.querySelector('[aria-label="项目文件预览"]')!.textContent!,
+      /选择一个项目/,
+    );
+    await click(document.querySelector('[aria-label="选择项目 阅读工具"]'));
+    assert.deepEqual(selections, [project.id]);
     assert.deepEqual(commands.at(-1), {
-      type: "path.reveal",
-      path: project.documents.entry,
+      type: "project.browse",
+      projectId: project.id,
+      worktreePath: project.devPath,
+      path: "",
     });
-    await click(card.querySelector(".project-open-directory"));
+    assert.match(
+      document.querySelector(".project-file-overview")!.textContent!,
+      /2 项未提交变更/,
+    );
+    await click(
+      Array.from(
+        document.querySelectorAll(".project-overview-actions button"),
+      ).find((button) => button.textContent?.includes("讨论项目")),
+    );
+    assert.deepEqual(discussions, [project.id]);
+    assert.equal(
+      commands.some(
+        (command) =>
+          command.type === "task.create" || command.type === "task.run",
+      ),
+      false,
+    );
+    await click(document.querySelector('[aria-label="预览文件 README.md"]'));
     assert.deepEqual(commands.at(-1), {
-      type: "path.reveal",
-      path: project.devPath,
+      type: "project.read",
+      projectId: project.id,
+      worktreePath: project.devPath,
+      path: "README.md",
     });
+    assert.equal(
+      document.querySelector(".project-file-preview .markdown h1")?.textContent,
+      "阅读说明",
+    );
+    assert.match(
+      document.querySelector(".project-file-preview")!.textContent!,
+      /真正的文件正文/,
+    );
+    await click(document.querySelector('[aria-label="目录 docs"]'));
+    assert.deepEqual(commands.at(-1), {
+      type: "project.browse",
+      projectId: project.id,
+      worktreePath: project.devPath,
+      path: "docs",
+    });
+    assert.equal(
+      document.querySelector(".project-file-preview .markdown h1")?.textContent,
+      "阅读说明",
+      "expanding directory preserves the current preview",
+    );
+    await click(
+      document.querySelector('[aria-label="预览文件 docs/notes.md"]'),
+    );
+    assert.equal(
+      document.querySelector(".project-file-preview .markdown h1")?.textContent,
+      "研究笔记",
+    );
     assert.ok(
       document
-        .querySelector('[aria-label="打开 本地项目 开发目录"]')
-        ?.hasAttribute("disabled"),
+        .querySelector('[aria-label="预览文件 docs/notes.md"]')
+        ?.classList.contains("selected"),
     );
-
+    delayedFile = "README.md";
+    await click(document.querySelector('[aria-label="预览文件 README.md"]'));
+    await click(
+      document.querySelector('[aria-label="预览文件 docs/notes.md"]'),
+    );
+    await act(async () => releaseDelayed?.());
+    assert.equal(
+      document.querySelector(".project-file-preview .markdown h1")?.textContent,
+      "研究笔记",
+      "late file reads must not replace the more recently selected document",
+    );
+    await click(
+      Array.from(document.querySelectorAll(".project-preview-bar button")).find(
+        (button) => button.textContent === "项目概览",
+      ),
+    );
+    assert.ok(document.querySelector(".project-file-overview"));
     const monitor = document.querySelector('[aria-label="项目监控"]')!;
     await click(
       Array.from(monitor.querySelectorAll("button")).find((button) =>
         button.textContent?.includes("暂停"),
-      ) ?? null,
+      ),
     );
-    const monitorCommand = commands.at(-1);
-    assert.equal(monitorCommand?.type, "settings.save");
-    if (monitorCommand?.type === "settings.save") {
-      assert.equal(monitorCommand.settings.projectMonitoring, false);
+    const saved = commands.at(-1);
+    assert.equal(saved?.type, "settings.save");
+    if (saved?.type === "settings.save") {
+      assert.equal(saved.settings.projectMonitoring, false);
       assert.deepEqual(
-        monitorCommand.settings.memberProfiles,
+        saved.settings.memberProfiles,
         snapshot.settings.memberProfiles,
       );
     }
     await click(
       Array.from(monitor.querySelectorAll("button")).find((button) =>
-        button.textContent?.includes("刷新"),
-      ) ?? null,
+        button.textContent?.includes("刷新状态"),
+      ),
     );
     assert.deepEqual(commands.at(-1), { type: "project.refresh" });
+    const separator = document.querySelector(
+      '[aria-label="调整文件树与预览宽度"]',
+    )!;
+    const before = Number(separator.getAttribute("aria-valuenow"));
+    const event = new window.Event("keydown", { bubbles: true });
+    Object.defineProperty(event, "key", { value: "ArrowRight" });
+    await act(async () => separator.dispatchEvent(event));
+    assert.equal(Number(separator.getAttribute("aria-valuenow")), before + 20);
+    assert.equal(stored.get("ytriple.projectTreeWidth"), String(before + 20));
     await click(
-      Array.from(document.querySelectorAll(".project-filter-tabs button")).find(
-        (button) => button.textContent === "本地发现",
-      ) ?? null,
+      Array.from(document.querySelectorAll(".project-ide-heading button")).find(
+        (button) => button.textContent?.includes("新建项目"),
+      ),
     );
-    assert.equal(document.querySelectorAll(".local-project-card").length, 1);
     assert.match(
-      document.querySelector(".local-project-card")!.textContent!,
-      /本地项目/,
+      document.querySelector('[role="dialog"]')!.textContent!,
+      /已有项目可直接在文件树中打开/,
     );
   } finally {
     await act(async () => root.unmount());

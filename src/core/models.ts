@@ -74,7 +74,7 @@ export function safeModelError(error: unknown, secret?: string): string {
 export function validateProfile(profile: ModelProfile): void {
   if (!profile.modelId.trim())
     throw new Error(`${profile.name} 尚未填写模型 ID。`);
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(profile.apiKeyEnv))
+  if (profile.apiKeyEnv && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(profile.apiKeyEnv))
     throw new Error("密钥环境变量名称无效。");
   if (profile.protocol === "openai" && !profile.baseURL.trim())
     throw new Error(`${profile.name} 需要明确的 OpenAI 兼容 API 地址。`);
@@ -250,6 +250,7 @@ export interface ProbeResult {
   capabilities: { text: boolean; tools: boolean; streaming: boolean };
   text?: string;
   error?: string;
+  incomplete?: boolean;
 }
 
 /** Synthetic integration checks. No task history, source files, or user documents are sent. */
@@ -259,6 +260,7 @@ export async function probeProfile(
   options: {
     modelFactory?: ModelFactory;
     timeoutMs?: number;
+    signal?: AbortSignal;
   } = {},
 ): Promise<ProbeResult> {
   const capabilities = { text: false, tools: false, streaming: false };
@@ -285,11 +287,18 @@ export async function probeProfile(
     });
     const response = await runner.run(agent, "Reply with exactly TEXT_OK.", {
       maxTurns: 2,
+      signal: options.signal,
     });
     capabilities.text = String(response.finalOutput).includes("TEXT_OK");
     if (!capabilities.text) problems.push("文本探针未返回预期内容");
   } catch (error) {
-    return { capabilities, error: safeModelError(error) };
+    return {
+      capabilities,
+      error: options.signal?.aborted
+        ? "连接测试已停止，请重新测试。"
+        : safeModelError(error),
+      incomplete: options.signal?.aborted,
+    };
   }
   if (!capabilities.text) return { capabilities, error: problems.join("；") };
   const proof = `proof_${randomBytes(8).toString("hex")}`;
@@ -313,12 +322,19 @@ export async function probeProfile(
     });
     const response = await runner.run(agent, "Run the synthetic tool test.", {
       maxTurns: 3,
+      signal: options.signal,
     });
     capabilities.tools = called && String(response.finalOutput).includes(proof);
     if (!capabilities.tools) problems.push("未完成真实工具调用及结果回读");
   } catch (error) {
     problems.push(`工具：${safeModelError(error)}`);
   }
+  if (options.signal?.aborted)
+    return {
+      capabilities,
+      incomplete: true,
+      error: "连接测试已停止，请重新测试。",
+    };
   try {
     const agent = new Agent({
       name: "stream_probe",
@@ -328,6 +344,7 @@ export async function probeProfile(
     const response = await runner.run(agent, "Reply with exactly STREAM_OK.", {
       stream: true,
       maxTurns: 2,
+      signal: options.signal,
     });
     let delta = "";
     for await (const event of response)
@@ -347,6 +364,7 @@ export async function probeProfile(
   return {
     capabilities,
     text: "合成文本、真实工具回读和流式探针已执行。",
+    ...(options.signal?.aborted ? { incomplete: true } : {}),
     ...(problems.length ? { error: problems.join("；") } : {}),
   };
 }

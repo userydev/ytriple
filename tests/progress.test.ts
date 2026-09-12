@@ -142,3 +142,117 @@ test("a completed legacy run does not keep its initial in-progress plan as the c
   assert.equal(lane.latestSummary, "本次处理已完成。");
   assert.equal(lane.reports[0].summary, plan.summary);
 });
+
+test("public analysis classifies only explicit summaries, keeping hosted action states separate", async () => {
+  const { publicAnalysisSection } = await import("../src/shared/progress.js");
+  assert.equal(
+    publicAnalysisSection(event("progress_reported", { stage: "framing" })),
+    "framing",
+  );
+  assert.equal(
+    publicAnalysisSection(event("progress_reported", { stage: "finding" })),
+    "evidence",
+  );
+  assert.equal(
+    publicAnalysisSection(
+      event("progress_reported", { stage: "alternatives" }),
+    ),
+    "alternatives",
+  );
+  assert.equal(
+    publicAnalysisSection(
+      event("progress_reported", { stage: "plan", hosted: true }),
+    ),
+    undefined,
+  );
+  assert.equal(
+    publicAnalysisSection(
+      event("raw_model_stream_event", {
+        stage: "decision",
+        reasoning: "private",
+      }),
+    ),
+    undefined,
+  );
+});
+
+test("member conversation combines actual delegation request and result without exposing other payload fields", async () => {
+  const { buildPublicExchanges } = await import("../src/shared/progress.js");
+  const exchanges = buildPublicExchanges([
+    event("delegation_started", {
+      callId: "c",
+      receiver: "cto",
+      request: "Compare the two designs.",
+      reasoning: "PRIVATE",
+      raw: "PRIVATE",
+    }),
+    event("tool_completed", {
+      callId: "other",
+      receiver: "cto",
+      result: "PRIVATE TOOL BODY",
+    }),
+    event("delegation_completed", {
+      callId: "c",
+      receiver: "cto",
+      result: "Design A supports offline use.",
+      providerData: "PRIVATE",
+    }),
+  ]);
+  assert.equal(exchanges.length, 1);
+  assert.equal(exchanges[0].request, "Compare the two designs.");
+  assert.equal(exchanges[0].response, "Design A supports offline use.");
+  assert.equal(exchanges[0].status, "completed");
+  assert.doesNotMatch(
+    JSON.stringify(exchanges),
+    /PRIVATE|reasoning|providerData/,
+  );
+});
+
+test("interrupted member conversations cannot keep claiming they are working or completed", async () => {
+  const { buildPublicExchanges } = await import("../src/shared/progress.js");
+  const events = [
+    event("delegation_started", {
+      callId: "c",
+      receiver: "cto",
+      request: "Compare.",
+    }),
+  ];
+  assert.equal(buildPublicExchanges(events, "paused")[0].status, "paused");
+  assert.equal(buildPublicExchanges(events, "completed")[0].status, "stale");
+});
+
+test("historical exchanges retain their own run state when a later run pauses", async () => {
+  const { buildPublicExchanges } = await import("../src/shared/progress.js");
+  const events = [
+    event("run_started", { runId: "old" }),
+    event("delegation_completed", {
+      runId: "old",
+      callId: "same-call",
+      receiver: "cto",
+      result: "Old completed response",
+    }),
+    event("delegation_started", {
+      runId: "old",
+      callId: "missing-end",
+      receiver: "cto",
+    }),
+    event("run_completed", { runId: "old" }),
+    event("run_started", { runId: "new" }),
+    event("delegation_started", {
+      runId: "new",
+      callId: "same-call",
+      receiver: "cto",
+    }),
+    event("run_paused", { runId: "new" }),
+  ];
+  const exchanges = buildPublicExchanges(events, "paused");
+  assert.equal(exchanges.length, 3);
+  assert.equal(exchanges[0].status, "completed");
+  assert.equal(exchanges[0].response, "Old completed response");
+  assert.equal(
+    exchanges[1].status,
+    "stale",
+    "a missing completion in a finished old run is unknown, not paused by the new run",
+  );
+  assert.equal(exchanges[2].status, "paused");
+});

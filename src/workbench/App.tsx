@@ -27,6 +27,11 @@ import {
   Link2,
   LoaderCircle,
   Menu,
+  MoreHorizontal,
+  Pencil,
+  Archive,
+  Trash2,
+  RotateCcw,
   MessageSquare,
   Pause,
   Pin,
@@ -52,11 +57,13 @@ import {
   type TaskKind,
   type WindowKind,
 } from "../shared/types";
+import { decisionExcerpt } from "./decision-summary";
 import { ArtifactList, SourceList } from "./Artifacts";
 import { Settings } from "./Settings";
 import { Library } from "./Library";
 import { ProcessView } from "./ProcessView";
 import { Projects } from "./Projects";
+import { ProjectWorkspace } from "./ProjectWorkspace";
 import { WorkspaceControls } from "./WindowControls";
 import { WorkspacePanels } from "./WorkspacePanels";
 import {
@@ -172,6 +179,7 @@ function TaskControl({ task, dispatch }: { task: Task; dispatch: Dispatch }) {
     });
     setPending(false);
   };
+  if (task.status === "completed") return null;
   return (
     <button
       className="text-button task-run-control"
@@ -190,11 +198,149 @@ function TaskControl({ task, dispatch }: { task: Task; dispatch: Dispatch }) {
           ? "停止中…"
           : "正在开始…"
         : stoppable
-          ? "停止"
+          ? "暂停工作"
           : task.status === "idle"
-            ? "开始"
-            : "继续"}
+            ? "开始处理"
+            : task.status === "failed"
+              ? "重试本次工作"
+              : "恢复暂停的工作"}
     </button>
+  );
+}
+
+function TaskNavigationItem({
+  task,
+  active,
+  onTask,
+  dispatch,
+}: {
+  task: Task;
+  active: boolean;
+  onTask: (id: string) => void;
+  dispatch: Dispatch;
+}) {
+  const [renaming, setRenaming] = useState(false);
+  const [title, setTitle] = useState(task.title);
+  const [pending, setPending] = useState(false);
+  const menu = useRef<HTMLDetailsElement>(null);
+  const [menuPosition, setMenuPosition] = useState({ left: 0, top: 0 });
+  const act = async (command: Command) => {
+    menu.current?.removeAttribute("open");
+    setPending(true);
+    const result = await dispatch(command);
+    setPending(false);
+    if (result) setRenaming(false);
+  };
+  return (
+    <div className={`work-item-row ${active ? "active" : ""}`}>
+      {renaming ? (
+        <form
+          className="work-rename"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void act({ type: "task.rename", taskId: task.id, title });
+          }}
+        >
+          <input
+            aria-label="工作名称"
+            value={title}
+            maxLength={120}
+            onChange={(event) => setTitle(event.target.value)}
+            autoFocus
+          />
+          <button
+            type="submit"
+            disabled={pending || !title.trim()}
+            aria-label="保存工作名称"
+          >
+            <Check size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setRenaming(false)}
+            aria-label="取消重命名"
+          >
+            <X size={13} />
+          </button>
+        </form>
+      ) : (
+        <>
+          <button
+            className={`work-item ${active ? "active" : ""}`}
+            onClick={() => onTask(task.id)}
+          >
+            <span className={`work-dot ${task.status}`} />
+            <span className="work-title">{task.title}</span>
+            {task.status === "running" ? (
+              <LoaderCircle size={12} className="spin" />
+            ) : null}
+          </button>
+          <details
+            className="work-item-menu"
+            ref={menu}
+            onToggle={(event) => {
+              if (event.currentTarget.open) {
+                const rect = event.currentTarget.getBoundingClientRect();
+                setMenuPosition({
+                  left: Math.max(
+                    8,
+                    Math.min(window.innerWidth - 174, rect.right - 160),
+                  ),
+                  top: Math.max(
+                    8,
+                    Math.min(window.innerHeight - 130, rect.bottom + 4),
+                  ),
+                });
+              }
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                menu.current?.removeAttribute("open");
+                menu.current?.querySelector("summary")?.focus();
+              }
+            }}
+            onBlur={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget))
+                menu.current?.removeAttribute("open");
+            }}
+          >
+            <summary aria-label={`管理工作：${task.title}`}>
+              <MoreHorizontal size={15} />
+            </summary>
+            <div className="work-item-popover" style={menuPosition}>
+              <button
+                disabled={pending}
+                onClick={() => {
+                  setTitle(task.title);
+                  setRenaming(true);
+                }}
+              >
+                <Pencil size={13} />
+                重命名
+              </button>
+              <button
+                disabled={pending}
+                onClick={() =>
+                  void act({ type: "task.archive", taskId: task.id })
+                }
+              >
+                <Archive size={13} />
+                归档
+              </button>
+              <button
+                disabled={pending}
+                onClick={() =>
+                  void act({ type: "task.delete", taskId: task.id })
+                }
+              >
+                <Trash2 size={13} />
+                移到最近删除
+              </button>
+            </div>
+          </details>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -210,6 +356,7 @@ function Sidebar({
   onClose,
   pinned,
   onPin,
+  dispatch,
 }: {
   snapshot: Snapshot | null;
   page: Page;
@@ -222,7 +369,14 @@ function Sidebar({
   onClose: () => void;
   pinned: boolean;
   onPin: () => void;
+  dispatch: Dispatch;
 }) {
+  const recent =
+    snapshot?.tasks.filter((task) => !task.archivedAt && !task.deletedAt) ?? [];
+  const archived =
+    snapshot?.tasks.filter((task) => task.archivedAt && !task.deletedAt) ?? [];
+  const deleted = snapshot?.tasks.filter((task) => task.deletedAt) ?? [];
+  const [settingsOpen, setSettingsOpen] = useState(false);
   return (
     <aside className={`sidebar ${collapsed ? "sidebar-hidden" : ""}`}>
       <div className="sidebar-brand">
@@ -271,24 +425,20 @@ function Sidebar({
       </nav>
       <div className="work-list-heading">
         <span>最近的工作</span>
-        {snapshot?.tasks.length ? <span>{snapshot.tasks.length}</span> : null}
+        {recent.length ? <span>{recent.length}</span> : null}
       </div>
       <div className="work-list">
-        {snapshot?.tasks.length ? (
-          [...snapshot.tasks]
+        {recent.length ? (
+          [...recent]
             .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
             .map((task) => (
-              <button
-                className={`work-item ${page === "work" && selectedTaskId === task.id ? "active" : ""}`}
+              <TaskNavigationItem
                 key={task.id}
-                onClick={() => onTask(task.id)}
-              >
-                <span className={`work-dot ${task.status}`} />
-                <span className="work-title">{task.title}</span>
-                {task.status === "running" ? (
-                  <LoaderCircle size={12} className="spin" />
-                ) : null}
-              </button>
+                task={task}
+                active={page === "work" && selectedTaskId === task.id}
+                onTask={onTask}
+                dispatch={dispatch}
+              />
             ))
         ) : (
           <p className="sidebar-empty">
@@ -299,36 +449,64 @@ function Sidebar({
         )}
       </div>
       <div className="sidebar-bottom">
-        <div className="workspace-stamp">
-          <span className="workspace-monogram">Y</span>
-          <div>
-            <strong>我的工作空间</strong>
-            <span>
-              <span className={`tiny-dot ${connected ? "green" : ""}`} />
-              {connected ? "本机 · 前台运行" : "桌面连接未接入"}
-            </span>
-          </div>
-        </div>
-        <nav className="configuration-nav" aria-label="工作台配置">
-          <span className="nav-section-label">配置</span>
-          {(
-            [
-              { id: "team", label: "Agent 团队", icon: Bot },
-              { id: "models", label: "AI 模型", icon: Cpu },
-              { id: "environment", label: "本机设置", icon: Settings2 },
-            ] as const
-          ).map((item) => (
-            <button
-              key={item.id}
-              className={`settings-nav ${page === item.id ? "active" : ""}`}
-              onClick={() => onPage(item.id)}
-            >
-              <item.icon size={16} />
-              {item.label}
-              <ChevronRight size={14} />
-            </button>
-          ))}
-        </nav>
+        {[
+          { label: "归档", items: archived },
+          { label: "最近删除", items: deleted },
+        ].map((group) =>
+          group.items.length ? (
+            <details className="work-history" key={group.label}>
+              <summary>
+                {group.label}
+                <span>{group.items.length}</span>
+              </summary>
+              {group.items.map((item) => (
+                <div key={item.id}>
+                  <span title={item.title}>{item.title}</span>
+                  <button
+                    className="icon-button"
+                    title="恢复工作"
+                    aria-label={`恢复工作：${item.title}`}
+                    onClick={() =>
+                      void dispatch({ type: "task.restore", taskId: item.id })
+                    }
+                  >
+                    <RotateCcw size={13} />
+                  </button>
+                </div>
+              ))}
+            </details>
+          ) : null,
+        )}
+        <details
+          className="sidebar-settings-group"
+          open={settingsOpen || isSettingsPage(page)}
+          onToggle={(event) => setSettingsOpen(event.currentTarget.open)}
+        >
+          <summary>
+            <Settings2 size={16} />
+            设置
+            <ChevronDown size={13} />
+          </summary>
+          <nav className="configuration-nav" aria-label="工作台配置">
+            {(
+              [
+                { id: "team", label: "Agent 团队", icon: Bot },
+                { id: "models", label: "AI 模型", icon: Cpu },
+                { id: "environment", label: "本机设置", icon: Settings2 },
+              ] as const
+            ).map((item) => (
+              <button
+                key={item.id}
+                className={`settings-nav ${page === item.id ? "active" : ""}`}
+                onClick={() => onPage(item.id)}
+              >
+                <item.icon size={16} />
+                {item.label}
+                <ChevronRight size={14} />
+              </button>
+            ))}
+          </nav>
+        </details>
       </div>
     </aside>
   );
@@ -555,25 +733,31 @@ function ProjectDecision({
   drafts,
   onOpenTask,
   onConfigure,
+  onDetail,
+  onArtifact,
 }: {
   project?: ProjectInfo;
   snapshot: Snapshot | null;
   dispatch: Dispatch;
   connected: boolean;
   drafts: Map<string, ComposerDraft>;
+  onDetail: (task: Task, message: Task["messages"][number]) => void;
+  onArtifact: (task: Task, artifactId: string) => void;
   onOpenTask: (id: string) => void;
   onConfigure: () => void;
 }) {
   const related =
     snapshot?.tasks.filter(
       (task) =>
-        (project && task.projectId === project.id) ||
-        (project &&
-          task.events.some(
-            (event) =>
-              event.type === "project.initialized" &&
-              event.data?.projectId === project.id,
-          )),
+        !task.archivedAt &&
+        !task.deletedAt &&
+        ((project && task.projectId === project.id) ||
+          (project &&
+            task.events.some(
+              (event) =>
+                event.type === "project.initialized" &&
+                event.data?.projectId === project.id,
+            ))),
     ) ?? [];
   const [chosenTaskId, setChosenTaskId] = useState<string | null>(() =>
     drafts.get(`project:${project?.id}:new`)?.text
@@ -728,7 +912,13 @@ function ProjectDecision({
                   <ArrowUpRight size={13} />
                 </button>
               </div>
-              <Conversation key={task.id} task={task} dispatch={dispatch} />
+              <Conversation
+                key={task.id}
+                task={task}
+                dispatch={dispatch}
+                onDetail={(message) => onDetail(task, message)}
+                onArtifact={(id) => onArtifact(task, id)}
+              />
             </>
           ) : (
             <div className="project-discussion-intro">
@@ -796,7 +986,7 @@ function ProjectDecision({
           </span>
           <h3>选一个项目，开始交流</h3>
           <p>
-            从左侧项目卡片进入。
+            从左侧文件系统选择项目。
             <br />
             这里保留决策与讨论，过程和成果可随时回到工作台查看。
           </p>
@@ -810,6 +1000,12 @@ function userMessageText(
   task: Task,
   message: Task["messages"][number],
 ): string {
+  if (
+    task.projectId &&
+    message.content.startsWith("围绕本机项目") &&
+    message.content.includes("我的问题：")
+  )
+    return message.content.split("我的问题：").slice(1).join("我的问题：");
   if (!message.content.startsWith("继续处理已选成果")) return message.content;
   const request = task.events.find(
     (event) =>
@@ -823,7 +1019,17 @@ function userMessageText(
   return `继续处理《${artifact?.title ?? "选定成果"}》：\n${request.data.instruction}`;
 }
 
-function Conversation({ task, dispatch }: { task: Task; dispatch: Dispatch }) {
+function Conversation({
+  task,
+  dispatch,
+  onDetail,
+  onArtifact,
+}: {
+  task: Task;
+  dispatch: Dispatch;
+  onDetail?: (message: Task["messages"][number]) => void;
+  onArtifact?: (artifactId: string) => void;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
@@ -835,16 +1041,6 @@ function Conversation({ task, dispatch }: { task: Task; dispatch: Dispatch }) {
       bottomRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
     else setShowLatest(true);
   }, [lastMessage?.id, lastMessage?.content, lastEvent?.id]);
-  const currentEvents = task.events.filter(
-    (event) => event.goalVersion === task.goalVersion,
-  );
-  const contributions = Array.from(
-    new Set(
-      currentEvents
-        .map((event) => event.member)
-        .filter((member): member is MemberId => Boolean(member)),
-    ),
-  );
   return (
     <div
       className="conversation-scroll"
@@ -929,7 +1125,20 @@ function Conversation({ task, dispatch }: { task: Task; dispatch: Dispatch }) {
               </div>
               <div className="message-content">
                 {message.role === "assistant" ? (
-                  <Markdown dispatch={dispatch}>{message.content}</Markdown>
+                  <>
+                    <Markdown dispatch={dispatch} onArtifactLink={onArtifact}>
+                      {decisionExcerpt(message.content).text}
+                    </Markdown>
+                    {decisionExcerpt(message.content).detailed ? (
+                      <button
+                        className="decision-detail-link"
+                        onClick={() => onDetail?.(message)}
+                      >
+                        查看完整内容
+                        <ArrowUpRight size={13} />
+                      </button>
+                    ) : null}
+                  </>
                 ) : (
                   <p>{userMessageText(task, message)}</p>
                 )}
@@ -937,56 +1146,10 @@ function Conversation({ task, dispatch }: { task: Task; dispatch: Dispatch }) {
             </article>
           ))}
         </div>
-        {task.events.length ? (
-          <div className="activity-summary">
-            <div className="activity-heading">
-              {task.status === "running" ? (
-                <LoaderCircle size={14} className="spin" />
-              ) : task.status === "failed" ? (
-                <CircleAlert size={14} />
-              ) : (
-                <Layers2 size={14} />
-              )}
-              <strong>
-                {task.status === "running" ? "团队正在推进" : "这项工作的进展"}
-              </strong>
-              {contributions.length ? (
-                <span>{contributions.map(memberName).join(" · ")}</span>
-              ) : null}
-            </div>
-            <p>{currentEvents.at(-1)?.summary ?? lastEvent?.summary}</p>
-            <details className="activity-details">
-              <summary>
-                查看协作记录<span>{task.events.length}</span>
-                <ChevronDown size={12} />
-              </summary>
-              <ol>
-                {task.events.slice(-50).map((event) => (
-                  <li
-                    key={event.id}
-                    className={
-                      event.goalVersion !== task.goalVersion
-                        ? "superseded-event"
-                        : ""
-                    }
-                  >
-                    <time>{formatTime(event.createdAt)}</time>
-                    <div>
-                      {event.member ? (
-                        <strong>{memberName(event.member)}</strong>
-                      ) : null}
-                      <span>{event.summary}</span>
-                      {event.goalVersion !== task.goalVersion ? (
-                        <small>此前目标 v{event.goalVersion}</small>
-                      ) : null}
-                    </div>
-                  </li>
-                ))}
-              </ol>
-              {task.events.length > 50 ? (
-                <p className="muted small-text">当前显示最近 50 条记录。</p>
-              ) : null}
-            </details>
+        {task.status === "running" || task.status === "waiting" ? (
+          <div className="decision-progress-note">
+            <LoaderCircle size={13} className="spin" />
+            团队正在处理，详细过程见右侧。
           </div>
         ) : null}
         {task.error ? (
@@ -1049,6 +1212,7 @@ function ProjectDialog({
   const [pending, setPending] = useState(false);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (pending) return;
     setPending(true);
     const result = await dispatch({ type: "project.initialize", input });
     setPending(false);
@@ -1064,86 +1228,92 @@ function ProjectDialog({
       onClose={onClose}
     >
       <form onSubmit={(event) => void submit(event)}>
-        <div className="form-grid">
+        <fieldset className="settings-fieldset" disabled={pending}>
+          <div className="form-grid">
+            <label className="field">
+              项目名称
+              <input
+                value={input.name}
+                required
+                placeholder="给这个想法起个名字"
+                onChange={(event) =>
+                  setInput({ ...input, name: event.target.value })
+                }
+              />
+            </label>
+            <label className="field">
+              稳定 ID
+              <input
+                value={input.id}
+                required
+                pattern="[a-z0-9][a-z0-9-]*"
+                title="使用小写字母、数字和连字符"
+                placeholder="my-project"
+                onChange={(event) =>
+                  setInput({ ...input, id: event.target.value })
+                }
+              />
+            </label>
+          </div>
           <label className="field">
-            项目名称
-            <input
-              value={input.name}
-              required
-              placeholder="给这个想法起个名字"
+            项目系列
+            <select
+              value={input.series}
               onChange={(event) =>
-                setInput({ ...input, name: event.target.value })
+                setInput({
+                  ...input,
+                  series: event.target.value as ProjectInput["series"],
+                })
+              }
+            >
+              <option value="x">x · 探索型产品</option>
+              <option value="y">y · 计划开源的工具或产品</option>
+              <option value="z">z · 闭源产品</option>
+            </select>
+          </label>
+          <label className="field">
+            产品雏形与需求
+            <textarea
+              value={input.description}
+              rows={5}
+              required
+              placeholder="它要解决什么问题？现阶段有哪些想法或约束？"
+              onChange={(event) =>
+                setInput({ ...input, description: event.target.value })
               }
             />
           </label>
-          <label className="field">
-            稳定 ID
-            <input
-              value={input.id}
-              required
-              pattern="[a-z0-9][a-z0-9-]*"
-              title="使用小写字母、数字和连字符"
-              placeholder="my-project"
-              onChange={(event) =>
-                setInput({ ...input, id: event.target.value })
-              }
-            />
-          </label>
-        </div>
-        <label className="field">
-          项目系列
-          <select
-            value={input.series}
-            onChange={(event) =>
-              setInput({
-                ...input,
-                series: event.target.value as ProjectInput["series"],
-              })
-            }
-          >
-            <option value="x">x · 探索型产品</option>
-            <option value="y">y · 计划开源的工具或产品</option>
-            <option value="z">z · 闭源产品</option>
-          </select>
-        </label>
-        <label className="field">
-          产品雏形与需求
-          <textarea
-            value={input.description}
-            rows={5}
-            required
-            placeholder="它要解决什么问题？现阶段有哪些想法或约束？"
-            onChange={(event) =>
-              setInput({ ...input, description: event.target.value })
-            }
-          />
-        </label>
-        <div className="initialization-note">
-          <Check size={14} />
-          <p>
-            建立目录、规则、项目文档与 Git 基础。
-            {task
-              ? "会关联当前工作的资料与成果。"
-              : "文档可以在之后的工作中继续完善。"}
-          </p>
-        </div>
-        <div className="modal-actions">
-          <button type="button" className="button secondary" onClick={onClose}>
-            稍后再说
-          </button>
-          <button
-            className="button primary"
-            type="submit"
-            disabled={!connected || pending}
-          >
-            {pending ? (
-              <LoaderCircle size={15} className="spin" />
-            ) : (
-              <Sprout size={15} />
-            )}
-            {pending ? "正在初始化" : "初始化本机项目"}
-          </button>
-        </div>
+          <div className="initialization-note">
+            <Check size={14} />
+            <p>
+              建立目录、规则、项目文档与 Git 基础。
+              {task
+                ? "会关联当前工作的资料与成果。"
+                : "文档可以在之后的工作中继续完善。"}
+            </p>
+          </div>
+          <div className="modal-actions">
+            <button
+              type="button"
+              className="button secondary"
+              onClick={onClose}
+            >
+              稍后再说
+            </button>
+            <button
+              className="button primary"
+              type="submit"
+              disabled={!connected || pending}
+            >
+              {pending ? (
+                <LoaderCircle size={15} className="spin" />
+              ) : (
+                <Sprout size={15} />
+              )}
+              {pending ? "正在初始化" : "初始化本机项目"}
+            </button>
+          </div>
+        </fieldset>
       </form>
     </Modal>
   );
@@ -1300,6 +1470,12 @@ function SourceDialog({
 
 export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [messageDetail, setMessageDetail] = useState<{
+    taskId: string;
+    id: string;
+    title: string;
+    content: string;
+  } | null>(null);
   const [artifactFocus, setArtifactFocus] = useState<{
     taskId: string;
     artifactId: string;
@@ -1365,7 +1541,16 @@ export function App() {
     document.title = "ytriple · 工作台";
   }, []);
   const connected = connection === "connected";
-  const task = snapshot?.tasks.find((item) => item.id === selectedTaskId);
+  const task = snapshot?.tasks.find(
+    (item) => item.id === selectedTaskId && !item.archivedAt && !item.deletedAt,
+  );
+  const linkedProjectId =
+    task?.projectId ??
+    task?.events.findLast((event) => event.type === "project.initialized")?.data
+      ?.projectId;
+  const linkedProject = snapshot?.projects.find(
+    (project) => project.id === linkedProjectId,
+  );
   const triple = snapshot?.desktop?.mode !== "single";
   const acceptSnapshot = useCallback((value: Snapshot) => {
     setSnapshot((current) => {
@@ -1378,9 +1563,21 @@ export function App() {
     if (!initialSelectionLoaded.current) {
       initialSelectionLoaded.current = true;
       if (value.desktop) {
-        setSelectedTaskId(value.desktop.taskId);
+        setSelectedTaskId(
+          value.tasks.some(
+            (task) =>
+              task.id === value.desktop?.taskId &&
+              !task.archivedAt &&
+              !task.deletedAt,
+          )
+            ? value.desktop.taskId
+            : null,
+        );
         const restored = value.tasks.find(
-          (item) => item.id === value.desktop?.taskId,
+          (item) =>
+            item.id === value.desktop?.taskId &&
+            !item.archivedAt &&
+            !item.deletedAt,
         );
         if (restored)
           setComposerDraft((current) =>
@@ -1405,7 +1602,37 @@ export function App() {
       }
       try {
         const result = await window.ytriple.invoke(command);
-        acceptSnapshot(result);
+        if (
+          command.type !== "project.browse" &&
+          command.type !== "project.read"
+        )
+          acceptSnapshot(result);
+        if (command.type === "task.archive" || command.type === "task.delete") {
+          if (result.desktop?.taskId === command.taskId) {
+            setSelectedTaskId(null);
+            setComposerDraft({ ...EMPTY_DRAFT });
+            void window.ytriple
+              .invoke({ type: "window.select", taskId: null })
+              .then(acceptSnapshot)
+              .catch(() => {});
+          }
+          setMessageDetail((current) =>
+            current?.taskId === command.taskId ? null : current,
+          );
+        }
+        if (command.type === "message.save") {
+          const artifactId = result.tasks
+            .find((task) => task.id === command.taskId)
+            ?.events.findLast(
+              (event) =>
+                event.type === "message.saved" &&
+                event.data?.messageId === command.messageId,
+            )?.data?.artifactId;
+          if (typeof artifactId === "string") {
+            setArtifactFocus({ taskId: command.taskId, artifactId });
+            setMessageDetail(null);
+          }
+        }
         if (command.type === "process.save") {
           const artifactId = result.tasks
             .find((task) => task.id === command.taskId)
@@ -1484,7 +1711,12 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [newWork]);
   const selectTask = (id: string, created?: Task) => {
-    const selected = created ?? snapshot?.tasks.find((item) => item.id === id);
+    const selected =
+      created ??
+      snapshot?.tasks.find(
+        (item) => item.id === id && !item.archivedAt && !item.deletedAt,
+      );
+    if (!selected) return;
     if (page === "work")
       composerDrafts.current.set(selectedTaskId ?? "new", composerDraft);
     setSelectedTaskId(id);
@@ -1500,6 +1732,28 @@ export function App() {
       },
     );
     setSeedRevision((value) => value + 1);
+  };
+  const showDetail = (sourceTask: Task, message: Task["messages"][number]) => {
+    if (selectedTaskId !== sourceTask.id || page !== "work")
+      selectTask(sourceTask.id);
+    setMessageDetail({
+      taskId: sourceTask.id,
+      id: message.id,
+      title: `${memberName(message.member)} · 完整答复`,
+      content: message.content,
+    });
+    void dispatch({ type: "window.rightMode", mode: "artifact" });
+  };
+  const showArtifact = (sourceTask: Task, artifactId: string) => {
+    if (!sourceTask.artifacts.some((artifact) => artifact.id === artifactId)) {
+      setError("这条成果引用暂不可用，请查看该次答复的完整内容。");
+      return;
+    }
+    if (selectedTaskId !== sourceTask.id || page !== "work")
+      selectTask(sourceTask.id);
+    setMessageDetail(null);
+    setArtifactFocus({ taskId: sourceTask.id, artifactId });
+    void dispatch({ type: "window.rightMode", mode: "artifact" });
   };
   const createTask = async (
     goal: string,
@@ -1562,6 +1816,7 @@ export function App() {
     >
       <Sidebar
         snapshot={snapshot}
+        dispatch={dispatch}
         page={page}
         selectedTaskId={selectedTaskId}
         onPage={navigate}
@@ -1659,7 +1914,10 @@ export function App() {
             <section
               className={`decision-pane ${task ? "has-task" : "is-new"}`}
             >
-              {task ? (
+              {task &&
+              (task.status !== "completed" ||
+                linkedProjectId ||
+                task.kind === "project") ? (
                 <div
                   className="decision-task-actions"
                   role="group"
@@ -1670,14 +1928,28 @@ export function App() {
                     task={task}
                     dispatch={dispatch}
                   />
-                  <button
-                    className="text-button"
-                    aria-label="将当前工作初始化为项目"
-                    onClick={() => setDialog("project")}
-                  >
-                    <FilePlus2 size={14} />
-                    初始化项目
-                  </button>
+                  {linkedProjectId ? (
+                    <button
+                      className="text-button"
+                      disabled={!linkedProject}
+                      onClick={() => {
+                        setSelectedProjectId(String(linkedProjectId));
+                        setPage("projects");
+                      }}
+                    >
+                      <FolderOpen size={14} />
+                      查看项目
+                    </button>
+                  ) : task.kind === "project" ? (
+                    <button
+                      className="text-button"
+                      aria-label="将当前讨论创建为新项目"
+                      onClick={() => setDialog("project")}
+                    >
+                      <FilePlus2 size={14} />
+                      创建项目…
+                    </button>
+                  ) : null}
                 </div>
               ) : null}
               {task ? (
@@ -1685,6 +1957,8 @@ export function App() {
                   key={`conversation:${task.id}`}
                   task={task}
                   dispatch={dispatch}
+                  onDetail={(message) => showDetail(task, message)}
+                  onArtifact={(id) => showArtifact(task, id)}
                 />
               ) : (
                 <div className="welcome-scroll">
@@ -1769,7 +2043,11 @@ export function App() {
               </div>
               {evidenceTab === "process" ? (
                 task ? (
-                  <ProcessView task={task} dispatch={dispatch} />
+                  <ProcessView
+                    task={task}
+                    dispatch={dispatch}
+                    onArtifactOpen={(id) => showArtifact(task, id)}
+                  />
                 ) : (
                   <div className="collection-empty pane-empty">
                     <Layers2 size={30} strokeWidth={1.3} />
@@ -1793,6 +2071,18 @@ export function App() {
             task ? (
               <ArtifactList
                 key={`artifacts:${task.id}`}
+                detail={
+                  messageDetail?.taskId === task.id ? messageDetail : undefined
+                }
+                onCloseDetail={() => setMessageDetail(null)}
+                onSaveDetail={async () => {
+                  if (messageDetail)
+                    await dispatch({
+                      type: "message.save",
+                      taskId: task.id,
+                      messageId: messageDetail.id,
+                    });
+                }}
                 preferredArtifactId={
                   artifactFocus?.taskId === task.id
                     ? artifactFocus.artifactId
@@ -1828,9 +2118,7 @@ export function App() {
             onOpenModels={() => setPage("models")}
           />
         </div>
-        <div
-          className={`projects-layout ${page !== "projects" ? "workspace-hidden" : ""}`}
-        >
+        <ProjectWorkspace hidden={page !== "projects"}>
           <Projects
             snapshot={snapshot}
             dispatch={dispatch}
@@ -1858,10 +2146,12 @@ export function App() {
               connected={connected}
               drafts={composerDrafts.current}
               onOpenTask={selectTask}
+              onDetail={showDetail}
+              onArtifact={showArtifact}
               onConfigure={() => setPage("models")}
             />
           ) : null}
-        </div>
+        </ProjectWorkspace>
         {page === "library" ? (
           <Library
             snapshot={snapshot}

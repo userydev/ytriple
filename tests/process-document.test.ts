@@ -154,3 +154,29 @@ test("empty current-goal process document is explicit and public report Markdown
   assert.match(content, /\\<script\\>/);
   assert.doesNotMatch(content, /\n# pretend heading/);
 });
+
+test("saved process document keeps structured public analysis and actual member conversation", () => {
+  const task = fixture();
+  task.events = [
+    event("progress_reported", "需要考虑离线使用边界。", { stage: "framing" }),
+    event("progress_reported", "方案甲更适合离线使用，代价是维护本地存储。", {
+      stage: "alternatives",
+    }),
+    event("delegation_completed", "收到协作回复", {
+      callId: "peer",
+      invocationId: "main",
+      receiver: "cto",
+      request: "核查本地存储。",
+      result: "现有资料支持本地方案。",
+      reasoning: "PRIVATE_CHAIN",
+      providerData: "PRIVATE_PAYLOAD",
+    }),
+  ];
+  const document = buildProcessDocument(task).content;
+  assert.match(document, /### 问题理解与计划/);
+  assert.match(document, /### 方案与取舍/);
+  assert.match(document, /## 成员对话/);
+  assert.match(document, /核查本地存储/);
+  assert.match(document, /现有资料支持本地方案/);
+  assert.doesNotMatch(document, /PRIVATE_/);
+});

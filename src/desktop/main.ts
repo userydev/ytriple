@@ -88,7 +88,10 @@ function desktopChanged(): void {
   if (latest) publish(latest);
 }
 function selectTask(taskId: string | null): void {
-  if (taskId && !latest?.tasks.some((t) => t.id === taskId))
+  if (
+    taskId &&
+    !latest?.tasks.some((t) => t.id === taskId && !t.deletedAt && !t.archivedAt)
+  )
     throw new Error("任务不存在。");
   if (layout.taskId !== taskId) {
     layout.taskId = taskId;
@@ -428,7 +431,10 @@ async function command(input: Command): Promise<Snapshot> {
     if (input.apiKey !== undefined)
       await saveKey(input.profile.id, input.apiKey);
     const { apiKey: _key, ...withoutKey } = input;
-    return request({ type: "command", command: withoutKey });
+    return request({
+      type: "command",
+      command: { ...withoutKey, keyChanged: input.apiKey !== undefined },
+    });
   }
   if (input.type === "artifact.export" && input.format === "png")
     return renderPNG(input);
@@ -538,7 +544,13 @@ app
         mainWindow?.webContents !== event.sender
       )
         throw new Error("无效的工作台连接。");
-      return publish(await command(parseCommand(input)));
+      const parsed = parseCommand(input);
+      const result = await command(parsed);
+      // The worker broadcasts the latest browser selection. A command reply can
+      // contain an older directory that is still needed by the caller's tree cache.
+      return parsed.type === "project.browse" || parsed.type === "project.read"
+        ? decorate(result)
+        : publish(result);
     });
     if (layout.taskId && !latest?.tasks.some((t) => t.id === layout.taskId))
       layout.taskId = null;

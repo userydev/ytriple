@@ -15,3 +15,6 @@ import "./projects.css";
 import "./settings-extra.css";
 
 import "./panel-actions.css";
+
+import "katex/dist/katex.min.css";
+import "./workspace-content.css";

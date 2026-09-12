@@ -1,3 +1,4 @@
+import type { ProjectBrowserState } from "./project-files.js";
 import type { MemberSettingsMap } from "./member-settings.js";
 import type { ProjectObservation, ProjectDiscoveryState } from "./projects.js";
 export type MemberId = "coordinator" | "cto" | "researcher";
@@ -79,6 +80,8 @@ export interface TaskEvent {
 export interface Task {
   id: string;
   projectId?: string;
+  archivedAt?: string;
+  deletedAt?: string;
   title: string;
   goal: string;
   goalVersion: number;
@@ -175,10 +178,26 @@ export interface Snapshot {
   system: SystemStatus;
   projects: ProjectInfo[];
   projectDiscovery?: ProjectDiscoveryState;
+  projectBrowser?: ProjectBrowserState;
   library?: LibraryEntry[];
   desktop?: DesktopState;
 }
 export type Command =
+  | {
+      type: "project.browse";
+      projectId: string;
+      worktreePath?: string;
+      path?: string;
+    }
+  | {
+      type: "project.read";
+      projectId: string;
+      worktreePath?: string;
+      path: string;
+    }
+  | { type: "message.save"; taskId: string; messageId: string }
+  | { type: "task.rename"; taskId: string; title: string }
+  | { type: "task.archive" | "task.delete" | "task.restore"; taskId: string }
   | { type: "window.rightMode"; mode: "split" | "evidence" | "artifact" }
   | { type: "project.refresh" }
   | { type: "process.save"; taskId: string; member?: MemberId }

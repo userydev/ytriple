@@ -51,24 +51,156 @@ const add = (list: string[], value: unknown) => {
   if (typeof value === "string" && !list.includes(value)) list.push(value);
 };
 
+export const ANALYSIS_SECTIONS = [
+  {
+    id: "framing",
+    title: "问题理解与计划",
+    description: "如何理解目标、需要澄清的边界与核查方向",
+  },
+  {
+    id: "evidence",
+    title: "依据与发现",
+    description: "资料说明了什么，还有哪些信息不确定",
+  },
+  {
+    id: "alternatives",
+    title: "方案与取舍",
+    description: "可选路径、优缺点与适用条件",
+  },
+  {
+    id: "decision",
+    title: "判断与结论",
+    description: "作出什么判断，以及判断的关键依据",
+  },
+] as const;
+export type AnalysisSection = (typeof ANALYSIS_SECTIONS)[number]["id"];
+export function publicAnalysisSection(
+  event: TaskEvent,
+): AnalysisSection | undefined {
+  if (
+    event.type.replaceAll(".", "_") !== "progress_reported" ||
+    event.data?.hosted === true
+  )
+    return undefined;
+  switch (event.data?.stage) {
+    case "plan":
+    case "framing":
+      return "framing";
+    case "finding":
+    case "evidence":
+      return "evidence";
+    case "alternatives":
+      return "alternatives";
+    case "decision":
+      return "decision";
+    default:
+      return undefined;
+  }
+}
+export function currentProgressEvents(
+  task: Pick<Task, "events" | "goalVersion">,
+): TaskEvent[] {
+  const events = task.events.filter(
+    (event) => event.goalVersion === task.goalVersion,
+  );
+  const latestRunId = [...events]
+    .reverse()
+    .find((event) => /^run[_.](started|resumed)$/.test(event.type))
+    ?.data?.runId;
+  return typeof latestRunId === "string"
+    ? events.filter(
+        (event) => !event.data?.runId || event.data.runId === latestRunId,
+      )
+    : events;
+}
+export interface PublicExchange {
+  id: string;
+  sender: MemberId;
+  receiver: MemberId;
+  specialist: boolean;
+  request?: string;
+  response?: string;
+  status: ProgressStatus;
+  createdAt: string;
+  invocationId?: string;
+  runId?: string;
+}
+/** Only real delegation message fields are conversation, never raw model/tool payloads. */
+export function buildPublicExchanges(
+  events: TaskEvent[],
+  taskStatus?: Task["status"],
+): PublicExchange[] {
+  const exchanges = new Map<string, PublicExchange>();
+  const runStatuses = new Map<string, ProgressStatus>();
+  let latestRunId: string | undefined;
+  for (const event of events) {
+    const type = event.type.replaceAll(".", "_");
+    const runId = text(event.data?.runId);
+    if (type.startsWith("run_") && runId) {
+      const status = terminal(type);
+      if (status) runStatuses.set(runId, status);
+      if (type === "run_started" || type === "run_resumed") latestRunId = runId;
+    }
+    if (
+      !/^delegation_(started|resumed|completed|failed|paused)$/.test(type) ||
+      !event.member
+    )
+      continue;
+    const data = event.data ?? {};
+    const receiver = memberId(data.receiver);
+    if (!receiver || typeof data.callId !== "string") continue;
+    const id = `${runId ?? "legacy"}:${text(data.invocationId) ?? text(data.scope) ?? event.member}:${data.callId}`;
+    const current = exchanges.get(id) ?? {
+      id,
+      sender: event.member,
+      receiver,
+      specialist: data.specialist === true,
+      status: "running" as const,
+      createdAt: event.createdAt,
+      invocationId: text(data.invocationId),
+      runId,
+    };
+    current.status = terminal(type) ?? current.status;
+    if (typeof data.request === "string" && data.request.trim())
+      current.request = data.request.slice(0, 4000);
+    if (
+      type === "delegation_completed" &&
+      typeof data.result === "string" &&
+      data.result.trim()
+    )
+      current.response = data.result.slice(0, 12000);
+    exchanges.set(id, current);
+  }
+  return [...exchanges.values()].map((exchange) => {
+    if (exchange.status !== "running") return exchange;
+    const currentRun = !latestRunId || exchange.runId === latestRunId;
+    const runStatus = exchange.runId
+      ? runStatuses.get(exchange.runId)
+      : undefined;
+    const status =
+      runStatus && runStatus !== "running"
+        ? runStatus
+        : currentRun
+          ? (taskStatus ?? "running")
+          : "stale";
+    if (status === "running") return exchange;
+    return {
+      ...exchange,
+      status:
+        status === "paused" || status === "failed" || status === "waiting"
+          ? status
+          : "stale",
+    };
+  });
+}
+
 /** A view of committed, public events only. No SDK payloads or raw data are rendered. */
 export function buildAgentProgress(
   task: Pick<Task, "events" | "goalVersion" | "status">,
 ): AgentProgress[] {
-  const events = task.events.filter(
-    (event) => event.goalVersion === task.goalVersion,
-  );
   // Re-running the same goal creates a fresh run. Old runs remain in the timeline but do not
   // masquerade as active teammates. Older data without run IDs remains readable by scope.
-  const latestRunId = [...events]
-    .reverse()
-    .find((event) => /^run_(started|resumed)$/.test(event.type))?.data?.runId;
-  const currentEvents =
-    typeof latestRunId === "string"
-      ? events.filter(
-          (event) => !event.data?.runId || event.data.runId === latestRunId,
-        )
-      : events;
+  const currentEvents = currentProgressEvents(task);
   const agents = new Map<string, AgentProgress>();
   for (const event of currentEvents) {
     const type = event.type.replaceAll(".", "_");
