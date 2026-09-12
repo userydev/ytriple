@@ -131,9 +131,10 @@ export function ProcessView({
       const details = Array.from(section?.querySelectorAll("details") ?? []);
       setAllExpanded(details.length > 0 && details.every((item) => item.open));
     };
+    updateExpanded();
     section?.addEventListener("toggle", updateExpanded, true);
     return () => section?.removeEventListener("toggle", updateExpanded, true);
-  }, []);
+  }, [layer, member, scope, sourceFilter, allRecords, task.id]);
   const expand = (open: boolean) =>
     container.current?.querySelectorAll("details").forEach((details) => {
       details.open = open;
