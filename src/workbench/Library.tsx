@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useSyncExternalStore, type SetStateAction } from "react";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -15,6 +15,31 @@ import {
 import type { LibraryEntry, Snapshot } from "../shared/types";
 import { formatDate, Markdown, type Dispatch } from "./common";
 import { useDocumentDraft } from "./drafts";
+import { LibraryFeedbackPanel } from "./LibraryFeedback";
+import {
+  LIBRARY_ASSESSMENT_LABELS,
+  libraryAssessment,
+  unresolvedLibraryFeedback,
+} from "../shared/library";
+
+type EditMetadata = {
+  title: string;
+  tags: string;
+  note: string;
+  resolvedFeedbackIds: string[];
+};
+const editMetadata = new Map<string, EditMetadata>();
+const pendingActions = new Set<string>();
+const editListeners = new Set<() => void>();
+function subscribeEdits(listener: () => void) {
+  editListeners.add(listener);
+  return () => {
+    editListeners.delete(listener);
+  };
+}
+function announceEdits() {
+  editListeners.forEach((listener) => listener());
+}
 
 function LibraryDocument({
   entry,
@@ -29,56 +54,115 @@ function LibraryDocument({
   onTask: (id: string) => void;
   selectedTaskId: string | null;
 }) {
-  const { draft, setDraft, changedExternally } = useDocumentDraft(
-    `library:${entry.id}`,
-    entry.content ?? "",
-    entry.hash,
+  const key = `${snapshot.settings.aiRoot}:${entry.id}`;
+  const { draft, setDraft, completeDraft, changedExternally } =
+    useDocumentDraft(`library:${key}`, entry.content ?? "", entry.hash);
+  const metadata = useSyncExternalStore(
+    subscribeEdits,
+    () => editMetadata.get(key),
+    () => undefined,
   );
-  const [title, setTitle] = useState(entry.title);
-  const [tags, setTags] = useState(entry.tags.join("，"));
-  const [note, setNote] = useState(entry.note);
-  const [pending, setPending] = useState(false);
+  const pending = useSyncExternalStore(
+    subscribeEdits,
+    () => pendingActions.has(key),
+    () => false,
+  );
+  const { title, tags, note, resolvedFeedbackIds } = metadata ?? {
+    title: entry.title,
+    tags: entry.tags.join("，"),
+    note: entry.note,
+    resolvedFeedbackIds: [],
+  };
+  const setMetadata = (patch: Partial<EditMetadata>) => {
+    editMetadata.set(key, {
+      title,
+      tags,
+      note,
+      resolvedFeedbackIds,
+      ...editMetadata.get(key),
+      ...patch,
+    });
+    announceEdits();
+  };
+  const setTitle = (title: string) => setMetadata({ title });
+  const setTags = (tags: string) => setMetadata({ tags });
+  const setNote = (note: string) => setMetadata({ note });
+  const setResolvedFeedbackIds = (value: SetStateAction<string[]>) =>
+    setMetadata({
+      resolvedFeedbackIds:
+        typeof value === "function" ? value(resolvedFeedbackIds) : value,
+    });
+  const setPending = (value: boolean) => {
+    if (value) pendingActions.add(key);
+    else pendingActions.delete(key);
+    announceEdits();
+  };
   const [target, setTarget] = useState(selectedTaskId ?? "new");
   const editable = entry.format === "md" || entry.format === "html";
   const save = async () => {
+    if (pendingActions.has(key)) return;
+    const submitted = draft;
+    const submittedMetadata = editMetadata.get(key);
     setPending(true);
-    const result = await dispatch({
-      type: "library.save",
-      entryId: entry.id,
-      content: draft.content,
-      expectedHash: draft.baseHash,
-      title: title.trim(),
-      tags: tags
-        .split(/[,，]/)
-        .map((item) => item.trim())
-        .filter(Boolean),
-      note,
-    });
-    setPending(false);
-    if (result) setDraft((current) => ({ ...current, editing: false }));
-  };
-  const reuse = async () => {
-    setPending(true);
-    let id = target;
-    if (id === "new" || !snapshot.tasks.some((task) => task.id === id)) {
-      const before = new Set(snapshot.tasks.map((task) => task.id));
-      const next = await dispatch({
-        type: "task.create",
-        goal: `基于「${entry.title}」继续研究与加工。先理解这份已有成果，等待我补充具体方向。`,
-        title: `接着用 · ${entry.title}`,
-        kind: "research",
-      });
-      id = next?.tasks.find((task) => !before.has(task.id))?.id ?? "";
-    }
-    if (id) {
+    try {
       const result = await dispatch({
-        type: "library.reuse",
+        type: "library.save",
         entryId: entry.id,
-        taskId: id,
+        content: draft.content,
+        expectedHash: draft.baseHash,
+        title: title.trim(),
+        tags: tags
+          .split(/[,，]/)
+          .map((item) => item.trim())
+          .filter(Boolean),
+        note,
+        resolvedFeedbackIds,
       });
-      if (result) onTask(id);
+      if (result) {
+        completeDraft(submitted);
+        if (editMetadata.get(key) === submittedMetadata)
+          editMetadata.delete(key);
+      }
+    } finally {
+      setPending(false);
     }
-    setPending(false);
+  };
+  const reuse = async (instruction?: string) => {
+    if (pendingActions.has(key)) return;
+    setPending(true);
+    try {
+      let id = target;
+      if (id === "new" || !snapshot.tasks.some((task) => task.id === id)) {
+        const before = new Set(snapshot.tasks.map((task) => task.id));
+        const next = await dispatch({
+          type: "task.create",
+          goal:
+            instruction ??
+            `基于「${entry.title}」继续研究与加工。先理解这份已有成果，等待我补充具体方向。`,
+          title: `接着用 · ${entry.title}`,
+          kind: "research",
+        });
+        id = next?.tasks.find((task) => !before.has(task.id))?.id ?? "";
+      }
+      if (id) {
+        const result = await dispatch({
+          type: "library.reuse",
+          entryId: entry.id,
+          taskId: id,
+        });
+        if (result) {
+          if (instruction)
+            await dispatch({
+              type: "task.send",
+              taskId: id,
+              text: instruction,
+            });
+          onTask(id);
+        }
+      }
+    } finally {
+      setPending(false);
+    }
   };
   return (
     <section className="library-document">
@@ -103,6 +187,22 @@ function LibraryDocument({
         来自「{entry.source.taskTitle}」· 成果 v{entry.source.artifactVersion} ·{" "}
         {formatDate(entry.savedAt)} 收藏
       </p>
+      {!draft.editing && unresolvedLibraryFeedback(entry).length ? (
+        <div className="inline-notice warning">
+          这项资产有 {unresolvedLibraryFeedback(entry).length}{" "}
+          条修正或使用问题待处理，阅读时请结合反馈判断。
+          <button
+            className="text-button"
+            onClick={() =>
+              document
+                .getElementById(`library-feedback-${entry.id}`)
+                ?.scrollIntoView({ block: "start", behavior: "smooth" })
+            }
+          >
+            查看反馈
+          </button>
+        </div>
+      ) : null}
       <div className="artifact-actions">
         {editable ? (
           draft.editing ? (
@@ -117,6 +217,7 @@ function LibraryDocument({
               </button>
               <button
                 className="text-button"
+                disabled={pending}
                 onClick={() =>
                   setDraft((current) => ({ ...current, editing: false }))
                 }
@@ -128,11 +229,16 @@ function LibraryDocument({
           ) : (
             <button
               className="button secondary small"
-              disabled={Boolean(entry.readError) || entry.content === undefined}
+              disabled={
+                pending ||
+                Boolean(entry.readError) ||
+                entry.content === undefined
+              }
               onClick={() => {
                 setTitle(entry.title);
                 setTags(entry.tags.join("，"));
                 setNote(entry.note);
+                setResolvedFeedbackIds([]);
                 setDraft({
                   content: entry.content ?? "",
                   baseHash: entry.hash,
@@ -162,7 +268,7 @@ function LibraryDocument({
         </div>
       ) : null}
       {draft.editing ? (
-        <>
+        <fieldset disabled={pending} className="library-edit-fields">
           <div className="library-edit-meta">
             <label className="field">
               名称
@@ -199,7 +305,28 @@ function LibraryDocument({
               }))
             }
           />
-        </>
+          {unresolvedLibraryFeedback(entry).length ? (
+            <div className="library-resolutions">
+              <p>这次正文修订处理了哪些反馈？仅勾选已落实的项目。</p>
+              {unresolvedLibraryFeedback(entry).map((feedback) => (
+                <label key={feedback.id}>
+                  <input
+                    type="checkbox"
+                    checked={resolvedFeedbackIds.includes(feedback.id)}
+                    onChange={(event) =>
+                      setResolvedFeedbackIds((current) =>
+                        event.target.checked
+                          ? [...current, feedback.id]
+                          : current.filter((id) => id !== feedback.id),
+                      )
+                    }
+                  />
+                  {feedback.note}
+                </label>
+              ))}
+            </div>
+          ) : null}
+        </fieldset>
       ) : (
         <>
           {entry.note ? <p className="library-note">{entry.note}</p> : null}
@@ -235,6 +362,19 @@ function LibraryDocument({
           )}
         </>
       )}
+      {!draft.editing ? (
+        <LibraryFeedbackPanel
+          entry={entry}
+          snapshot={snapshot}
+          selectedTaskId={selectedTaskId}
+          dispatch={dispatch}
+          onContinue={() =>
+            void reuse(
+              `请阅读「${entry.title}」的最新正文和已记录的用途、条件、使用结果及用户修正。按反馈重新判断，说明新增、补充或冲突，为当前用途保存一份可继续编辑的修订说明书。保留真实依据和未验证的部分，不将旧判断继续当成已验证结论。`,
+            )
+          }
+        />
+      ) : null}
       {!draft.editing ? (
         <div className="library-reuse">
           <div>
@@ -300,16 +440,21 @@ export function Library({
   onTask,
   onAdd,
   selectedTaskId,
+  initialEntryId,
 }: {
   snapshot: Snapshot | null;
   dispatch: Dispatch;
   onTask: (id: string) => void;
   onAdd: () => void;
   selectedTaskId: string | null;
+  initialEntryId?: string | null;
 }) {
   const [search, setSearch] = useState("");
   const [tab, setTab] = useState<"saved" | "sources">("saved");
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(
+    initialEntryId ?? null,
+  );
+  const [recallPending, setRecallPending] = useState(false);
   const entries = snapshot?.library ?? [];
   const query = search.toLowerCase();
   const filtered = entries.filter((entry) =>
@@ -335,7 +480,34 @@ export function Library({
             添加资料
           </button>
         </div>
-        <p>留下有用的成果，简单修改，再带入下一项工作。</p>
+        <p>
+          团队会为新问题查找相关积累。留下用途、条件与修正，让下一次工作有据可依。
+        </p>
+        {snapshot ? (
+          <label className="library-recall-toggle">
+            <input
+              type="checkbox"
+              checked={snapshot.settings.libraryRecall !== false}
+              disabled={recallPending}
+              onChange={async (event) => {
+                const libraryRecall = event.target.checked;
+                setRecallPending(true);
+                try {
+                  await dispatch({
+                    type: "settings.save",
+                    settings: { ...snapshot.settings, libraryRecall },
+                  });
+                } finally {
+                  setRecallPending(false);
+                }
+              }}
+            />
+            为工作查找当前 Lib 中的相关资料
+            <span>
+              只在任务运行时选入少量文字资产，正文由所选模型按需阅读。
+            </span>
+          </label>
+        ) : null}
       </div>
       <div className="library-tabbar panel-tabs">
         <button
@@ -392,7 +564,10 @@ export function Library({
                     <span className="library-format">
                       {item.format.toUpperCase()}
                     </span>
-                    <span>v{item.version}</span>
+                    <span>
+                      v{item.version} ·{" "}
+                      {LIBRARY_ASSESSMENT_LABELS[libraryAssessment(item)]}
+                    </span>
                     <ArrowUpRight size={15} />
                   </div>
                   <h3>{item.title}</h3>

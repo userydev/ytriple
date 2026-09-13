@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-const build = spawn(process.execPath, ["scripts/build.mjs"], {
+const build = spawn("npm", ["run", "build"], {
   stdio: "inherit",
 });
 const code = await new Promise((resolve) => build.on("exit", resolve));

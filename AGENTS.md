@@ -26,7 +26,8 @@
 ## 当前工程
 
 - Node.js >= 24，Electron + React + TypeScript；依赖版本由 package-lock.json 固定。
-- `npm run dev` 构建并启动桌面；`npm run typecheck`、`npm test`、`npm run smoke` 为本地检查；`npm run probe -- gemini --team` 为真实模型合成验收，须区分测试替身和真实调用证据。
+- `npm run dev` 构建并启动桌面；`npm run typecheck`、`npm test`、`npm run smoke` 为本地检查；`npm run probe -- gemini --team` 与 `npm run probe:library` 为真实模型合成验收，须区分测试替身和真实调用证据。
 - desktop 只暴露校验后的 IPC，运行时与解析位于 utility process；渲染层不读取本机文件或密钥。关闭 SDK 远端追踪，凭据不得写入日志、仓库或 task snapshot。
 - 初始化/恢复/冲突测试仅在临时根目录运行。不得把开发用合成项目登记到用户真实 AI 体系，不得覆盖已有规则或不明文件。
+- 2026-09-12 新阶段以 docs/开发计划.md 顶部 C/D 为当前主线：本机独立服务持续取得并整理真实信息，ytriple 接收、分层阅读并按需进入团队/Lib。参看讨论总结与产品调研；普通阅读不自动建本机团队任务。此前 Radar 路径未被用户采纳，历史记录不作为体验验收依据。A 的 Lib 复用/反馈保留作为后续支撑。
 - 状态和剩余范围维护在 docs/开发计划.md；不把“可配置”标成真实能力已验证，不把当前开发版当作完整首版发布。

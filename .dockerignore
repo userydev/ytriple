@@ -1,0 +1,14 @@
+.git
+.DS_Store
+node_modules
+dist
+release
+coverage
+.ytriple
+docs
+tests
+src
+scripts
+*.log
+.env
+.env.*

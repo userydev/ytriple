@@ -15,6 +15,7 @@ import type {
   Artifact,
   Command,
   LibraryEntry,
+  LibraryFeedback,
   Source,
 } from "../shared/types.js";
 import {
@@ -24,6 +25,10 @@ import {
   textSource,
 } from "./files.js";
 import { Store, now, uid } from "./store.js";
+import {
+  libraryAssessment,
+  LIBRARY_ASSESSMENT_LABELS,
+} from "../shared/library.js";
 
 type CollectInput = Extract<Command, { type: "library.collect" }>;
 type SaveInput = Extract<Command, { type: "library.save" }>;
@@ -121,6 +126,7 @@ export function readLibraryEntry(
 ): LibraryEntry {
   activeRoot(store, aiRoot);
   const entry = store.libraryEntry(aiRoot, entryId);
+  const feedback = store.libraryFeedback(aiRoot, entryId);
   const {
     content: _content,
     readError: _readError,
@@ -132,6 +138,9 @@ export function readLibraryEntry(
     return {
       ...record,
       hash: hash(bytes),
+      externalChange: hash(bytes) !== entry.hash,
+      feedback,
+      feedbackRevision: feedback.length,
       ...(["md", "html"].includes(entry.format)
         ? { content: bytes.toString("utf8") }
         : {}),
@@ -139,6 +148,8 @@ export function readLibraryEntry(
   } catch {
     return {
       ...record,
+      feedback,
+      feedbackRevision: feedback.length,
       readError: "无法读取收藏，文件或 AI 目录可能已移动或改变。",
     };
   }
@@ -310,6 +321,29 @@ export async function saveLibraryEntry(
       },
     ],
   };
+  const resolvedIds = [...new Set(input.resolvedFeedbackIds ?? [])];
+  if (resolvedIds.length) {
+    const feedback = store.libraryFeedback(aiRoot, entry.id);
+    if (
+      digest === currentHash ||
+      resolvedIds.some(
+        (id) =>
+          !feedback.some((item) => item.id === id && item.kind !== "useful"),
+      )
+    )
+      throw new Error("请实际修订正文，并仅确认这项资产已有的修正或失败反馈。");
+    entry.feedbackResolutions = [
+      ...(previous.feedbackResolutions ?? []),
+      ...resolvedIds
+        .filter(
+          (id) =>
+            !previous.feedbackResolutions?.some(
+              (item) => item.feedbackId === id,
+            ),
+        )
+        .map((feedbackId) => ({ feedbackId, version, hash: digest })),
+    ];
+  }
   return commitLibrary(
     store,
     aiRoot,
@@ -464,7 +498,7 @@ export function librarySource(
   aiRoot: string,
   entryId: string,
 ): Source {
-  const entry = store.libraryEntry(aiRoot, entryId),
+  const entry = readLibraryEntry(store, aiRoot, entryId),
     bytes = readLibraryBytes(store, aiRoot, entryId),
     digest = hash(bytes);
   const provenance = `Lib：${entry.id}，收藏版本 ${entry.version}，当前内容哈希 ${digest}。\n原任务：${entry.source.taskTitle}（${entry.source.taskId}）；原成果 ${entry.source.artifactId} 第 ${entry.source.artifactVersion} 版。`;
@@ -478,5 +512,195 @@ export function librarySource(
     entry.path,
   );
   source.coverage = `${textual ? "收藏正文快照" : "仅媒体引用，未解析内容"}；${provenance}`;
+  source.library = {
+    root: path.resolve(aiRoot),
+    entryId,
+    version: entry.version,
+    hash: digest,
+    feedbackRevision: entry.feedbackRevision ?? 0,
+    feedback: entry.feedback ?? [],
+    resolvedFeedbackIds:
+      entry.feedbackResolutions?.map((item) => item.feedbackId) ?? [],
+    assessment: libraryAssessment(entry),
+    selection: "explicit",
+    reason: "用户选入本项工作的 Lib 资产",
+  };
+  source.coverage += `\n${LIBRARY_ASSESSMENT_LABELS[source.library.assessment]}；${source.library.feedbackRevision} 条使用或修正反馈。收藏和模型阅读均不代表能力已验证。`;
   return source;
+}
+
+/** Adopt only previously saved Lib snapshots with a verifiable path, version and content hash. */
+export function migrateLibrarySources(store: Store, aiRoot: string): void {
+  activeRoot(store, aiRoot);
+  const entries = new Map(
+    store.library(aiRoot).map((entry) => [entry.path, entry]),
+  );
+  for (const task of store.tasks()) {
+    if (task.surface === "background") continue;
+    let changed = false;
+    for (const source of task.sources) {
+      if (source.library || source.type !== "file") continue;
+      const entry = entries.get(source.location);
+      if (
+        !entry ||
+        !source.coverage.startsWith(`收藏正文快照；Lib：${entry.id}，`)
+      )
+        continue;
+      const version = Number(source.coverage.match(/收藏版本 (\d+)/)?.[1]),
+        digest = hash(source.text);
+      if (
+        !entry.versions.some(
+          (record) => record.version === version && record.hash === digest,
+        )
+      )
+        continue;
+      source.library = {
+        root: path.resolve(aiRoot),
+        entryId: entry.id,
+        version,
+        hash: digest,
+        feedbackRevision: 0,
+        feedback: [],
+        resolvedFeedbackIds: [],
+        assessment: "unverified",
+        selection: "explicit",
+        reason: "此前由用户选入这项工作的 Lib 正文快照",
+      };
+      changed = true;
+    }
+    if (changed) store.saveTask(task);
+  }
+}
+
+/** Only an explicit user command writes feedback; model tools have no access to this mutation. */
+export function recordLibraryFeedback(
+  store: Store,
+  aiRoot: string,
+  input: Extract<Command, { type: "library.feedback" }>,
+): LibraryFeedback {
+  store.db.exec("BEGIN IMMEDIATE");
+  try {
+    const feedback = recordFeedback(store, aiRoot, input);
+    store.db.exec("COMMIT");
+    return feedback;
+  } catch (error) {
+    store.db.exec("ROLLBACK");
+    throw error;
+  }
+}
+function recordFeedback(
+  store: Store,
+  aiRoot: string,
+  input: Extract<Command, { type: "library.feedback" }>,
+): LibraryFeedback {
+  activeRoot(store, aiRoot);
+  const entry = store.libraryEntry(aiRoot, input.entryId);
+  const feedback = store.libraryFeedback(aiRoot, entry.id);
+  const fields = {
+    note: input.note.trim(),
+    purpose: input.purpose.trim(),
+    conditions: input.conditions.trim(),
+    evidence: input.evidence.trim(),
+  };
+  if (
+    !/^[a-f0-9-]{36}$/i.test(input.feedbackId) ||
+    !["correction", "useful", "failed"].includes(input.kind) ||
+    !fields.note ||
+    fields.note.length > 4000 ||
+    fields.purpose.length > 1000 ||
+    fields.conditions.length > 2000 ||
+    fields.evidence.length > 4000 ||
+    (input.kind !== "correction" &&
+      (!fields.purpose || !fields.conditions || !fields.evidence))
+  )
+    throw new Error("请填写反馈；使用结果还需要实际用途、适用条件与观察依据。");
+  const prior = feedback.find((item) => item.id === input.feedbackId);
+  if (prior) {
+    if (
+      prior.kind !== input.kind ||
+      prior.targetHash !== input.expectedHash ||
+      prior.targetVersion !== input.expectedVersion ||
+      Object.entries(fields).some(
+        ([key, value]) => prior[key as keyof typeof fields] !== value,
+      ) ||
+      prior.outcome?.taskId !== input.taskId ||
+      prior.outcome?.sourceId !== input.sourceId ||
+      prior.outcome?.artifactId !== input.artifactId ||
+      prior.outcome?.artifactHash !== input.expectedArtifactHash ||
+      prior.outcome?.artifactVersion !== input.expectedArtifactVersion
+    )
+      throw new Error("同一反馈请求不能改写已经记录的内容。");
+    return prior;
+  }
+  if (feedback.length !== input.expectedFeedbackRevision)
+    throw new Error("反馈已有更新，请核对后再次提交，输入仍保留。");
+  let outcome: LibraryFeedback["outcome"];
+  if (
+    Boolean(input.artifactId) !== Boolean(input.expectedArtifactHash) ||
+    Boolean(input.artifactId) !== Boolean(input.expectedArtifactVersion)
+  )
+    throw new Error("请选择要反馈的具体成果版本。");
+  if (input.taskId && input.sourceId) {
+    const task = store.task(input.taskId);
+    const source = task.sources.find((item) => item.id === input.sourceId);
+    if (
+      !source?.library ||
+      source.library.root !== path.resolve(aiRoot) ||
+      source.library.entryId !== entry.id ||
+      source.library.hash !== input.expectedHash ||
+      source.library.version !== input.expectedVersion
+    )
+      throw new Error(
+        "所选工作没有使用这个 Lib 版本，不能把反馈归到其他资产。",
+      );
+    const artifact = input.artifactId
+      ? task.artifacts.find((item) => item.id === input.artifactId)
+      : undefined;
+    if (input.artifactId && !artifact)
+      throw new Error("反馈对应的成果不存在。");
+    if (
+      artifact &&
+      (artifact.hash !== input.expectedArtifactHash ||
+        artifact.version !== input.expectedArtifactVersion)
+    )
+      throw new Error("对应成果版本已改变，请核对后重新选择。");
+    if (
+      artifact &&
+      hash(readOwnedArtifactSync(artifact, task.workspace)) !== artifact.hash
+    )
+      throw new Error("对应成果已有外部修改，请先保存并核对成果版本。");
+    outcome = {
+      taskId: task.id,
+      taskTitle: task.title,
+      sourceId: source.id,
+      ...(artifact
+        ? {
+            artifactId: artifact.id,
+            artifactTitle: artifact.title,
+            artifactVersion: artifact.version,
+            artifactHash: artifact.hash,
+          }
+        : {}),
+    };
+  } else {
+    if (input.taskId || input.sourceId || input.artifactId)
+      throw new Error("使用反馈缺少对应工作和资料。");
+    if (
+      entry.version !== input.expectedVersion ||
+      hash(readLibraryBytes(store, aiRoot, entry.id)) !== input.expectedHash
+    )
+      throw new Error("收藏版本已改变，请核对后重新记录反馈。");
+  }
+  const record: LibraryFeedback = {
+    id: input.feedbackId,
+    entryId: entry.id,
+    kind: input.kind,
+    ...fields,
+    targetVersion: input.expectedVersion,
+    targetHash: input.expectedHash,
+    createdAt: now(),
+    ...(outcome ? { outcome } : {}),
+  };
+  store.appendLibraryFeedback(aiRoot, record);
+  return record;
 }

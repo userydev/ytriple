@@ -32,6 +32,7 @@ import {
   Archive,
   Trash2,
   RotateCcw,
+  Radar as RadarIcon,
   MessageSquare,
   Pause,
   Pin,
@@ -68,6 +69,7 @@ import { Library } from "./Library";
 import { ProcessView } from "./ProcessView";
 import { Projects } from "./Projects";
 import { ProjectWorkspace } from "./ProjectWorkspace";
+import { Radar } from "./Radar";
 import { WorkspaceControls } from "./WindowControls";
 import { WorkspacePanels } from "./WorkspacePanels";
 import {
@@ -80,7 +82,8 @@ import {
   type Dispatch,
 } from "./common";
 
-type Page = "work" | "projects" | "library" | "models" | "team" | "environment";
+type Page =
+  "work" | "radar" | "projects" | "library" | "models" | "team" | "environment";
 const isSettingsPage = (page: Page) =>
   ["models", "team", "environment"].includes(page);
 const UI_PREFERENCES_KEY = "ytriple.navigation.v1";
@@ -491,6 +494,7 @@ function Sidebar({
         {(
           [
             { id: "work", label: "工作台", icon: Compass },
+            { id: "radar", label: "雷达", icon: RadarIcon },
             { id: "projects", label: "项目", icon: Folder },
             { id: "library", label: "本地 Lib", icon: BookOpen },
           ] as const
@@ -502,7 +506,9 @@ function Sidebar({
           >
             <item.icon size={17} strokeWidth={1.7} />
             <span>{item.label}</span>
-            {item.id === "projects" && snapshot?.projects.length ? (
+            {item.id === "radar" && snapshot?.radar?.unreadCount ? (
+              <span className="nav-count">{snapshot.radar.unreadCount}</span>
+            ) : item.id === "projects" && snapshot?.projects.length ? (
               <span className="nav-count">{snapshot.projects.length}</span>
             ) : null}
           </button>
@@ -1154,6 +1160,17 @@ function Conversation({
             <span>{task.sources.length} 份资料</span>
             <span>{task.artifacts.length} 项成果</span>
           </div>
+          {task.status === "paused" &&
+          task.events.some(
+            (event) =>
+              event.type === "library.changed" &&
+              event.goalVersion === task.goalVersion,
+          ) ? (
+            <p className="inline-notice warning">
+              相关 Lib
+              已有修订或反馈。继续工作时，团队会依据更新重新判断；原成果已保留。
+            </p>
+          ) : null}
         </div>
         {!task.messages.length && !task.events.length ? (
           <div className="conversation-empty">
@@ -1584,6 +1601,7 @@ export function App() {
     "process",
   );
   const initialSelectionLoaded = useRef(false);
+  const [libraryEntryId, setLibraryEntryId] = useState<string | null>(null);
   const composerDrafts = useRef(new Map<string, ComposerDraft>());
   const [dialog, setDialog] = useState<Dialog>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1928,6 +1946,7 @@ export function App() {
               {
                 {
                   work: "工作空间",
+                  radar: "雷达",
                   projects: "项目",
                   library: "本地 Lib",
                   models: "AI 模型",
@@ -1940,15 +1959,17 @@ export function App() {
             <strong>
               {page === "work"
                 ? (task?.title ?? "新的开始")
-                : isSettingsPage(page)
-                  ? (
-                      {
-                        models: "连接与能力",
-                        team: "角色与协作",
-                        environment: "目录与规则",
-                      } as const
-                    )[page as "models" | "team" | "environment"]
-                  : "我的工作"}
+                : page === "radar"
+                  ? "每日情报与信息源"
+                  : isSettingsPage(page)
+                    ? (
+                        {
+                          models: "连接与能力",
+                          team: "角色与协作",
+                          environment: "目录与规则",
+                        } as const
+                      )[page as "models" | "team" | "environment"]
+                    : "我的工作"}
             </strong>
           </div>
           <div className="topbar-actions">
@@ -2149,6 +2170,10 @@ export function App() {
                   sources={task?.sources ?? []}
                   dispatch={dispatch}
                   onAdd={addSource}
+                  onLibrary={(entryId) => {
+                    setLibraryEntryId(entryId);
+                    setPage("library");
+                  }}
                 />
               )}
             </div>
@@ -2189,6 +2214,14 @@ export function App() {
             )
           }
         />
+        {page === "radar" ? (
+          <Radar
+            snapshot={snapshot}
+            dispatch={dispatch}
+            connected={connected}
+            onTask={selectTask}
+          />
+        ) : null}
         <div
           className={`settings-host ${!isSettingsPage(page) ? "workspace-hidden" : ""}`}
         >
@@ -2240,6 +2273,8 @@ export function App() {
         </ProjectWorkspace>
         {page === "library" ? (
           <Library
+            key={`${snapshot?.settings.aiRoot}:${libraryEntryId}`}
+            initialEntryId={libraryEntryId}
             snapshot={snapshot}
             dispatch={dispatch}
             onTask={selectTask}

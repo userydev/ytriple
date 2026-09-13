@@ -1,0 +1,1659 @@
+{
+  "openapi": "3.1.0",
+  "info":
+    {
+      "title": "ytriple Source Service API",
+      "version": "1.0.0",
+      "description": "Versioned source contract for pairing, user and server-recommended follows, persistent scheduling, public-URL observation, change delivery, and immutable revisions.",
+    },
+  "servers":
+    [
+      {
+        "url": "{origin}",
+        "variables": { "origin": { "default": "http://127.0.0.1:47321" } },
+      },
+    ],
+  "paths":
+    {
+      "/healthz":
+        {
+          "get":
+            {
+              "operationId": "getHealth",
+              "responses":
+                {
+                  "200":
+                    {
+                      "description": "The API process is alive.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/HealthResponse",
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+      "/readyz":
+        {
+          "get":
+            {
+              "operationId": "getReadiness",
+              "responses":
+                {
+                  "200":
+                    {
+                      "description": "Dependencies and migrations are ready.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/ReadinessResponse",
+                                },
+                            },
+                        },
+                    },
+                  "503":
+                    {
+                      "description": "A required dependency is not ready.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/ReadinessResponse",
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        },
+      "/v1/capabilities":
+        {
+          "get":
+            {
+              "operationId": "getCapabilities",
+              "security": [{ "DeviceToken": [] }],
+              "responses":
+                {
+                  "200":
+                    {
+                      "description": "Capabilities implemented by this service instance.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/CapabilitiesResponse",
+                                },
+                            },
+                        },
+                    },
+                  "400": { "$ref": "#/components/responses/ErrorResponse" },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                  "403": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+        },
+      "/v1/pairing/bootstrap":
+        {
+          "post":
+            {
+              "operationId": "pairDevice",
+              "parameters":
+                [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+              "requestBody":
+                {
+                  "required": true,
+                  "content":
+                    {
+                      "application/json":
+                        {
+                          "schema":
+                            { "$ref": "#/components/schemas/PairRequest" },
+                        },
+                    },
+                },
+              "responses":
+                {
+                  "201":
+                    {
+                      "description": "A scoped device token was issued.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                { "$ref": "#/components/schemas/PairResponse" },
+                            },
+                        },
+                    },
+                  "400": { "$ref": "#/components/responses/ErrorResponse" },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                  "409": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+        },
+      "/v1/recommended-sources":
+        {
+          "get":
+            {
+              "operationId": "listRecommendedSources",
+              "security": [{ "DeviceToken": [] }],
+              "responses":
+                {
+                  "200":
+                    {
+                      "description": "The active server-curated source catalog.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/RecommendedSourcesResponse",
+                                },
+                            },
+                        },
+                    },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                  "403": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+        },
+      "/v1/follows":
+        {
+          "get":
+            {
+              "operationId": "listSourceFollows",
+              "security": [{ "DeviceToken": [] }],
+              "responses":
+                {
+                  "200":
+                    {
+                      "description": "The tenant's scheduled user and server-recommended follows.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/SourceFollowsResponse",
+                                },
+                            },
+                        },
+                    },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                  "403": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+          "post":
+            {
+              "operationId": "createSourceFollow",
+              "security": [{ "DeviceToken": [] }],
+              "parameters":
+                [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+              "requestBody":
+                {
+                  "required": true,
+                  "content":
+                    {
+                      "application/json":
+                        {
+                          "schema":
+                            {
+                              "$ref": "#/components/schemas/CreateSourceFollowRequest",
+                            },
+                        },
+                    },
+                },
+              "responses":
+                {
+                  "202":
+                    {
+                      "description": "The persistent follow and its first refresh job.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/SourceFollowJobResponse",
+                                },
+                            },
+                        },
+                    },
+                  "400": { "$ref": "#/components/responses/ErrorResponse" },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                  "403": { "$ref": "#/components/responses/ErrorResponse" },
+                  "404": { "$ref": "#/components/responses/ErrorResponse" },
+                  "409": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+        },
+      "/v1/follows/{followId}":
+        {
+          "patch":
+            {
+              "operationId": "updateSourceFollow",
+              "security": [{ "DeviceToken": [] }],
+              "parameters":
+                [
+                  { "$ref": "#/components/parameters/FollowId" },
+                  { "$ref": "#/components/parameters/IdempotencyKey" },
+                ],
+              "requestBody":
+                {
+                  "required": true,
+                  "content":
+                    {
+                      "application/json":
+                        {
+                          "schema":
+                            {
+                              "$ref": "#/components/schemas/UpdateSourceFollowRequest",
+                            },
+                        },
+                    },
+                },
+              "responses":
+                {
+                  "200":
+                    {
+                      "description": "The updated follow state and schedule.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/SourceFollowResponse",
+                                },
+                            },
+                        },
+                    },
+                  "400": { "$ref": "#/components/responses/ErrorResponse" },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                  "403": { "$ref": "#/components/responses/ErrorResponse" },
+                  "404": { "$ref": "#/components/responses/ErrorResponse" },
+                  "409": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+          "delete":
+            {
+              "operationId": "deleteSourceFollow",
+              "description": "User-created follows are deleted. Server recommendations are muted with PATCH state=paused instead.",
+              "security": [{ "DeviceToken": [] }],
+              "parameters":
+                [
+                  { "$ref": "#/components/parameters/FollowId" },
+                  { "$ref": "#/components/parameters/IdempotencyKey" },
+                ],
+              "responses":
+                {
+                  "200":
+                    {
+                      "description": "The user follow was deleted without deleting retained revisions.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/DeleteSourceFollowResponse",
+                                },
+                            },
+                        },
+                    },
+                  "400": { "$ref": "#/components/responses/ErrorResponse" },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                  "403": { "$ref": "#/components/responses/ErrorResponse" },
+                  "404": { "$ref": "#/components/responses/ErrorResponse" },
+                  "409": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+        },
+      "/v1/follows/{followId}/refresh":
+        {
+          "post":
+            {
+              "operationId": "refreshSourceFollow",
+              "security": [{ "DeviceToken": [] }],
+              "parameters":
+                [
+                  { "$ref": "#/components/parameters/FollowId" },
+                  { "$ref": "#/components/parameters/IdempotencyKey" },
+                ],
+              "requestBody":
+                {
+                  "required": false,
+                  "content":
+                    {
+                      "application/json":
+                        {
+                          "schema":
+                            { "$ref": "#/components/schemas/RefreshRequest" },
+                        },
+                    },
+                },
+              "responses":
+                {
+                  "202":
+                    {
+                      "description": "An immediate persistent refresh for the follow.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/SourceFollowJobResponse",
+                                },
+                            },
+                        },
+                    },
+                  "400": { "$ref": "#/components/responses/ErrorResponse" },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                  "403": { "$ref": "#/components/responses/ErrorResponse" },
+                  "404": { "$ref": "#/components/responses/ErrorResponse" },
+                  "409": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+        },
+      "/v1/sources/url":
+        {
+          "put":
+            {
+              "operationId": "upsertUrlSource",
+              "security": [{ "DeviceToken": [] }],
+              "parameters":
+                [{ "$ref": "#/components/parameters/IdempotencyKey" }],
+              "requestBody":
+                {
+                  "required": true,
+                  "content":
+                    {
+                      "application/json":
+                        {
+                          "schema":
+                            {
+                              "$ref": "#/components/schemas/UrlSourceUpsertRequest",
+                            },
+                        },
+                    },
+                },
+              "responses":
+                {
+                  "202":
+                    {
+                      "description": "The stable URL source and its refresh job.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/UrlSourceUpsertResponse",
+                                },
+                            },
+                        },
+                    },
+                  "400": { "$ref": "#/components/responses/ErrorResponse" },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                  "403": { "$ref": "#/components/responses/ErrorResponse" },
+                  "409": { "$ref": "#/components/responses/ErrorResponse" },
+                  "429": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+        },
+      "/v1/sources/{sourceId}/refreshes":
+        {
+          "post":
+            {
+              "operationId": "refreshSource",
+              "security": [{ "DeviceToken": [] }],
+              "parameters":
+                [
+                  { "$ref": "#/components/parameters/SourceId" },
+                  { "$ref": "#/components/parameters/IdempotencyKey" },
+                ],
+              "requestBody":
+                {
+                  "required": false,
+                  "content":
+                    {
+                      "application/json":
+                        {
+                          "schema":
+                            { "$ref": "#/components/schemas/RefreshRequest" },
+                        },
+                    },
+                },
+              "responses":
+                {
+                  "202":
+                    {
+                      "description": "The persistent refresh job was accepted.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                { "$ref": "#/components/schemas/JobResponse" },
+                            },
+                        },
+                    },
+                  "400": { "$ref": "#/components/responses/ErrorResponse" },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                  "403": { "$ref": "#/components/responses/ErrorResponse" },
+                  "404": { "$ref": "#/components/responses/ErrorResponse" },
+                  "409": { "$ref": "#/components/responses/ErrorResponse" },
+                  "429": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+        },
+      "/v1/jobs/{jobId}":
+        {
+          "get":
+            {
+              "operationId": "getJob",
+              "security": [{ "DeviceToken": [] }],
+              "parameters": [{ "$ref": "#/components/parameters/JobId" }],
+              "responses":
+                {
+                  "200":
+                    {
+                      "description": "Current persistent job state.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                { "$ref": "#/components/schemas/JobResponse" },
+                            },
+                        },
+                    },
+                  "400": { "$ref": "#/components/responses/ErrorResponse" },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                  "403": { "$ref": "#/components/responses/ErrorResponse" },
+                  "404": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+        },
+      "/v1/changes":
+        {
+          "get":
+            {
+              "operationId": "getChanges",
+              "security": [{ "DeviceToken": [] }],
+              "parameters":
+                [
+                  { "$ref": "#/components/parameters/Cursor" },
+                  { "$ref": "#/components/parameters/PageLimit" },
+                ],
+              "responses":
+                {
+                  "200":
+                    {
+                      "description": "A deterministic page and the cursor for its committed boundary.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                { "$ref": "#/components/schemas/ChangesPage" },
+                            },
+                        },
+                    },
+                  "400": { "$ref": "#/components/responses/ErrorResponse" },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                  "403": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+        },
+      "/v1/changes/stream":
+        {
+          "get":
+            {
+              "operationId": "streamChanges",
+              "description": "Authenticated SSE stream. It first replays committed changes after the signed cursor, then uses PostgreSQL notifications as wake-ups. Last-Event-ID takes precedence over cursor on reconnect; delivery_change remains authoritative.",
+              "security": [{ "DeviceToken": [] }],
+              "parameters":
+                [
+                  { "$ref": "#/components/parameters/Cursor" },
+                  { "$ref": "#/components/parameters/LastEventId" },
+                ],
+              "responses":
+                {
+                  "200":
+                    {
+                      "description": "Each change frame uses event: change, a signed cursor as id, and ChangeStreamEvent JSON as data. Comment frames are heartbeats and never advance the cursor.",
+                      "content":
+                        {
+                          "text/event-stream":
+                            {
+                              "x-event-name": "change",
+                              "x-event-data-schema":
+                                {
+                                  "$ref": "#/components/schemas/ChangeStreamEvent",
+                                },
+                              "schema":
+                                {
+                                  "type": "string",
+                                  "contentMediaType": "text/event-stream",
+                                },
+                            },
+                        },
+                    },
+                  "400": { "$ref": "#/components/responses/ErrorResponse" },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                  "403": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+        },
+      "/v1/items/{itemId}/revisions/{revisionId}":
+        {
+          "get":
+            {
+              "operationId": "getRevision",
+              "security": [{ "DeviceToken": [] }],
+              "parameters":
+                [
+                  { "$ref": "#/components/parameters/ItemId" },
+                  { "$ref": "#/components/parameters/RevisionId" },
+                ],
+              "responses":
+                {
+                  "200":
+                    {
+                      "description": "An immutable content revision and its stable item.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/RevisionResponse",
+                                },
+                            },
+                        },
+                    },
+                  "400": { "$ref": "#/components/responses/ErrorResponse" },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                  "403": { "$ref": "#/components/responses/ErrorResponse" },
+                  "404": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+        },
+      "/v1/reading":
+        {
+          "get":
+            {
+              "operationId": "getReadingTopics",
+              "security": [{ "DeviceToken": [] }],
+              "responses":
+                {
+                  "200":
+                    {
+                      "description": "Latest server reading topics for the authenticated tenant. An empty list means no completed synthesis yet.",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/ReadingResponse",
+                                },
+                            },
+                        },
+                    },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                  "403": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+        },
+    },
+  "components":
+    {
+      "securitySchemes":
+        {
+          "DeviceToken":
+            {
+              "type": "http",
+              "scheme": "bearer",
+              "bearerFormat": "opaque device token",
+            },
+        },
+      "parameters":
+        {
+          "IdempotencyKey":
+            {
+              "name": "Idempotency-Key",
+              "in": "header",
+              "required": true,
+              "schema":
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256,
+                  "pattern": "^[!-~]+$",
+                },
+            },
+          "SourceId":
+            {
+              "name": "sourceId",
+              "in": "path",
+              "required": true,
+              "schema": { "$ref": "#/components/schemas/Uuid" },
+            },
+          "FollowId":
+            {
+              "name": "followId",
+              "in": "path",
+              "required": true,
+              "schema": { "$ref": "#/components/schemas/Uuid" },
+            },
+          "JobId":
+            {
+              "name": "jobId",
+              "in": "path",
+              "required": true,
+              "schema": { "$ref": "#/components/schemas/Uuid" },
+            },
+          "ItemId":
+            {
+              "name": "itemId",
+              "in": "path",
+              "required": true,
+              "schema": { "$ref": "#/components/schemas/Uuid" },
+            },
+          "RevisionId":
+            {
+              "name": "revisionId",
+              "in": "path",
+              "required": true,
+              "schema": { "$ref": "#/components/schemas/Uuid" },
+            },
+          "Cursor":
+            {
+              "name": "cursor",
+              "in": "query",
+              "required": false,
+              "schema": { "$ref": "#/components/schemas/Cursor" },
+            },
+          "PageLimit":
+            {
+              "name": "limit",
+              "in": "query",
+              "required": false,
+              "schema":
+                {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 200,
+                  "default": 100,
+                },
+            },
+          "LastEventId":
+            {
+              "name": "Last-Event-ID",
+              "in": "header",
+              "required": false,
+              "description": "Signed cursor from the last fully received SSE event. Takes precedence over the cursor query parameter.",
+              "schema": { "$ref": "#/components/schemas/Cursor" },
+            },
+        },
+      "responses":
+        {
+          "ErrorResponse":
+            {
+              "description": "A stable, machine-readable API error.",
+              "content":
+                {
+                  "application/json":
+                    {
+                      "schema":
+                        { "$ref": "#/components/schemas/ApiErrorResponse" },
+                    },
+                },
+            },
+        },
+      "schemas":
+        {
+          "ProtocolVersion": { "type": "string", "const": "1.0" },
+          "Uuid": { "type": "string", "format": "uuid" },
+          "StableId":
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+            },
+          "Timestamp": { "type": "string", "format": "date-time" },
+          "ContentHash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "Cursor":
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+            },
+          "HttpUrl":
+            {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 4096,
+              "pattern": "^https?://",
+              "description": "HTTP(S) only, without embedded credentials or secret query parameters. Network safety is revalidated by the fetch worker.",
+            },
+          "ResponseMeta":
+            {
+              "type": "object",
+              "required": ["protocolVersion", "serverInstanceId"],
+              "properties":
+                {
+                  "protocolVersion":
+                    { "$ref": "#/components/schemas/ProtocolVersion" },
+                  "serverInstanceId": { "$ref": "#/components/schemas/Uuid" },
+                },
+            },
+          "HealthResponse":
+            {
+              "type": "object",
+              "required": ["meta", "status"],
+              "properties":
+                {
+                  "meta": { "$ref": "#/components/schemas/ResponseMeta" },
+                  "status": { "const": "ok" },
+                },
+            },
+          "ReadinessResponse":
+            {
+              "type": "object",
+              "required": ["meta", "status"],
+              "properties":
+                {
+                  "meta": { "$ref": "#/components/schemas/ResponseMeta" },
+                  "status":
+                    { "type": "string", "enum": ["ready", "not_ready"] },
+                },
+            },
+          "SourceApiScope":
+            {
+              "type": "string",
+              "enum":
+                [
+                  "sources:read",
+                  "sources:write",
+                  "refreshes:write",
+                  "content:read",
+                ],
+            },
+          "PairRequest":
+            {
+              "type": "object",
+              "required": ["deviceName", "bootstrapToken"],
+              "properties":
+                {
+                  "deviceName":
+                    { "type": "string", "minLength": 1, "maxLength": 120 },
+                  "bootstrapToken":
+                    { "type": "string", "minLength": 1, "maxLength": 512 },
+                },
+            },
+          "PairResponse":
+            {
+              "type": "object",
+              "required": ["meta", "tenantId", "deviceId", "token", "scopes"],
+              "properties":
+                {
+                  "meta": { "$ref": "#/components/schemas/ResponseMeta" },
+                  "tenantId": { "$ref": "#/components/schemas/StableId" },
+                  "deviceId": { "$ref": "#/components/schemas/StableId" },
+                  "token":
+                    { "type": "string", "minLength": 1, "maxLength": 4096 },
+                  "scopes":
+                    {
+                      "type": "array",
+                      "minItems": 1,
+                      "uniqueItems": true,
+                      "items":
+                        { "$ref": "#/components/schemas/SourceApiScope" },
+                    },
+                },
+            },
+          "CapabilityFlags":
+            {
+              "type": "object",
+              "required":
+                ["publicUrl", "explicitRefresh", "changes", "itemRevisions"],
+              "properties":
+                {
+                  "publicUrl": { "type": "boolean" },
+                  "explicitRefresh": { "type": "boolean" },
+                  "changes": { "type": "boolean" },
+                  "itemRevisions": { "type": "boolean" },
+                  "changeStream":
+                    {
+                      "type": "boolean",
+                      "description": "Present and true when authenticated SSE change delivery is supported.",
+                    },
+                  "sourceFollows":
+                    {
+                      "type": "boolean",
+                      "description": "Present and true when persistent scheduled follows are supported.",
+                    },
+                  "recommendedSources":
+                    {
+                      "type": "boolean",
+                      "description": "Present and true when the server-curated source catalog is supported.",
+                    },
+                  "rssAtom":
+                    {
+                      "type": "boolean",
+                      "description": "RSS and Atom feeds yield separately versioned articles.",
+                    },
+                  "readingTopics":
+                    {
+                      "type": "boolean",
+                      "description": "Server-generated reading topics with immutable source evidence are available.",
+                    },
+                },
+            },
+          "CapabilitiesResponse":
+            {
+              "type": "object",
+              "required": ["meta", "tenantId", "capabilities", "scopes"],
+              "properties":
+                {
+                  "meta": { "$ref": "#/components/schemas/ResponseMeta" },
+                  "tenantId": { "$ref": "#/components/schemas/StableId" },
+                  "capabilities":
+                    { "$ref": "#/components/schemas/CapabilityFlags" },
+                  "scopes":
+                    {
+                      "type": "array",
+                      "items":
+                        { "$ref": "#/components/schemas/SourceApiScope" },
+                    },
+                },
+            },
+          "SourceApiErrorCode":
+            {
+              "type": "string",
+              "enum":
+                [
+                  "INVALID_REQUEST",
+                  "INVALID_SOURCE_URL",
+                  "UNAUTHORIZED",
+                  "FORBIDDEN",
+                  "NOT_FOUND",
+                  "CONFLICT",
+                  "IDEMPOTENCY_KEY_REQUIRED",
+                  "IDEMPOTENCY_KEY_REUSED",
+                  "INVALID_CURSOR",
+                  "CURSOR_INSTANCE_MISMATCH",
+                  "RATE_LIMITED",
+                  "SOURCE_URL_BLOCKED",
+                  "SOURCE_TOO_LARGE",
+                  "SOURCE_TIMEOUT",
+                  "SOURCE_REDIRECT_LIMIT",
+                  "SOURCE_HTTP_ERROR",
+                  "SOURCE_UNSUPPORTED_CONTENT",
+                  "SOURCE_CONTENT_UNREADABLE",
+                  "SOURCE_WORKER_LOST",
+                  "SOURCE_FETCH_FAILED",
+                  "INTERNAL_ERROR",
+                ],
+            },
+          "ApiError":
+            {
+              "type": "object",
+              "required": ["code", "message", "retryable"],
+              "properties":
+                {
+                  "code": { "$ref": "#/components/schemas/SourceApiErrorCode" },
+                  "message":
+                    { "type": "string", "minLength": 1, "maxLength": 1000 },
+                  "retryable": { "type": "boolean" },
+                  "retryAfterSeconds": { "type": "integer", "minimum": 0 },
+                },
+            },
+          "ApiErrorResponse":
+            {
+              "type": "object",
+              "required": ["meta", "error"],
+              "properties":
+                {
+                  "meta": { "$ref": "#/components/schemas/ResponseMeta" },
+                  "error": { "$ref": "#/components/schemas/ApiError" },
+                },
+            },
+          "UrlSourceUpsertRequest":
+            {
+              "type": "object",
+              "required": ["url"],
+              "properties":
+                { "url": { "$ref": "#/components/schemas/HttpUrl" } },
+            },
+          "UrlSource":
+            {
+              "type": "object",
+              "required": ["id", "url", "version"],
+              "properties":
+                {
+                  "id": { "$ref": "#/components/schemas/StableId" },
+                  "url": { "$ref": "#/components/schemas/HttpUrl" },
+                  "version": { "type": "integer", "minimum": 1 },
+                },
+            },
+          "SourceCategory":
+            { "type": "string", "minLength": 1, "maxLength": 80 },
+          "RecommendedSource":
+            {
+              "type": "object",
+              "required":
+                [
+                  "id",
+                  "name",
+                  "category",
+                  "description",
+                  "url",
+                  "refreshIntervalMinutes",
+                  "enabledByDefault",
+                ],
+              "properties":
+                {
+                  "id": { "$ref": "#/components/schemas/StableId" },
+                  "name":
+                    { "type": "string", "minLength": 1, "maxLength": 200 },
+                  "category": { "$ref": "#/components/schemas/SourceCategory" },
+                  "description":
+                    { "type": "string", "minLength": 1, "maxLength": 500 },
+                  "url": { "$ref": "#/components/schemas/HttpUrl" },
+                  "refreshIntervalMinutes":
+                    { "type": "integer", "minimum": 5, "maximum": 10080 },
+                  "enabledByDefault": { "type": "boolean" },
+                },
+            },
+          "RecommendedSourcesResponse":
+            {
+              "type": "object",
+              "required": ["meta", "sources"],
+              "properties":
+                {
+                  "meta": { "$ref": "#/components/schemas/ResponseMeta" },
+                  "sources":
+                    {
+                      "type": "array",
+                      "items":
+                        { "$ref": "#/components/schemas/RecommendedSource" },
+                    },
+                },
+            },
+          "SourceFollow":
+            {
+              "type": "object",
+              "required":
+                [
+                  "id",
+                  "sourceId",
+                  "origin",
+                  "name",
+                  "category",
+                  "url",
+                  "state",
+                  "refreshIntervalMinutes",
+                  "createdAt",
+                  "updatedAt",
+                ],
+              "properties":
+                {
+                  "id": { "$ref": "#/components/schemas/StableId" },
+                  "sourceId": { "$ref": "#/components/schemas/StableId" },
+                  "origin":
+                    { "type": "string", "enum": ["user", "recommended"] },
+                  "recommendedSourceId":
+                    { "$ref": "#/components/schemas/StableId" },
+                  "name":
+                    { "type": "string", "minLength": 1, "maxLength": 200 },
+                  "category": { "$ref": "#/components/schemas/SourceCategory" },
+                  "url": { "$ref": "#/components/schemas/HttpUrl" },
+                  "state": { "type": "string", "enum": ["active", "paused"] },
+                  "refreshIntervalMinutes":
+                    { "type": "integer", "minimum": 5, "maximum": 10080 },
+                  "createdAt": { "$ref": "#/components/schemas/Timestamp" },
+                  "updatedAt": { "$ref": "#/components/schemas/Timestamp" },
+                  "nextRefreshAt": { "$ref": "#/components/schemas/Timestamp" },
+                  "lastAttemptAt": { "$ref": "#/components/schemas/Timestamp" },
+                  "lastSuccessAt": { "$ref": "#/components/schemas/Timestamp" },
+                  "lastError": { "$ref": "#/components/schemas/ApiError" },
+                },
+              "allOf":
+                [
+                  {
+                    "if":
+                      {
+                        "properties": { "origin": { "const": "recommended" } },
+                        "required": ["origin"],
+                      },
+                    "then": { "required": ["recommendedSourceId"] },
+                  },
+                ],
+            },
+          "PublicUrlFollowTarget":
+            {
+              "type": "object",
+              "required": ["kind", "url"],
+              "properties":
+                {
+                  "kind": { "const": "public-url" },
+                  "url": { "$ref": "#/components/schemas/HttpUrl" },
+                },
+            },
+          "RecommendedFollowTarget":
+            {
+              "type": "object",
+              "required": ["kind", "recommendedSourceId"],
+              "properties":
+                {
+                  "kind": { "const": "recommended" },
+                  "recommendedSourceId":
+                    { "$ref": "#/components/schemas/StableId" },
+                },
+            },
+          "CreateSourceFollowRequest":
+            {
+              "type": "object",
+              "required": ["source"],
+              "properties":
+                {
+                  "source":
+                    {
+                      "oneOf":
+                        [
+                          {
+                            "$ref": "#/components/schemas/PublicUrlFollowTarget",
+                          },
+                          {
+                            "$ref": "#/components/schemas/RecommendedFollowTarget",
+                          },
+                        ],
+                      "discriminator": { "propertyName": "kind" },
+                    },
+                  "name":
+                    { "type": "string", "minLength": 1, "maxLength": 200 },
+                  "category": { "$ref": "#/components/schemas/SourceCategory" },
+                  "refreshIntervalMinutes":
+                    { "type": "integer", "minimum": 5, "maximum": 10080 },
+                },
+            },
+          "UpdateSourceFollowRequest":
+            {
+              "type": "object",
+              "minProperties": 1,
+              "properties":
+                {
+                  "name":
+                    { "type": "string", "minLength": 1, "maxLength": 200 },
+                  "category": { "$ref": "#/components/schemas/SourceCategory" },
+                  "state": { "type": "string", "enum": ["active", "paused"] },
+                  "refreshIntervalMinutes":
+                    { "type": "integer", "minimum": 5, "maximum": 10080 },
+                },
+            },
+          "SourceFollowsResponse":
+            {
+              "type": "object",
+              "required": ["meta", "follows"],
+              "properties":
+                {
+                  "meta": { "$ref": "#/components/schemas/ResponseMeta" },
+                  "follows":
+                    {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/SourceFollow" },
+                    },
+                },
+            },
+          "SourceFollowResponse":
+            {
+              "type": "object",
+              "required": ["meta", "follow"],
+              "properties":
+                {
+                  "meta": { "$ref": "#/components/schemas/ResponseMeta" },
+                  "follow": { "$ref": "#/components/schemas/SourceFollow" },
+                },
+            },
+          "DeleteSourceFollowResponse":
+            {
+              "type": "object",
+              "required": ["meta", "followId", "deleted"],
+              "properties":
+                {
+                  "meta": { "$ref": "#/components/schemas/ResponseMeta" },
+                  "followId": { "$ref": "#/components/schemas/StableId" },
+                  "deleted": { "const": true },
+                },
+            },
+          "RefreshRequest": { "type": "object", "properties": {} },
+          "JobStatus":
+            {
+              "type": "string",
+              "enum": ["queued", "running", "succeeded", "failed"],
+            },
+          "JobBase":
+            {
+              "type": "object",
+              "required":
+                ["id", "status", "sourceId", "createdAt", "updatedAt"],
+              "properties":
+                {
+                  "id": { "$ref": "#/components/schemas/StableId" },
+                  "status": { "$ref": "#/components/schemas/JobStatus" },
+                  "sourceId": { "$ref": "#/components/schemas/StableId" },
+                  "createdAt": { "$ref": "#/components/schemas/Timestamp" },
+                  "updatedAt": { "$ref": "#/components/schemas/Timestamp" },
+                  "itemId": { "$ref": "#/components/schemas/StableId" },
+                  "revisionId": { "$ref": "#/components/schemas/StableId" },
+                  "error": { "$ref": "#/components/schemas/ApiError" },
+                },
+            },
+          "QueuedJob":
+            {
+              "allOf":
+                [
+                  { "$ref": "#/components/schemas/JobBase" },
+                  {
+                    "type": "object",
+                    "properties": { "status": { "const": "queued" } },
+                  },
+                ],
+            },
+          "RunningJob":
+            {
+              "allOf":
+                [
+                  { "$ref": "#/components/schemas/JobBase" },
+                  {
+                    "type": "object",
+                    "properties": { "status": { "const": "running" } },
+                  },
+                ],
+            },
+          "SucceededJob":
+            {
+              "allOf":
+                [
+                  { "$ref": "#/components/schemas/JobBase" },
+                  {
+                    "type": "object",
+                    "properties":
+                      {
+                        "status": { "const": "succeeded" },
+                        "itemCount":
+                          { "type": "integer", "minimum": 0, "maximum": 40 },
+                      },
+                    "anyOf":
+                      [
+                        {
+                          "required": ["itemId", "revisionId"],
+                          "not":
+                            {
+                              "required": ["itemCount"],
+                              "properties": { "itemCount": { "const": 0 } },
+                            },
+                        },
+                        {
+                          "required": ["itemCount"],
+                          "properties": { "itemCount": { "const": 0 } },
+                          "not":
+                            {
+                              "anyOf":
+                                [
+                                  { "required": ["itemId"] },
+                                  { "required": ["revisionId"] },
+                                ],
+                            },
+                        },
+                      ],
+                  },
+                ],
+            },
+          "FailedJob":
+            {
+              "allOf":
+                [
+                  { "$ref": "#/components/schemas/JobBase" },
+                  {
+                    "type": "object",
+                    "required": ["error"],
+                    "properties": { "status": { "const": "failed" } },
+                  },
+                ],
+            },
+          "Job":
+            {
+              "oneOf":
+                [
+                  { "$ref": "#/components/schemas/QueuedJob" },
+                  { "$ref": "#/components/schemas/RunningJob" },
+                  { "$ref": "#/components/schemas/SucceededJob" },
+                  { "$ref": "#/components/schemas/FailedJob" },
+                ],
+              "discriminator": { "propertyName": "status" },
+            },
+          "JobResponse":
+            {
+              "type": "object",
+              "required": ["meta", "job"],
+              "properties":
+                {
+                  "meta": { "$ref": "#/components/schemas/ResponseMeta" },
+                  "job": { "$ref": "#/components/schemas/Job" },
+                },
+            },
+          "SourceFollowJobResponse":
+            {
+              "type": "object",
+              "required": ["meta", "follow", "job"],
+              "properties":
+                {
+                  "meta": { "$ref": "#/components/schemas/ResponseMeta" },
+                  "follow": { "$ref": "#/components/schemas/SourceFollow" },
+                  "job": { "$ref": "#/components/schemas/Job" },
+                },
+            },
+          "UrlSourceUpsertResponse":
+            {
+              "type": "object",
+              "required": ["meta", "source", "job"],
+              "properties":
+                {
+                  "meta": { "$ref": "#/components/schemas/ResponseMeta" },
+                  "source": { "$ref": "#/components/schemas/UrlSource" },
+                  "job": { "$ref": "#/components/schemas/Job" },
+                },
+            },
+          "ChangeKind":
+            {
+              "type": "string",
+              "enum":
+                [
+                  "item.created",
+                  "item.revised",
+                  "source.state_changed",
+                  "item.tombstoned",
+                ],
+            },
+          "Coverage":
+            {
+              "type": "string",
+              "enum":
+                ["listing", "metadata", "fulltext", "transcript", "vision"],
+            },
+          "Change":
+            {
+              "type": "object",
+              "required": ["id", "kind", "sourceId", "occurredAt"],
+              "properties":
+                {
+                  "id": { "$ref": "#/components/schemas/StableId" },
+                  "kind": { "$ref": "#/components/schemas/ChangeKind" },
+                  "sourceId": { "$ref": "#/components/schemas/StableId" },
+                  "followId": { "$ref": "#/components/schemas/StableId" },
+                  "itemId": { "$ref": "#/components/schemas/StableId" },
+                  "revisionId": { "$ref": "#/components/schemas/StableId" },
+                  "observedAt": { "$ref": "#/components/schemas/Timestamp" },
+                  "contentHash": { "$ref": "#/components/schemas/ContentHash" },
+                  "coverage": { "$ref": "#/components/schemas/Coverage" },
+                  "missing":
+                    {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items":
+                        { "type": "string", "minLength": 1, "maxLength": 200 },
+                    },
+                  "occurredAt": { "$ref": "#/components/schemas/Timestamp" },
+                },
+              "allOf":
+                [
+                  {
+                    "if":
+                      {
+                        "properties":
+                          {
+                            "kind":
+                              { "enum": ["item.created", "item.revised"] },
+                          },
+                        "required": ["kind"],
+                      },
+                    "then":
+                      {
+                        "required":
+                          [
+                            "itemId",
+                            "revisionId",
+                            "observedAt",
+                            "contentHash",
+                            "coverage",
+                            "missing",
+                          ],
+                      },
+                  },
+                  {
+                    "if":
+                      {
+                        "properties":
+                          { "kind": { "const": "item.tombstoned" } },
+                        "required": ["kind"],
+                      },
+                    "then": { "required": ["itemId"] },
+                  },
+                ],
+            },
+          "ChangesPage":
+            {
+              "type": "object",
+              "required": ["meta", "changes", "nextCursor", "hasMore"],
+              "properties":
+                {
+                  "meta": { "$ref": "#/components/schemas/ResponseMeta" },
+                  "changes":
+                    {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Change" },
+                    },
+                  "nextCursor": { "$ref": "#/components/schemas/Cursor" },
+                  "hasMore": { "type": "boolean" },
+                },
+            },
+          "ChangeStreamEvent":
+            {
+              "type": "object",
+              "required": ["meta", "cursor", "change"],
+              "properties":
+                {
+                  "meta": { "$ref": "#/components/schemas/ResponseMeta" },
+                  "cursor": { "$ref": "#/components/schemas/Cursor" },
+                  "change": { "$ref": "#/components/schemas/Change" },
+                },
+            },
+          "SourceItem":
+            {
+              "type": "object",
+              "required": ["id", "sourceId", "canonicalUrl", "title"],
+              "properties":
+                {
+                  "id": { "$ref": "#/components/schemas/StableId" },
+                  "sourceId": { "$ref": "#/components/schemas/StableId" },
+                  "externalItemKey":
+                    { "$ref": "#/components/schemas/StableId" },
+                  "canonicalUrl": { "$ref": "#/components/schemas/HttpUrl" },
+                  "title":
+                    { "type": "string", "minLength": 1, "maxLength": 500 },
+                },
+            },
+          "ItemRevision":
+            {
+              "type": "object",
+              "required":
+                [
+                  "id",
+                  "itemId",
+                  "observedAt",
+                  "contentHash",
+                  "coverage",
+                  "missing",
+                  "content",
+                ],
+              "properties":
+                {
+                  "id": { "$ref": "#/components/schemas/StableId" },
+                  "itemId": { "$ref": "#/components/schemas/StableId" },
+                  "observedAt": { "$ref": "#/components/schemas/Timestamp" },
+                  "contentHash": { "$ref": "#/components/schemas/ContentHash" },
+                  "coverage": { "$ref": "#/components/schemas/Coverage" },
+                  "missing":
+                    {
+                      "type": "array",
+                      "maxItems": 100,
+                      "items":
+                        { "type": "string", "minLength": 1, "maxLength": 200 },
+                    },
+                  "content": { "type": "string" },
+                  "publishedAt": { "type": "string", "format": "date-time" },
+                },
+            },
+          "RevisionResponse":
+            {
+              "type": "object",
+              "required": ["meta", "item", "revision"],
+              "properties":
+                {
+                  "meta": { "$ref": "#/components/schemas/ResponseMeta" },
+                  "item": { "$ref": "#/components/schemas/SourceItem" },
+                  "revision": { "$ref": "#/components/schemas/ItemRevision" },
+                },
+            },
+          "ReadingResponse":
+            {
+              "type": "object",
+              "properties":
+                {
+                  "meta":
+                    {
+                      "type": "object",
+                      "properties":
+                        {
+                          "protocolVersion":
+                            { "type": "string", "const": "1.0" },
+                          "serverInstanceId":
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                            },
+                        },
+                      "required": ["protocolVersion", "serverInstanceId"],
+                    },
+                  "topics":
+                    {
+                      "maxItems": 100,
+                      "type": "array",
+                      "items":
+                        {
+                          "type": "object",
+                          "properties":
+                            {
+                              "title":
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 160,
+                                },
+                              "summary":
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 2000,
+                                },
+                              "points":
+                                {
+                                  "minItems": 1,
+                                  "maxItems": 6,
+                                  "type": "array",
+                                  "items":
+                                    {
+                                      "type": "object",
+                                      "properties":
+                                        {
+                                          "title":
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 160,
+                                            },
+                                          "detail":
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 1500,
+                                            },
+                                          "sourceIds":
+                                            {
+                                              "minItems": 1,
+                                              "maxItems": 12,
+                                              "type": "array",
+                                              "items":
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 200,
+                                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                                                },
+                                            },
+                                        },
+                                      "required":
+                                        ["title", "detail", "sourceIds"],
+                                    },
+                                },
+                              "caveats":
+                                {
+                                  "maxItems": 6,
+                                  "type": "array",
+                                  "items":
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 500,
+                                    },
+                                },
+                              "id":
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200,
+                                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                                },
+                              "category":
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 80,
+                                },
+                              "generatedAt":
+                                {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                },
+                              "model":
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 120,
+                                },
+                              "inputHash":
+                                {
+                                  "type": "string",
+                                  "pattern": "^[a-f0-9]{64}$",
+                                },
+                              "evidence":
+                                {
+                                  "minItems": 1,
+                                  "maxItems": 16,
+                                  "type": "array",
+                                  "items":
+                                    {
+                                      "type": "object",
+                                      "properties":
+                                        {
+                                          "itemId":
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200,
+                                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                                            },
+                                          "revisionId":
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200,
+                                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                                            },
+                                          "title":
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 500,
+                                            },
+                                          "url":
+                                            {
+                                              "type": "string",
+                                              "maxLength": 4096,
+                                              "format": "uri",
+                                            },
+                                          "coverage":
+                                            {
+                                              "type": "string",
+                                              "enum":
+                                                [
+                                                  "listing",
+                                                  "metadata",
+                                                  "fulltext",
+                                                  "transcript",
+                                                  "vision",
+                                                ],
+                                            },
+                                          "excerpt":
+                                            {
+                                              "type": "string",
+                                              "maxLength": 8000,
+                                            },
+                                        },
+                                      "required":
+                                        [
+                                          "itemId",
+                                          "revisionId",
+                                          "title",
+                                          "url",
+                                          "coverage",
+                                          "excerpt",
+                                        ],
+                                    },
+                                },
+                            },
+                          "required":
+                            [
+                              "title",
+                              "summary",
+                              "points",
+                              "caveats",
+                              "id",
+                              "category",
+                              "generatedAt",
+                              "model",
+                              "inputHash",
+                              "evidence",
+                            ],
+                        },
+                    },
+                },
+              "required": ["meta", "topics"],
+            },
+        },
+    },
+}

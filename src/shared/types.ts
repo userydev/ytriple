@@ -1,3 +1,4 @@
+import type { ReadingTopic } from "@ytriple/source-contract";
 import type { ProjectBrowserState } from "./project-files.js";
 import type { MemberSettingsMap } from "./member-settings.js";
 import type { ProjectObservation, ProjectDiscoveryState } from "./projects.js";
@@ -29,6 +30,23 @@ export interface AppSettings {
   memberProfiles: Record<MemberId, string>;
   memberSettings?: MemberSettingsMap;
   projectMonitoring?: boolean;
+  libraryRecall?: boolean;
+}
+export type SourceCoverageLevel =
+  "listing" | "metadata" | "fulltext" | "transcript" | "vision";
+export interface RemoteSourceProvenance {
+  publishedAt?: string;
+  serverInstanceId: string;
+  tenantId?: string;
+  sourceId: string;
+  /** Follow that caused this Radar delivery; absent for one-shot/legacy sources. */
+  followId?: string;
+  itemId: string;
+  revisionId: string;
+  contentHash: string;
+  observedAt: string;
+  coverageLevel: SourceCoverageLevel;
+  missing: string[];
 }
 export interface Source {
   id: string;
@@ -38,6 +56,221 @@ export interface Source {
   text: string;
   addedAt: string;
   coverage: string;
+  remote?: RemoteSourceProvenance;
+  library?: LibrarySourceProvenance;
+}
+export interface RemoteSourceIdentity {
+  serverInstanceId: string;
+  tenantId: string;
+}
+export interface RemoteSourceDeliveryPage extends RemoteSourceIdentity {
+  nextCursor: string;
+  sources: Source[];
+}
+export type RadarConnectionState =
+  "unconfigured" | "connecting" | "online" | "offline";
+export type RadarFollowState = "active" | "paused";
+export interface RadarFollow {
+  id: string;
+  sourceId: string;
+  origin: "user" | "recommended";
+  recommendedSourceId?: string;
+  name: string;
+  category: string;
+  url: string;
+  state: RadarFollowState;
+  refreshIntervalMinutes: number;
+  createdAt: string;
+  updatedAt: string;
+  nextRefreshAt?: string;
+  lastAttemptAt?: string;
+  lastSuccessAt?: string;
+  lastError?: string;
+}
+export interface RadarRecommendedSource {
+  id: string;
+  name: string;
+  description?: string;
+  category: string;
+  url?: string;
+  defaultRefreshIntervalMinutes?: number;
+  enabledByDefault?: boolean;
+  followed?: boolean;
+  followId?: string;
+}
+export interface RadarItem {
+  publishedAt?: string;
+  /** Stable local identity derived from service, tenant, and remote item. */
+  id: string;
+  serverInstanceId: string;
+  tenantId: string;
+  sourceId: string;
+  remoteItemId: string;
+  followId?: string;
+  origin: "user" | "recommended" | "server";
+  sourceTitle: string;
+  category?: string;
+  title: string;
+  url: string;
+  excerpt: string;
+  content: string;
+  receivedAt: string;
+  observedAt: string;
+  latestRevisionId: string;
+  contentHash: string;
+  coverageLevel: SourceCoverageLevel;
+  missing: string[];
+  revisionCount: number;
+  isUpdated: boolean;
+  readAt?: string;
+  archivedAt?: string;
+  taskIds: string[];
+  sourceAssetIds: string[];
+}
+export type RadarDispositionKind =
+  | "duplicate"
+  | "outdated"
+  | "low_value"
+  | "irrelevant"
+  | "incomplete"
+  | "deferred";
+export type RadarDigestContextRelation =
+  "new" | "supports" | "extends" | "repeats" | "conflicts";
+export interface RadarDigestionRun {
+  id: string;
+  taskId: string;
+  goalVersion: number;
+  serverInstanceId: string;
+  tenantId: string;
+  state: "pending" | "published";
+  /** Snapshot-only projection from the hidden background task. */
+  taskStatus?: TaskStatus;
+  /** Snapshot-only task failure; persisted digest runs may omit it. */
+  error?: string;
+  createdAt: string;
+  publishedAt?: string;
+  retryOfRunId?: string;
+  items: {
+    radarItemId: string;
+    sourceId: string;
+    remoteItemId: string;
+    revisionId: string;
+    contentHash: string;
+  }[];
+  contextSources: {
+    sourceId: string;
+    kind: "library" | "task";
+    referenceId: string;
+    version?: number;
+    hash?: string;
+  }[];
+}
+export interface RadarDigest {
+  id: string;
+  runId: string;
+  taskId: string;
+  goalVersion: number;
+  serverInstanceId: string;
+  tenantId: string;
+  title: string;
+  summary: string;
+  whyItMatters: string;
+  topics: string[];
+  evidence: {
+    sourceId: string;
+    revisionId: string;
+    note?: string;
+  }[];
+  context: {
+    sourceId: string;
+    relation: RadarDigestContextRelation;
+    note: string;
+  }[];
+  disagreements: string[];
+  gaps: string[];
+  publishedAt: string;
+}
+export interface RadarDisposition {
+  id: string;
+  runId: string;
+  taskId: string;
+  goalVersion: number;
+  serverInstanceId: string;
+  tenantId: string;
+  sourceId: string;
+  kind: RadarDispositionKind;
+  reason: string;
+  publishedAt: string;
+}
+export interface RadarDigestPublicationInput {
+  runId: string;
+  themes: {
+    title: string;
+    summary: string;
+    whyItMatters: string;
+    topics?: string[];
+    evidence: {
+      sourceId: string;
+      revisionId: string;
+      note?: string;
+    }[];
+    context?: {
+      sourceId: string;
+      relation: RadarDigestContextRelation;
+      note: string;
+    }[];
+    disagreements?: string[];
+    gaps?: string[];
+  }[];
+  dispositions: {
+    sourceId: string;
+    kind: RadarDispositionKind;
+    reason: string;
+  }[];
+}
+export interface RadarEvent {
+  id: string;
+  type:
+    | "item.received"
+    | "item.revised"
+    | "follow.created"
+    | "follow.updated"
+    | "follow.removed";
+  summary: string;
+  createdAt: string;
+  itemId?: string;
+  followId?: string;
+}
+export interface RadarEvidenceRevision {
+  sourceId: string;
+  remoteItemId: string;
+  revisionId: string;
+  title: string;
+  url: string;
+  content: string;
+  contentHash: string;
+  observedAt: string;
+  coverageLevel: SourceCoverageLevel;
+  missing: string[];
+}
+export interface RadarSnapshot {
+  serviceURL?: string;
+  readingTopics?: ReadingTopic[];
+  configured: boolean;
+  connection: RadarConnectionState;
+  follows: RadarFollow[];
+  recommendedSources: RadarRecommendedSource[];
+  items: RadarItem[];
+  digests?: RadarDigest[];
+  dispositions?: RadarDisposition[];
+  digestions?: RadarDigestionRun[];
+  /** Published evidence only, grouped by stable Radar item id and revision id. */
+  evidenceRevisions?: Record<string, Record<string, RadarEvidenceRevision>>;
+  events?: RadarEvent[];
+  unreadCount: number;
+  lastSyncAt?: string;
+  error?: string;
+  digestionError?: string;
 }
 export interface ArtifactVersion {
   version: number;
@@ -87,6 +320,7 @@ export interface Task {
   goal: string;
   goalVersion: number;
   kind: TaskKind;
+  surface?: "workspace" | "background";
   member: MemberId;
   profileId?: string;
   workspace: string;
@@ -159,6 +393,47 @@ export interface LibraryEntry {
   content?: string;
   readError?: string;
   previewURL?: string;
+  /** Feedback is projected from an independent, append-only local ledger. */
+  feedback?: LibraryFeedback[];
+  feedbackRevision?: number;
+  feedbackResolutions?: { feedbackId: string; version: number; hash: string }[];
+  externalChange?: boolean;
+}
+export type LibraryAssessment =
+  "unverified" | "needs_review" | "user_reported_useful";
+export interface LibraryFeedback {
+  id: string;
+  entryId: string;
+  kind: "correction" | "useful" | "failed";
+  note: string;
+  purpose: string;
+  conditions: string;
+  evidence: string;
+  targetVersion: number;
+  targetHash: string;
+  createdAt: string;
+  outcome?: {
+    taskId: string;
+    taskTitle: string;
+    sourceId: string;
+    artifactId?: string;
+    artifactTitle?: string;
+    artifactVersion?: number;
+    artifactHash?: string;
+  };
+}
+export interface LibrarySourceProvenance {
+  root: string;
+  entryId: string;
+  version: number;
+  hash: string;
+  feedbackRevision: number;
+  feedback: LibraryFeedback[];
+  resolvedFeedbackIds: string[];
+  assessment: LibraryAssessment;
+  selection: "explicit" | "recalled";
+  reason: string;
+  supersededAt?: string;
 }
 export interface DesktopState {
   rightMode?: "split" | "evidence" | "artifact";
@@ -182,8 +457,10 @@ export interface Snapshot {
   projectBrowser?: ProjectBrowserState;
   library?: LibraryEntry[];
   desktop?: DesktopState;
+  radar?: RadarSnapshot;
 }
 export type Command =
+  | { type: "radar.connect"; baseURL: string; bootstrapToken?: string }
   | {
       type: "project.browse";
       projectId: string;
@@ -228,6 +505,30 @@ export type Command =
   | { type: "source.addURL"; taskId: string; url: string }
   | { type: "source.import"; taskId: string }
   | {
+      type: "radar.follow";
+      url?: string;
+      recommendedSourceId?: string;
+      name?: string;
+      refreshIntervalMinutes?: number;
+    }
+  | {
+      type: "radar.setFollowState";
+      followId: string;
+      state: RadarFollowState;
+    }
+  | { type: "radar.refresh"; followId?: string }
+  | { type: "radar.unfollow"; followId: string }
+  | { type: "radar.markRead"; itemId: string; read: boolean }
+  | { type: "radar.archive"; itemId: string; archived: boolean }
+  | { type: "radar.digest"; itemIds: string[]; retry?: boolean }
+  | { type: "radar.addToTask"; itemIds: string[]; taskId: string }
+  | {
+      type: "radar.createTask";
+      itemIds: string[];
+      title?: string;
+      instruction?: string;
+    }
+  | {
       type: "artifact.save";
       taskId: string;
       artifactId: string;
@@ -257,8 +558,27 @@ export type Command =
       title?: string;
       tags?: string[];
       note?: string;
+      resolvedFeedbackIds?: string[];
     }
   | { type: "library.reuse"; entryId: string; taskId: string }
+  | {
+      type: "library.feedback";
+      entryId: string;
+      feedbackId: string;
+      expectedHash: string;
+      expectedVersion: number;
+      expectedFeedbackRevision: number;
+      kind: LibraryFeedback["kind"];
+      note: string;
+      purpose: string;
+      conditions: string;
+      evidence: string;
+      taskId?: string;
+      sourceId?: string;
+      artifactId?: string;
+      expectedArtifactHash?: string;
+      expectedArtifactVersion?: number;
+    }
   | {
       type: "artifact.refine";
       taskId: string;

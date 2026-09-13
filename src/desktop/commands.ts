@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Command } from "../shared/types.js";
 const text = z.string().min(1).max(40000);
 const id = z.string().min(1).max(100);
+const remoteId = z.string().min(1).max(200);
 const member = z.enum(["coordinator", "cto", "researcher"]);
 const task = { taskId: id };
 const windowKind = z.enum(["main", "evidence", "artifact"]);
@@ -39,6 +40,7 @@ const settings = z.object({
     researcher: z.string().max(100),
   }),
   projectMonitoring: z.boolean().optional(),
+  libraryRecall: z.boolean().optional(),
   memberSettings: z
     .object({
       coordinator: memberSettings,
@@ -117,6 +119,58 @@ const schemas = z.discriminatedUnion("type", [
     url: z.string().url().max(8000),
   }),
   z.object({ type: z.literal("source.import"), ...task }),
+  z
+    .object({
+      type: z.literal("radar.follow"),
+      url: z.string().url().max(4096).optional(),
+      recommendedSourceId: remoteId.optional(),
+      name: z.string().trim().min(1).max(120).optional(),
+      refreshIntervalMinutes: z.number().int().min(5).max(10_080).optional(),
+    })
+    .refine(
+      (value) => Boolean(value.url) !== Boolean(value.recommendedSourceId),
+    ),
+  z.object({
+    type: z.literal("radar.setFollowState"),
+    followId: remoteId,
+    state: z.enum(["active", "paused"]),
+  }),
+  z.object({
+    type: z.literal("radar.refresh"),
+    followId: remoteId.optional(),
+  }),
+  z.object({
+    type: z.literal("radar.connect"),
+    baseURL: z.string().url().max(2048),
+    bootstrapToken: z.string().max(512).optional(),
+  }),
+  z.object({ type: z.literal("radar.unfollow"), followId: remoteId }),
+  z.object({
+    type: z.literal("radar.markRead"),
+    itemId: remoteId,
+    read: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("radar.archive"),
+    itemId: remoteId,
+    archived: z.boolean(),
+  }),
+  z.object({
+    type: z.literal("radar.addToTask"),
+    itemIds: z.array(remoteId).min(1).max(100),
+    taskId: id,
+  }),
+  z.object({
+    type: z.literal("radar.createTask"),
+    itemIds: z.array(remoteId).min(1).max(100),
+    title: z.string().trim().min(1).max(120).optional(),
+    instruction: text.optional(),
+  }),
+  z.object({
+    type: z.literal("radar.digest"),
+    itemIds: z.array(remoteId).min(1).max(24),
+    retry: z.boolean().optional(),
+  }),
   z.object({
     type: z.literal("artifact.save"),
     ...task,
@@ -150,8 +204,37 @@ const schemas = z.discriminatedUnion("type", [
     content: z.string().min(1).max(4_000_000),
     expectedHash: hash,
     ...libraryMetadata,
+    resolvedFeedbackIds: z.array(id).max(100).optional(),
   }),
   z.object({ type: z.literal("library.reuse"), entryId: id, ...task }),
+  z
+    .object({
+      type: z.literal("library.feedback"),
+      entryId: id,
+      feedbackId: z.string().uuid(),
+      expectedHash: hash,
+      expectedVersion: z.number().int().positive(),
+      expectedFeedbackRevision: z.number().int().min(0),
+      kind: z.enum(["correction", "useful", "failed"]),
+      note: z.string().trim().min(1).max(4000),
+      purpose: z.string().trim().max(1000),
+      conditions: z.string().trim().max(2000),
+      evidence: z.string().trim().max(4000),
+      taskId: id.optional(),
+      sourceId: id.optional(),
+      artifactId: id.optional(),
+      expectedArtifactHash: hash.optional(),
+      expectedArtifactVersion: z.number().int().positive().optional(),
+    })
+    .refine(
+      (value) =>
+        (value.kind === "correction" ||
+          Boolean(value.purpose && value.conditions && value.evidence)) &&
+        Boolean(value.taskId) === Boolean(value.sourceId) &&
+        (!value.artifactId || Boolean(value.taskId)) &&
+        Boolean(value.artifactId) === Boolean(value.expectedArtifactHash) &&
+        Boolean(value.artifactId) === Boolean(value.expectedArtifactVersion),
+    ),
   z.object({
     type: z.literal("window.layout"),
     mode: z.enum(["single", "triple"]),

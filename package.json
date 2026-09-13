@@ -5,23 +5,35 @@
   "type": "module",
   "main": "dist/main.js",
   "description": "Local-first personal AI workbench",
+  "workspaces": [
+    "packages/source-contract",
+    "services/source-service"
+  ],
   "engines": {
     "node": ">=24"
   },
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "build": "node scripts/build.mjs",
+    "build": "npm run build --workspace @ytriple/source-contract && npm run build --workspace @ytriple/source-service && node scripts/build.mjs",
     "start": "electron .",
-    "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/*.test.ts",
+    "typecheck": "npm run build --workspace @ytriple/source-contract && tsc --noEmit && npm run typecheck --workspace @ytriple/source-contract && npm run typecheck --workspace @ytriple/source-service",
+    "test": "npm run build --workspace @ytriple/source-contract && tsx --test tests/*.test.ts && npm run test --workspace @ytriple/source-contract && npm run test --workspace @ytriple/source-service",
+    "test:source:integration": "node scripts/test-source-integration.mjs",
+    "source:dev": "docker compose -f compose.source.yml up --build",
+    "source:db": "docker compose -f compose.source.yml up --detach --wait postgres",
+    "source:up": "docker compose -f compose.source.yml up --build --detach --wait",
+    "source:down": "docker compose -f compose.source.yml down",
+    "source:pair": "node scripts/pair-source.mjs",
+    "source:canary": "npm run build --workspace @ytriple/source-contract && tsx scripts/source-canary.ts",
+    "source:verify-egress": "docker compose -f compose.source.yml exec -T source-worker node services/source-service/dist/verify-egress.js",
     "smoke": "tsx scripts/smoke.ts",
     "probe": "tsx scripts/probe.ts",
-    "format": "prettier --write src tests scripts index.html tsconfig.json vite.config.ts package.json",
-    "format:check": "prettier --check src tests scripts index.html tsconfig.json vite.config.ts package.json"
+    "probe:library": "tsx scripts/probe-library.ts",
+    "format": "prettier --write src tests scripts packages services index.html tsconfig.json vite.config.ts package.json compose.source.yml",
+    "format:check": "prettier --check src tests scripts packages services index.html tsconfig.json vite.config.ts package.json compose.source.yml"
   },
   "dependencies": {
     "@ai-sdk/google": "4.0.67",
-    "@mozilla/readability": "0.6.0",
     "@openai/agents": "0.18.0",
     "@openai/agents-extensions": "0.18.0",
     "ai": "7.0.97",

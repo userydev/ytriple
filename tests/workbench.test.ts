@@ -524,7 +524,7 @@ test("folding, maximizing and page navigation keep the same artifact editor moun
     );
     assert.ok(document.querySelector(".pane-artifact.panel-expanded"));
     assert.equal(document.querySelector(".artifact-editor"), editor);
-    const library = document.querySelector(".primary-nav button:nth-child(3)")!;
+    const library = document.querySelector(".primary-nav button:nth-child(4)")!;
     await act(async () =>
       library.dispatchEvent(new window.Event("click", { bubbles: true })),
     );
@@ -1084,7 +1084,7 @@ test("project discussions keep separate drafts, attach a project on send, and le
         element.dispatchEvent(new window.Event("click", { bubbles: true })),
       );
     };
-    await click(".primary-nav button:nth-child(2)");
+    await click(".primary-nav button:nth-child(3)");
     await click('[aria-label="选择项目 alpha"]');
     assert.equal(
       document.querySelector(".project-decision-header h2")?.textContent,
@@ -1205,7 +1205,7 @@ test("a delayed project creation preserves a newer returned-to-project draft and
         emit(concurrent);
         return concurrent;
       };
-      await click(".primary-nav button:nth-child(2)");
+      await click(".primary-nav button:nth-child(3)");
       await click('[aria-label="选择项目 alpha"]');
       await click(".project-discussion-seeds button:nth-child(1)");
       const submittedText = text();
@@ -1654,7 +1654,7 @@ test("project viewer and decision widths support keyboard resizing and restore t
   await withWorkbench(snap, async ({ document, window, commands, act }) => {
     await act(async () =>
       document
-        .querySelector(".primary-nav button:nth-child(2)")!
+        .querySelector(".primary-nav button:nth-child(3)")!
         .dispatchEvent(new window.Event("click", { bubbles: true })),
     );
     const divider = document.querySelector<HTMLElement>(

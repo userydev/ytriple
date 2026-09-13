@@ -13,6 +13,7 @@ import type {
   Artifact,
   MemberId,
   ModelProfile,
+  RadarDigestPublicationInput,
   Task,
 } from "../src/shared/types.js";
 import {
@@ -115,6 +116,7 @@ function fixture() {
       operations.set(input.operationId, artifact);
       return artifact;
     },
+    publishRadarDigest: async () => ({ digests: [], dispositions: [] }),
     loadCheckpoint: () => saved,
     saveCheckpoint: (_id, value) => {
       saved = value ? structuredClone(value) : undefined;
@@ -146,6 +148,415 @@ const draft = {
   artifactId: null,
   expectedHash: null,
 };
+
+function markAsRadarDigest(task: Task) {
+  task.sources[0].remote = {
+    serverInstanceId: "radar-server",
+    tenantId: "tenant-1",
+    sourceId: "remote-source-1",
+    itemId: "remote-item-1",
+    revisionId: "revision-1",
+    contentHash: "a".repeat(64),
+    observedAt: "2026-09-12T00:00:00.000Z",
+    coverageLevel: "fulltext",
+    missing: [],
+  };
+  task.events.push({
+    id: "radar-digest-request",
+    type: "radar.digest_requested",
+    summary: "整理一批雷达资料",
+    member: task.member,
+    goalVersion: task.goalVersion,
+    createdAt: "",
+    data: { runId: "digest-run-1", sourceIds: ["source-1"] },
+  });
+}
+
+test("only a marked Radar batch exposes the structured publication tool and persists its result", async () => {
+  const f = fixture();
+  markAsRadarDigest(f.task);
+  f.task.sources.push({
+    id: "context-1",
+    title: "本地知识上下文",
+    type: "text",
+    location: "",
+    text: "Earlier local understanding: ORCHID was 40.",
+    addedAt: "",
+    coverage: "Lib 条目第 3 版全文",
+  });
+  let published:
+    | {
+        operationId: string;
+        input: RadarDigestPublicationInput;
+      }
+    | undefined;
+  f.hooks.publishRadarDigest = async (
+    _taskId,
+    goalVersion,
+    operationId,
+    input,
+  ) => {
+    assert.equal(goalVersion, 1);
+    published = { operationId, input: structuredClone(input) };
+    return {
+      digests: [{ id: "digest-1" } as never],
+      dispositions: [],
+    };
+  };
+  const publication: RadarDigestPublicationInput = {
+    runId: "digest-run-1",
+    themes: [
+      {
+        title: "ORCHID 指标已更新",
+        summary: "最新雷达资料把 ORCHID 指标更新为 42。",
+        whyItMatters: "这会修正本地原有的 40，并影响后续判断。",
+        topics: ["ORCHID"],
+        evidence: [
+          {
+            sourceId: "source-1",
+            revisionId: "revision-1",
+            note: "资料正文明确给出 42。",
+          },
+        ],
+        context: [
+          {
+            sourceId: "context-1",
+            relation: "conflicts",
+            note: "本地旧版本记录为 40。",
+          },
+        ],
+        disagreements: ["新旧数值不一致"],
+        gaps: [],
+      },
+    ],
+    dispositions: [],
+  };
+  const model = new ScriptedModel([
+    modelResponder((call) => {
+      assert.ok(
+        call.request.tools.some(
+          (entry) => entry.name === "publish_radar_digest",
+        ),
+      );
+      assert.ok(
+        !call.request.tools.some(
+          (entry) => entry.name === "request_clarification",
+        ),
+        "hidden Radar work must resolve uncertainty as incomplete/deferred",
+      );
+      assert.ok(
+        !call.request.tools.some(
+          (entry) => entry.name === "request_clarification",
+        ),
+        "hidden Radar batches must resolve uncertainty as incomplete/deferred",
+      );
+      assert.match(
+        call.request.systemInstructions!,
+        /只有顶层成员调用 publish_radar_digest/,
+      );
+      assert.match(JSON.stringify(call.request.input), /digest-run-1/);
+      return [
+        functionCall(
+          "read_source",
+          { sourceId: "source-1", start: 0, maxCharacters: 1_000 },
+          { callId: "read-radar" },
+        ),
+      ];
+    }),
+    [
+      functionCall(
+        "read_source",
+        { sourceId: "context-1", start: 0, maxCharacters: 1_000 },
+        { callId: "read-context" },
+      ),
+    ],
+    [
+      functionCall(
+        "publish_radar_digest",
+        { ...publication },
+        { callId: "publish-radar" },
+      ),
+    ],
+    modelResponder((call) => {
+      assert.match(JSON.stringify(call.request.input), /digest-1/);
+      return [assistantMessage("本批雷达资料已形成主题理解。")];
+    }),
+  ]);
+  await new TeamRuntime(f.hooks, { modelFactory: () => model }).run(f.task.id);
+  assert.equal(f.task.status, "completed", f.task.error);
+  assert.deepEqual(published?.input, publication);
+  assert.match(published?.operationId ?? "", /publish-radar$/);
+  assert.ok(
+    f.task.events.some(
+      (event) =>
+        event.type === "tool_completed" &&
+        event.data?.tool === "publish_radar_digest" &&
+        event.data?.digestRunId === "digest-run-1",
+    ),
+  );
+  const reads = f.task.events.filter(
+    (event) =>
+      event.type === "tool_completed" && event.data?.tool === "read_source",
+  );
+  assert.deepEqual(
+    reads.map((event) => ({
+      sourceId: event.data?.sourceId,
+      readStart: event.data?.readStart,
+      readEnd: event.data?.readEnd,
+      totalCharacters: event.data?.totalCharacters,
+    })),
+    [
+      {
+        sourceId: "source-1",
+        readStart: 0,
+        readEnd: f.task.sources[0]!.text.length,
+        totalCharacters: f.task.sources[0]!.text.length,
+      },
+      {
+        sourceId: "context-1",
+        readStart: 0,
+        readEnd: f.task.sources[1]!.text.length,
+        totalCharacters: f.task.sources[1]!.text.length,
+      },
+    ],
+  );
+  model.assertComplete();
+});
+
+test("Radar publication merges contiguous paginated reads into full source coverage", async () => {
+  const f = fixture();
+  markAsRadarDigest(f.task);
+  f.task.sources[0]!.text = "R".repeat(30_000);
+  let publications = 0;
+  f.hooks.publishRadarDigest = async () => {
+    publications++;
+    return { digests: [{ id: "digest-paged" } as never], dispositions: [] };
+  };
+  const publication: RadarDigestPublicationInput = {
+    runId: "digest-run-1",
+    themes: [
+      {
+        title: "分页核查后的主题",
+        summary: "两段连续读取共同覆盖了锁定正文。",
+        whyItMatters: "完整范围证明阻止局部文字冒充全文核查。",
+        evidence: [{ sourceId: "source-1", revisionId: "revision-1" }],
+      },
+    ],
+    dispositions: [],
+  };
+  const model = new ScriptedModel([
+    modelResponder((call) => {
+      const readTool = call.request.tools.find(
+        (entry) => entry.name === "read_source",
+      );
+      assert.match(
+        readTool && "description" in readTool ? readTool.description : "",
+        /hasMore=false/,
+      );
+      assert.match(call.request.systemInstructions ?? "", /读取范围不能留缺口/);
+      return [
+        functionCall(
+          "read_source",
+          { sourceId: "source-1", start: 0, maxCharacters: 24_000 },
+          { callId: "read-first-page" },
+        ),
+      ];
+    }),
+    [
+      functionCall(
+        "read_source",
+        { sourceId: "source-1", start: 24_000, maxCharacters: 24_000 },
+        { callId: "read-second-page" },
+      ),
+    ],
+    [
+      functionCall(
+        "publish_radar_digest",
+        { ...publication },
+        { callId: "publish-paged" },
+      ),
+    ],
+    [assistantMessage("已在完整读取后发布。")],
+  ]);
+
+  await new TeamRuntime(f.hooks, { modelFactory: () => model }).run(f.task.id);
+  assert.equal(f.task.status, "completed", f.task.error);
+  assert.equal(publications, 1);
+  assert.deepEqual(
+    f.task.events
+      .filter(
+        (event) =>
+          event.type === "tool_completed" && event.data?.tool === "read_source",
+      )
+      .map((event) => [event.data?.readStart, event.data?.readEnd]),
+    [
+      [0, 24_000],
+      [24_000, 30_000],
+    ],
+  );
+  model.assertComplete();
+});
+
+test("Radar publication rejects partial evidence and out-of-range reads before persistence", async () => {
+  const f = fixture();
+  markAsRadarDigest(f.task);
+  f.task.sources[0]!.text = "ABCDE";
+  let publications = 0;
+  f.hooks.publishRadarDigest = async () => {
+    publications++;
+    return { digests: [], dispositions: [] };
+  };
+  const publication: RadarDigestPublicationInput = {
+    runId: "digest-run-1",
+    themes: [
+      {
+        title: "不能发布的局部判断",
+        summary: "只读取一个字符不足以支持主题。",
+        whyItMatters: "未经全文核查的判断不能进入雷达。",
+        evidence: [{ sourceId: "source-1", revisionId: "revision-1" }],
+      },
+    ],
+    dispositions: [],
+  };
+  const model = new ScriptedModel([
+    [
+      functionCall(
+        "read_source",
+        { sourceId: "source-1", start: 0, maxCharacters: 1 },
+        { callId: "read-one-character" },
+      ),
+    ],
+    [
+      functionCall(
+        "read_source",
+        { sourceId: "source-1", start: 999, maxCharacters: 1 },
+        { callId: "read-out-of-range" },
+      ),
+    ],
+    [
+      functionCall(
+        "publish_radar_digest",
+        { ...publication },
+        { callId: "publish-partial" },
+      ),
+    ],
+    [assistantMessage("普通文字不能绕过发布校验。")],
+  ]);
+
+  await new TeamRuntime(f.hooks, { modelFactory: () => model }).run(f.task.id);
+  assert.equal(f.task.status, "failed");
+  assert.equal(publications, 0);
+  const validRead = f.task.events.find(
+    (event) =>
+      event.type === "tool_completed" &&
+      event.data?.callId === "read-one-character",
+  );
+  assert.deepEqual(
+    {
+      start: validRead?.data?.readStart,
+      end: validRead?.data?.readEnd,
+      total: validRead?.data?.totalCharacters,
+    },
+    { start: 0, end: 1, total: 5 },
+  );
+  const invalidRead = f.task.events.findLast(
+    (event) => event.data?.callId === "read-out-of-range",
+  );
+  assert.equal(invalidRead?.type, "tool_failed");
+  assert.equal(invalidRead?.data?.readStart, undefined);
+  assert.match(String(invalidRead?.data?.error), /超出正文范围/);
+  const rejectedPublication = f.task.events.findLast(
+    (event) => event.data?.callId === "publish-partial",
+  );
+  assert.equal(rejectedPublication?.type, "tool_failed");
+  assert.match(String(rejectedPublication?.data?.error), /完整分页读取/);
+  model.assertComplete();
+});
+
+test("Radar publication allows a non-empty partial read only with incomplete disposition", async () => {
+  const f = fixture();
+  markAsRadarDigest(f.task);
+  f.task.sources[0]!.text = "正文仍缺少后续页面";
+  let published: RadarDigestPublicationInput | undefined;
+  f.hooks.publishRadarDigest = async (_taskId, _goal, _operation, input) => {
+    published = structuredClone(input);
+    return { digests: [], dispositions: [{ id: "incomplete" } as never] };
+  };
+  const publication: RadarDigestPublicationInput = {
+    runId: "digest-run-1",
+    themes: [],
+    dispositions: [
+      {
+        sourceId: "source-1",
+        kind: "incomplete",
+        reason: "只收到部分正文，先保留并等待后续修订。",
+      },
+    ],
+  };
+  const model = new ScriptedModel([
+    [
+      functionCall(
+        "read_source",
+        { sourceId: "source-1", start: 0, maxCharacters: 1 },
+        { callId: "read-partial-incomplete" },
+      ),
+    ],
+    [
+      functionCall(
+        "publish_radar_digest",
+        { ...publication },
+        { callId: "publish-incomplete" },
+      ),
+    ],
+    [assistantMessage("已明确保留为资料不完整。")],
+  ]);
+
+  await new TeamRuntime(f.hooks, { modelFactory: () => model }).run(f.task.id);
+  assert.equal(f.task.status, "completed", f.task.error);
+  assert.deepEqual(published, publication);
+  model.assertComplete();
+});
+
+test("Radar final prose cannot impersonate a digest publication", async () => {
+  const f = fixture();
+  markAsRadarDigest(f.task);
+  let publications = 0;
+  f.hooks.publishRadarDigest = async () => {
+    publications++;
+    return { digests: [], dispositions: [] };
+  };
+  const model = new ScriptedModel([
+    modelResponder((call) => {
+      assert.ok(
+        call.request.tools.some(
+          (entry) => entry.name === "publish_radar_digest",
+        ),
+      );
+      return [assistantMessage("我在普通回复里声称已经整理好了。")];
+    }),
+  ]);
+  await new TeamRuntime(f.hooks, { modelFactory: () => model }).run(f.task.id);
+  assert.equal(f.task.status, "failed");
+  assert.match(f.task.error ?? "", /未调用 publish_radar_digest/);
+  assert.equal(publications, 0);
+  assert.equal(f.task.messages.length, 0);
+});
+
+test("ordinary tasks never receive the Radar publication capability", async () => {
+  const f = fixture();
+  const model = new ScriptedModel([
+    modelResponder((call) => {
+      assert.ok(
+        !call.request.tools.some(
+          (entry) => entry.name === "publish_radar_digest",
+        ),
+      );
+      return [assistantMessage("普通任务已完成。")];
+    }),
+  ]);
+  await new TeamRuntime(f.hooks, { modelFactory: () => model }).run(f.task.id);
+  assert.equal(f.task.status, "completed", f.task.error);
+});
 
 test("SDK executes member delegation, reads evidence, consumes returned results and writes an artifact", async () => {
   const f = fixture();

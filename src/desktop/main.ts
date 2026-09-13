@@ -10,6 +10,8 @@ import {
   screen,
 } from "electron";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
+import type { SourceConnection } from "../core/source-connection.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promises as fs } from "node:fs";
 import type {
@@ -100,6 +102,8 @@ const pending = new Map<
   { resolve: (value: unknown) => void; reject: (reason: Error) => void }
 >();
 let vault: Record<string, string> = {};
+let sourceConnecting: Promise<Snapshot> | undefined;
+const sourcePairingAttempts = new Map<string, string>();
 function request<T = Snapshot>(payload: Record<string, unknown>): Promise<T> {
   if (!engine)
     return Promise.reject(new Error("工作引擎已退出，请重新打开应用。"));
@@ -433,6 +437,30 @@ async function command(input: Command): Promise<Snapshot> {
         paths: choice.filePaths,
       },
     });
+  }
+  if (input.type === "radar.connect") {
+    if (sourceConnecting) return sourceConnecting;
+    sourceConnecting = (async () => {
+      const pairingId =
+        sourcePairingAttempts.get(input.baseURL) ?? randomUUID();
+      sourcePairingAttempts.set(input.baseURL, pairingId);
+      const connection = await request<SourceConnection>({
+        type: "source.pair",
+        pairing: { ...input, pairingId },
+      });
+      await saveKey("__source_service__", JSON.stringify(connection));
+      const snapshot = await request({
+        type: "source.connect",
+        sourceConnection: connection,
+      });
+      sourcePairingAttempts.delete(input.baseURL);
+      return snapshot;
+    })();
+    try {
+      return await sourceConnecting;
+    } finally {
+      sourceConnecting = undefined;
+    }
   }
   if (input.type === "profile.save") {
     if (input.apiKey !== undefined)

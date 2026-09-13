@@ -1,0 +1,31 @@
+{
+  "name": "@ytriple/source-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test test/*.test.ts",
+    "migrate": "tsx src/main.ts migrate",
+    "api": "tsx src/main.ts api",
+    "worker": "tsx src/main.ts worker",
+    "dev": "tsx src/main.ts all"
+  },
+  "dependencies": {
+    "@mozilla/readability": "0.6.0",
+    "@ytriple/source-contract": "0.1.0",
+    "linkedom": "0.18.13",
+    "pg": "8.23.0",
+    "zod": "4.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "@types/pg": "8.23.1",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2"
+  }
+}

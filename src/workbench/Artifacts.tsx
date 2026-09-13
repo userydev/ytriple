@@ -31,6 +31,7 @@ import {
 import type { Artifact, Source, Task } from "../shared/types";
 import { formatDate, formatTime, Markdown, type Dispatch } from "./common";
 import { discardTaskDocumentDrafts, useDocumentDraft } from "./drafts";
+import { LIBRARY_ASSESSMENT_LABELS } from "../shared/library";
 
 const refinementDrafts = new Map<
   string,
@@ -60,10 +61,12 @@ export function SourceList({
   sources,
   dispatch,
   onAdd,
+  onLibrary,
 }: {
   sources: Source[];
   dispatch: Dispatch;
   onAdd?: () => void;
+  onLibrary?: (entryId: string) => void;
 }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   if (!sources.length)
@@ -89,7 +92,10 @@ export function SourceList({
   return (
     <div className="source-list">
       {sources.map((source, index) => (
-        <article className="source-item" key={source.id}>
+        <article
+          className={`source-item ${source.library?.supersededAt ? "library-historical" : ""}`}
+          key={source.id}
+        >
           <button
             className="source-title"
             onClick={() =>
@@ -116,9 +122,52 @@ export function SourceList({
             </span>
             <span>{formatDate(source.addedAt)}</span>
           </div>
-          <p className="coverage">{source.coverage || "内容范围待核实"}</p>
+          <p className="coverage">
+            {source.library
+              ? "来自本地 Lib 的正文快照，保留原成果与版本关联。"
+              : source.coverage || "内容范围待核实"}
+          </p>
+          {source.library ? (
+            <div className="source-library-context">
+              <strong>
+                {source.library.supersededAt
+                  ? "历史 Lib 快照 · 本轮不再使用"
+                  : source.library.selection === "recalled"
+                    ? "为当前问题找到的 Lib"
+                    : "选入的 Lib"}{" "}
+                · v{source.library.version}
+              </strong>
+              <p>
+                {LIBRARY_ASSESSMENT_LABELS[source.library.assessment]} ·{" "}
+                {source.library.feedbackRevision} 条反馈
+              </p>
+              <p>{source.library.reason}</p>
+              {onLibrary ? (
+                <button
+                  className="text-button"
+                  onClick={() => onLibrary(source.library!.entryId)}
+                >
+                  查看资产与记录反馈 <ArrowUpRight size={13} />
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {expanded === source.id ? (
             <div className="source-expanded">
+              {source.library ? (
+                <details>
+                  <summary>来源与版本记录</summary>
+                  <p className="source-excerpt">{source.coverage}</p>
+                </details>
+              ) : null}
+              {source.library?.feedback.map((feedback) => (
+                <p key={feedback.id} className="source-excerpt">
+                  用户反馈 · v{feedback.targetVersion}：{feedback.note}
+                  {feedback.conditions
+                    ? `（条件：${feedback.conditions}）`
+                    : ""}
+                </p>
+              ))}
               <p className="source-excerpt">
                 {source.text || "此资料暂未取得可阅读内容。"}
               </p>
