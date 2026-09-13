@@ -62,6 +62,24 @@ const DEFAULT_RECOMMENDED_SOURCES: RecommendedSourceConfig[] = [
     refreshIntervalMinutes: 60,
     enabledByDefault: true,
   },
+  {
+    id: "federal-reserve-monetary",
+    name: "美联储货币政策",
+    category: "金融与宏观",
+    description: "美联储官方货币政策声明与会议纪要；解释公开信息及条件。",
+    url: "https://www.federalreserve.gov/feeds/press_monetary.xml",
+    refreshIntervalMinutes: 180,
+    enabledByDefault: true,
+  },
+  {
+    id: "nvidia-newsroom",
+    name: "NVIDIA 官方动态",
+    category: "科技与公司业绩",
+    description: "NVIDIA 原始产品与公司公告；厂商陈述与独立验证分别标明。",
+    url: "https://nvidianews.nvidia.com/releases.xml",
+    refreshIntervalMinutes: 120,
+    enabledByDefault: true,
+  },
 ];
 
 const LocalDevEgressModeSchema = z.literal("orbstack-loopback");

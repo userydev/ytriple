@@ -1654,3 +1654,547 @@ test("server reading summarizes only supplied source revisions and reuses unchan
     "a failed replacement preserves prior evidence",
   );
 });
+
+test("editorial publishes focused issues, retains immutable history and reviews corrections within the tenant", async () => {
+  const { EditorialWorker } = await import("../../src/editorial-worker.js");
+  const {
+    EditorialResponseSchema,
+    EditorialRevisionResponseSchema,
+    EditorialCorrectionResponseSchema,
+  } = await import("@ytriple/source-contract");
+  const { editorialBody } =
+    await import("../../../../tests/fixtures/editorial.js");
+  const device = await pair();
+  await json("/v1/follows", {
+    method: "POST",
+    headers: bearer(device.token, {
+      "Content-Type": "application/json",
+      "Idempotency-Key": "editorial-source",
+    }),
+    body: JSON.stringify({
+      source: { kind: "public-url", url: "https://example.com/editorial-feed" },
+      category: "AI",
+    }),
+  });
+  const job = await database.claimJob(45);
+  assert.ok(job);
+  const material = (text: string) => ({
+    externalItemKey: "editorial-test",
+    canonicalUrl: "https://example.com/ai-cost",
+    title: "AI task cost conditions",
+    content: text,
+    contentHash: contentHash(text),
+    observedAt: new Date().toISOString(),
+    coverage: "metadata" as const,
+    missing: ["fulltext"],
+  });
+  await database.completeItems(job, [
+    material(
+      "Test announcement: the unit price changed. Task success rate is not provided.",
+    ),
+  ]);
+  let writes = 0;
+  let updated = false;
+  let invalid = false;
+  const worker = new EditorialWorker(
+    database,
+    {
+      select: async (input) => ({
+        pitches: [
+          {
+            key: "ai-task-cost",
+            existingIssueId: input.existing[0]?.id ?? null,
+            question: "What determines the task cost?",
+            why: "Understand the conditions.",
+            materialIds: input.materials.map((item) => item.itemId),
+          },
+        ],
+        skipReason: "",
+      }),
+      write: async (input) => {
+        writes++;
+        return {
+          publish: true,
+          body: editorialBody(
+            invalid
+              ? ["invented-source"]
+              : input.materials.map((item) => item.itemId),
+            input.corrections.length
+              ? "纠正后明确：原文没有提供独立实测结果。"
+              : updated
+                ? "新增材料提供了重试条件，仍不能直接比较总成本。"
+                : undefined,
+          ),
+          changeSummary: input.corrections.length
+            ? "补充独立验证缺口。"
+            : updated
+              ? "加入新材料的重试条件。"
+              : "首次解释完整任务成本的条件。",
+          correctionResponses: input.corrections.map((correction) => ({
+            id: correction.id,
+            status: "accepted" as const,
+            response: "复核材料后已在本议题中补充缺口。",
+          })),
+        };
+      },
+    },
+    "fixture",
+  );
+  await worker.refresh();
+  await worker.refresh();
+  assert.equal(writes, 1);
+  const feed = () =>
+    json("/v1/editorial", { headers: bearer(device.token) }).then((result) =>
+      EditorialResponseSchema.parse(result.body),
+    );
+  const first = (await feed()).issues[0]!;
+  assert.equal(first.latest.version, 1);
+  assert.equal(first.latest.evidence[0]?.coverage, "metadata");
+  assert.equal((await json("/v1/editorial")).response.status, 401);
+  const headers = bearer(device.token, {
+    "Content-Type": "application/json",
+    "Idempotency-Key": "correction-1",
+  });
+  const correctionPath = `/v1/editorial/${first.id}/corrections`;
+  const correctionInput = {
+    revisionId: first.latest.id,
+    text: "请明确：材料没有提供独立实测。",
+  };
+  const submitted = await json(correctionPath, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(correctionInput),
+  });
+  assert.equal(submitted.response.status, 201);
+  const correction = EditorialCorrectionResponseSchema.parse(
+    submitted.body,
+  ).correction;
+  const replay = await json(correctionPath, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(correctionInput),
+  });
+  assert.deepEqual(replay.body, submitted.body);
+  assert.equal(
+    (
+      await json(correctionPath, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ...correctionInput, text: "改变过的纠正内容" }),
+      })
+    ).response.status,
+    409,
+  );
+  const otherTenant = randomUUID(),
+    otherPrincipal = randomUUID(),
+    otherDevice = randomUUID();
+  const other = { token: tokenForDevice(config.tokenSecret, otherDevice) };
+  await database.pool.query("INSERT INTO tenant(id) VALUES($1)", [otherTenant]);
+  await database.pool.query(
+    "INSERT INTO principal(id,tenant_id,kind) VALUES($1,$2,'self-host-owner')",
+    [otherPrincipal, otherTenant],
+  );
+  await database.pool.query(
+    "INSERT INTO device(id,tenant_id,principal_id,name,token_hash,scopes) VALUES($1,$2,$3,'other',$4,$5)",
+    [
+      otherDevice,
+      otherTenant,
+      otherPrincipal,
+      contentHash(other.token),
+      device.scopes,
+    ],
+  );
+  assert.equal(
+    (
+      await json(`/v1/editorial/${first.id}/revisions/${first.latest.id}`, {
+        headers: bearer(other.token),
+      })
+    ).response.status,
+    404,
+  );
+  assert.equal(
+    EditorialResponseSchema.parse(
+      (await json("/v1/editorial", { headers: bearer(other.token) })).body,
+    ).issues.length,
+    0,
+  );
+  assert.equal(
+    (
+      await json(correctionPath, {
+        method: "POST",
+        headers: bearer(other.token, {
+          "Content-Type": "application/json",
+          "Idempotency-Key": "other-correction",
+        }),
+        body: JSON.stringify(correctionInput),
+      })
+    ).response.status,
+    404,
+  );
+  await worker.refresh();
+  const corrected = (await feed()).issues[0]!;
+  assert.equal(corrected.id, first.id);
+  assert.equal(corrected.latest.version, 2);
+  assert.equal(corrected.latest.changeKind, "correction");
+  assert.equal(
+    corrected.corrections.find((value) => value.id === correction.id)?.status,
+    "accepted",
+  );
+  const old = EditorialRevisionResponseSchema.parse(
+    (
+      await json(`/v1/editorial/${first.id}/revisions/${first.latest.id}`, {
+        headers: bearer(device.token),
+      })
+    ).body,
+  ).revision;
+  assert.deepEqual(old, first.latest);
+  assert.equal(
+    (
+      await json(correctionPath, {
+        method: "POST",
+        headers: { ...headers, "Idempotency-Key": "stale-correction" },
+        body: JSON.stringify(correctionInput),
+      })
+    ).response.status,
+    409,
+  );
+  await worker.refresh();
+  assert.equal(
+    writes,
+    2,
+    "review status changes alone do not trigger another model call",
+  );
+  const follows = SourceFollowsResponseSchema.parse(
+    (await json("/v1/follows", { headers: bearer(device.token) })).body,
+  );
+  async function newMaterial(text: string) {
+    await json(`/v1/follows/${follows.follows[0]!.id}/refresh`, {
+      method: "POST",
+      headers: bearer(device.token, { "Idempotency-Key": randomUUID() }),
+    });
+    const next = await database.claimJob(45);
+    assert.ok(next);
+    await database.completeItems(next, [material(text)]);
+  }
+  updated = true;
+  await newMaterial("New deterministic material adds the retry condition.");
+  await worker.refresh();
+  const next = (await feed()).issues[0]!;
+  assert.equal(next.id, first.id);
+  assert.equal(next.latest.version, 3);
+  assert.equal(next.history.length, 3);
+  invalid = true;
+  await newMaterial(
+    "Another deterministic material with an intentionally invalid model citation.",
+  );
+  await worker.refresh();
+  const failed = await feed();
+  assert.equal(failed.status.state, "retrying");
+  assert.equal(
+    failed.issues[0]!.latest.id,
+    next.latest.id,
+    "failed output cannot replace published interpretation",
+  );
+});
+
+test("editorial does not republish unchanged understanding or accept unsupported correction without a revision", async () => {
+  const { EditorialWorker } = await import("../../src/editorial-worker.js");
+  const { editorialBody } =
+    await import("../../../../tests/fixtures/editorial.js");
+  const { editorialFeed, correctEditorial } =
+    await import("../../src/editorial-store.js");
+  const device = await pair();
+  await json("/v1/follows", {
+    method: "POST",
+    headers: bearer(device.token, { "Idempotency-Key": "no-change-feed" }),
+    body: JSON.stringify({
+      source: { kind: "public-url", url: "https://example.com/no-change" },
+      category: "AI",
+    }),
+  });
+  const job = await database.claimJob(45);
+  assert.ok(job);
+  await database.completeItems(job, [
+    {
+      externalItemKey: "no-change",
+      canonicalUrl: "https://example.com/a",
+      title: "AI material",
+      content: "test material",
+      contentHash: contentHash("test material"),
+      coverage: "metadata",
+      missing: ["fulltext"],
+      observedAt: new Date().toISOString(),
+    },
+  ]);
+  let publish = true;
+  let accepted = false;
+  const worker = new EditorialWorker(
+    database,
+    {
+      select: async (input) => ({
+        pitches: [
+          {
+            key: "unchanged-issue",
+            existingIssueId: input.existing[0]?.id ?? null,
+            question: "Evidence?",
+            why: "Conditions",
+            materialIds: [input.materials[0]!.itemId],
+          },
+        ],
+        skipReason: "",
+      }),
+      write: async (input) => ({
+        publish,
+        body: editorialBody([input.materials[0]!.itemId]),
+        changeSummary: "原文的判断保持不变。",
+        correctionResponses: input.corrections.map((value) => ({
+          id: value.id,
+          status: accepted ? "accepted" : "needs_evidence",
+          response: "现有材料没有证明新增结论，需要对照结果。",
+        })),
+      }),
+    },
+    "fixture",
+  );
+  await worker.refresh();
+  const first = (await editorialFeed(database, device.tenantId)).issues[0]!;
+  await correctEditorial(
+    database,
+    device.tenantId,
+    first.id,
+    { revisionId: first.latest.id, text: "测试用户要求：直接断言成本减半。" },
+    "unsupported",
+  );
+  publish = false;
+  await worker.refresh();
+  const unchanged = (await editorialFeed(database, device.tenantId)).issues[0]!;
+  assert.equal(unchanged.latest.id, first.latest.id);
+  assert.equal(unchanged.corrections[0]!.status, "needs_evidence");
+  await correctEditorial(
+    database,
+    device.tenantId,
+    first.id,
+    { revisionId: first.latest.id, text: "测试矛盾输出：采纳但是不改正文。" },
+    "invalid-acceptance",
+  );
+  accepted = true;
+  await worker.refresh();
+  const rejected = await editorialFeed(database, device.tenantId);
+  assert.equal(rejected.status.state, "retrying");
+  assert.equal(rejected.issues[0]!.latest.id, first.latest.id);
+  assert.equal(rejected.issues[0]!.corrections[0]!.status, "pending");
+});
+
+test("presentation is additive, durable, revision-bound and tenant-isolated", async () => {
+  const { EditorialPresentationWorker } =
+    await import("../../src/editorial-presentation.js");
+  const { editorialRevision, editorialPresentation } =
+    await import("../../../../tests/fixtures/editorial.js");
+  const { EditorialResponseSchema, EditorialRevisionResponseSchema } =
+    await import("@ytriple/source-contract");
+  const owner = await pair("presentation-owner");
+  const otherTenant = randomUUID(),
+    otherPrincipal = randomUUID(),
+    otherDevice = randomUUID();
+  const other = { token: tokenForDevice(config.tokenSecret, otherDevice) };
+  await database.pool.query("INSERT INTO tenant(id) VALUES($1)", [otherTenant]);
+  await database.pool.query(
+    "INSERT INTO principal(id,tenant_id,kind) VALUES($1,$2,'self-host-owner')",
+    [otherPrincipal, otherTenant],
+  );
+  await database.pool.query(
+    "INSERT INTO device(id,tenant_id,principal_id,name,token_hash,scopes) VALUES($1,$2,$3,'other',$4,$5)",
+    [
+      otherDevice,
+      otherTenant,
+      otherPrincipal,
+      contentHash(other.token),
+      owner.scopes,
+    ],
+  );
+  const revision = editorialRevision();
+  await database.pool.query(
+    "INSERT INTO editorial_issue(tenant_id,id,issue_key,focus,latest_revision_id) VALUES($1,$2,'presentation-test','AI',$3)",
+    [owner.tenantId, revision.issueId, revision.id],
+  );
+  await database.pool.query(
+    "INSERT INTO editorial_revision(tenant_id,id,issue_id,version,body) VALUES($1,$2,$3,1,$4::jsonb)",
+    [owner.tenantId, revision.id, revision.issueId, JSON.stringify(revision)],
+  );
+  let calls = 0;
+  const worker = new EditorialPresentationWorker(
+    database,
+    async (value) => {
+      calls++;
+      return editorialPresentation(value);
+    },
+    "fixture",
+  );
+  await Promise.all([worker.refresh(), worker.refresh()]);
+  await worker.refresh();
+  assert.equal(calls, 1);
+  const result = EditorialResponseSchema.parse(
+    (await json("/v1/editorial", { headers: bearer(owner.token) })).body,
+  );
+  assert.deepEqual(
+    result.issues[0]!.latest.presentation,
+    editorialPresentation(revision),
+  );
+  assert.equal(result.issues[0]!.latest.version, 1);
+  const stored = (
+    await database.pool.query(
+      "SELECT body FROM editorial_revision WHERE tenant_id=$1 AND id=$2",
+      [owner.tenantId, revision.id],
+    )
+  ).rows[0].body;
+  assert.deepEqual(stored, revision);
+  const path = `/v1/editorial/${revision.issueId}/revisions/${revision.id}`;
+  assert.deepEqual(
+    EditorialRevisionResponseSchema.parse(
+      (await json(path, { headers: bearer(owner.token) })).body,
+    ).revision.presentation,
+    editorialPresentation(revision),
+  );
+  assert.equal(
+    (await json(path, { headers: bearer(other.token) })).response.status,
+    404,
+  );
+  assert.equal(
+    EditorialResponseSchema.parse(
+      (await json("/v1/editorial", { headers: bearer(other.token) })).body,
+    ).issues.length,
+    0,
+  );
+});
+
+test("editorial edition keeps an intentional order, exact evidence and durable tenant scope", async () => {
+  const { EditorialEditionWorker } =
+    await import("../../src/editorial-edition.js");
+  const { editorialRevision, editorialPresentation } =
+    await import("../../../../tests/fixtures/editorial.js");
+  const { EditorialResponseSchema, EditorialRevisionResponseSchema } =
+    await import("@ytriple/source-contract");
+  const { editorialFeed } = await import("../../src/editorial-store.js");
+  const owner = await pair("edition-owner");
+  const first = editorialRevision();
+  const second = editorialRevision({
+    id: randomUUID(),
+    issueId: randomUUID(),
+    title: "第二个真实条件关系",
+    createdAt: "2026-08-01T00:00:00.000Z",
+  });
+  for (const [index, revision] of [first, second].entries()) {
+    await database.pool.query(
+      "INSERT INTO editorial_issue(tenant_id,id,issue_key,focus,latest_revision_id) VALUES($1,$2,$3,'AI',$4)",
+      [owner.tenantId, revision.issueId, `edition-${index}`, revision.id],
+    );
+    await database.pool.query(
+      "INSERT INTO editorial_revision(tenant_id,id,issue_id,version,body) VALUES($1,$2,$3,1,$4::jsonb)",
+      [owner.tenantId, revision.id, revision.issueId, JSON.stringify(revision)],
+    );
+  }
+  const chosen = {
+    issueId: second.issueId,
+    presentation: {
+      ...editorialPresentation(second),
+      headline: "便宜的单价，不等于低成本",
+    },
+    reason: "解释同一任务下的成本条件。",
+  };
+  let calls = 0;
+  const editor = async () => {
+    calls++;
+    return { entries: [chosen], note: "只选有明确新增理解的一条。" };
+  };
+  const cover = {
+    data: "data:image/png;base64,AQID",
+    pageUrl: "https://example.com/report",
+    imageUrl: "https://example.com/report.png",
+    publisher: "Fixture report",
+    description: "Fixture only",
+    width: 800,
+    height: 450,
+  };
+  const worker = new EditorialEditionWorker(
+    database,
+    editor,
+    "fixture",
+    async (revision) => {
+      assert.equal(revision.id, second.id);
+      return cover;
+    },
+  );
+  await Promise.all([worker.refresh(), worker.refresh()]);
+  await new EditorialEditionWorker(database, editor, "fixture").refresh();
+  assert.equal(calls, 1);
+  const feed = EditorialResponseSchema.parse(
+    (await json("/v1/editorial", { headers: bearer(owner.token) })).body,
+  );
+  assert.equal(feed.issues.length, 2);
+  assert.equal(feed.edition!.entries.length, 1);
+  assert.equal(feed.edition!.entries[0]!.issueId, second.issueId);
+  assert.deepEqual(
+    feed.issues.find((issue) => issue.id === second.issueId)!.latest.cover,
+    cover,
+  );
+  assert.equal(
+    feed.issues.find((issue) => issue.id === first.issueId)!.latest.cover,
+    undefined,
+  );
+  assert.deepEqual(
+    feed.issues.find((issue) => issue.id === second.issueId)!.latest
+      .presentation,
+    chosen.presentation,
+  );
+  const exact = EditorialRevisionResponseSchema.parse(
+    (
+      await json(`/v1/editorial/${second.issueId}/revisions/${second.id}`, {
+        headers: bearer(owner.token),
+      })
+    ).body,
+  );
+  assert.deepEqual(exact.revision.presentation, chosen.presentation);
+  assert.deepEqual(exact.revision.cover, cover);
+  const stored = (
+    await database.pool.query(
+      "SELECT body FROM editorial_revision WHERE tenant_id=$1 AND id=$2",
+      [owner.tenantId, second.id],
+    )
+  ).rows[0].body;
+  assert.deepEqual(stored, second);
+  const unrelated = await editorialFeed(database, randomUUID());
+  assert.equal(unrelated.edition, undefined);
+  assert.equal(unrelated.issues.length, 0);
+  const newer = {
+    ...second,
+    id: randomUUID(),
+    version: 2,
+    changeSummary: "补充新条件。",
+  };
+  await database.pool.query(
+    "INSERT INTO editorial_revision(tenant_id,id,issue_id,version,body) VALUES($1,$2,$3,2,$4::jsonb)",
+    [owner.tenantId, newer.id, newer.issueId, JSON.stringify(newer)],
+  );
+  await database.pool.query(
+    "UPDATE editorial_issue SET latest_revision_id=$3 WHERE tenant_id=$1 AND id=$2",
+    [owner.tenantId, newer.issueId, newer.id],
+  );
+  await new EditorialEditionWorker(
+    database,
+    async () => {
+      throw new Error("temporary provider failure");
+    },
+    "fixture",
+  ).refresh();
+  const after = await editorialFeed(database, owner.tenantId);
+  assert.equal(after.edition!.id, feed.edition!.id);
+  assert.equal(
+    after.edition!.entries.length,
+    0,
+    "an old selection never promotes a new version without editing",
+  );
+  assert.equal(
+    after.issues.find((issue) => issue.id === newer.issueId)!.latest.id,
+    newer.id,
+  );
+});

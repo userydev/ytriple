@@ -1,12 +1,32 @@
 import { z } from "zod";
 import type { Command } from "../shared/types.js";
+import { mediaCommandSchema } from "../shared/media.js";
+import { deliveryCommandSchema } from "../shared/delivery.js";
+import { routineCommandSchema } from "../shared/routines.js";
+import { workServiceCommandSchema } from "../shared/work-service.js";
+import { attentionCommandSchema } from "../shared/attention.js";
+import { skillCommandSchema } from "../shared/skill-library.js";
+import { portableCommandSchema } from "../shared/portable.js";
 const text = z.string().min(1).max(40000);
 const id = z.string().min(1).max(100);
 const remoteId = z.string().min(1).max(200);
-const member = z.enum(["coordinator", "cto", "researcher"]);
+const member = z.enum(["coordinator", "cto", "researcher", "editor"]);
 const task = { taskId: id };
 const windowKind = z.enum(["main", "evidence", "artifact"]);
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
+const skillPolicy = z
+  .object({
+    mode: z.enum(["auto", "explicit", "off"]),
+    skillIds: z.array(id).max(3),
+  })
+  .strict()
+  .refine(
+    (policy) =>
+      new Set(policy.skillIds).size === policy.skillIds.length &&
+      (policy.mode === "explicit"
+        ? policy.skillIds.length > 0
+        : policy.skillIds.length === 0),
+  );
 const libraryMetadata = {
   title: z.string().min(1).max(200).optional(),
   tags: z.array(z.string().min(1).max(80)).max(30).optional(),
@@ -18,6 +38,7 @@ const profile = z.object({
   provider: z.enum(["gemini", "deepseek", "ark", "compatible"]),
   protocol: z.enum(["google", "openai"]),
   execution: z.enum(["model", "google-agent"]).optional(),
+  streamingMode: z.enum(["buffered", "incremental"]).optional(),
   baseURL: z.string().max(2000),
   modelId: z.string().max(300),
   apiKeyEnv: z.string().max(150),
@@ -38,18 +59,36 @@ const settings = z.object({
     coordinator: z.string().max(100),
     cto: z.string().max(100),
     researcher: z.string().max(100),
+    editor: z.string().max(100).optional(),
   }),
   projectMonitoring: z.boolean().optional(),
   libraryRecall: z.boolean().optional(),
+  backgroundRoutines: z.boolean().optional(),
   memberSettings: z
     .object({
       coordinator: memberSettings,
       cto: memberSettings,
       researcher: memberSettings,
+      editor: memberSettings.default({
+        prompt: "",
+        responseStyle: "concise",
+        delegation: "auto",
+      }),
     })
     .optional(),
 });
 const schemas = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("project.import") }).strict(),
+  z
+    .object({
+      type: z.literal("skill.setEnabled"),
+      skillId: id,
+      enabled: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({ type: z.literal("task.setSkills"), ...task, policy: skillPolicy })
+    .strict(),
   z.object({
     type: z.literal("project.browse"),
     projectId: z.string().min(1).max(200),
@@ -80,6 +119,7 @@ const schemas = z.discriminatedUnion("type", [
     type: z.literal("process.save"),
     ...task,
     member: member.optional(),
+    scope: z.enum(["all", "goal", "run"]).optional(),
   }),
   z.object({
     type: z.literal("window.resize"),
@@ -90,6 +130,10 @@ const schemas = z.discriminatedUnion("type", [
   z.object({ type: z.literal("snapshot") }),
   z.object({
     type: z.literal("task.create"),
+    requestId: z.string().min(1).max(200).optional(),
+    teamMode: z.enum(["software", "media"]).optional(),
+    isolatedContext: z.boolean().optional(),
+    skillPolicy: skillPolicy.optional(),
     projectId: z.string().min(1).max(200).optional(),
     goal: text,
     title: text.optional(),
@@ -112,6 +156,12 @@ const schemas = z.discriminatedUnion("type", [
     ...task,
     title: text,
     text: z.string().min(1).max(2_000_000),
+    expectedGoalVersion: z
+      .number()
+      .int()
+      .min(1)
+      .max(Number.MAX_SAFE_INTEGER)
+      .optional(),
   }),
   z.object({
     type: z.literal("source.addURL"),
@@ -135,6 +185,7 @@ const schemas = z.discriminatedUnion("type", [
     followId: remoteId,
     state: z.enum(["active", "paused"]),
   }),
+  z.object({ type: z.literal("radar.reload") }),
   z.object({
     type: z.literal("radar.refresh"),
     followId: remoteId.optional(),
@@ -143,6 +194,26 @@ const schemas = z.discriminatedUnion("type", [
     type: z.literal("radar.connect"),
     baseURL: z.string().url().max(2048),
     bootstrapToken: z.string().max(512).optional(),
+  }),
+  z.object({
+    type: z.literal("radar.editorialVersion"),
+    issueId: z.uuid(),
+    revisionId: z.uuid(),
+  }),
+  z.object({
+    type: z.literal("radar.correctEditorial"),
+    issueId: z.uuid(),
+    revisionId: z.uuid(),
+    text: z.string().trim().min(3).max(3000),
+    requestId: z.uuid(),
+  }),
+  z.object({
+    type: z.literal("radar.discussEditorial"),
+    issueId: z.uuid(),
+    revisionId: z.uuid(),
+    requestId: z.uuid(),
+    title: z.string().min(1).max(120).optional(),
+    instruction: text.optional(),
   }),
   z.object({ type: z.literal("radar.unfollow"), followId: remoteId }),
   z.object({
@@ -274,7 +345,18 @@ const schemas = z.discriminatedUnion("type", [
   z.object({ type: z.literal("url.open"), url: z.string().url().max(8000) }),
 ]);
 export function parseCommand(input: unknown): Command {
-  const result = schemas.safeParse(input);
+  const result = z
+    .union([
+      schemas,
+      mediaCommandSchema,
+      deliveryCommandSchema,
+      routineCommandSchema,
+      workServiceCommandSchema,
+      skillCommandSchema,
+      portableCommandSchema,
+      attentionCommandSchema,
+    ])
+    .safeParse(input);
   if (!result.success) throw new Error("操作参数无效，请刷新应用后重试。");
   return result.data;
 }

@@ -109,7 +109,8 @@ test("project explorer reads selected files without starting work and separates 
   }
   const { act, createElement, useState } = await import("react");
   const { createRoot } = await import("react-dom/client");
-  const { Projects } = await import("../src/workbench/Projects.js");
+  const { ProjectExplorer: Projects } =
+    await import("../src/workbench/ProjectExplorer.js");
   const commands: Command[] = [],
     selections: string[] = [],
     discussions: string[] = [];
@@ -429,27 +430,6 @@ test("project explorer reads selected files without starting work and separates 
       ),
     );
     assert.ok(document.querySelector(".project-file-overview"));
-    const monitor = document.querySelector('[aria-label="项目监控"]')!;
-    await click(
-      Array.from(monitor.querySelectorAll("button")).find((button) =>
-        button.textContent?.includes("暂停"),
-      ),
-    );
-    const saved = commands.at(-1);
-    assert.equal(saved?.type, "settings.save");
-    if (saved?.type === "settings.save") {
-      assert.equal(saved.settings.projectMonitoring, false);
-      assert.deepEqual(
-        saved.settings.memberProfiles,
-        snapshot.settings.memberProfiles,
-      );
-    }
-    await click(
-      Array.from(monitor.querySelectorAll("button")).find((button) =>
-        button.textContent?.includes("刷新状态"),
-      ),
-    );
-    assert.deepEqual(commands.at(-1), { type: "project.refresh" });
     const separator = document.querySelector(
       '[aria-label="调整文件树与预览宽度"]',
     )!;
@@ -459,15 +439,6 @@ test("project explorer reads selected files without starting work and separates 
     await act(async () => separator.dispatchEvent(event));
     assert.equal(Number(separator.getAttribute("aria-valuenow")), before + 20);
     assert.equal(stored.get("ytriple.projectTreeWidth"), String(before + 20));
-    await click(
-      Array.from(document.querySelectorAll(".project-ide-heading button")).find(
-        (button) => button.textContent?.includes("新建项目"),
-      ),
-    );
-    assert.match(
-      document.querySelector('[role="dialog"]')!.textContent!,
-      /已有项目可直接在文件树中打开/,
-    );
   } finally {
     await act(async () => root.unmount());
     if (originalFocus)
@@ -595,6 +566,273 @@ test("project split drag tracks outside movement, cancels safely and preserves t
       (document.querySelector('[aria-label="决策草稿"]') as HTMLTextAreaElement)
         .value,
       "未发送的项目讨论",
+    );
+  } finally {
+    await act(async () => root.unmount());
+    for (const [key, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+  }
+});
+
+test("project entry starts from objects and current results, opens files only on demand, and keeps support out of project tabs", async () => {
+  const { window, document } = parseHTML(
+    "<!doctype html><html><body><div id='root'></div></body></html>",
+  );
+  const originals = new Map<string, PropertyDescriptor | undefined>();
+  for (const [key, value] of Object.entries({
+    window,
+    document,
+    HTMLElement: window.HTMLElement,
+    Node: window.Node,
+    IS_REACT_ACT_ENVIRONMENT: true,
+    localStorage: { getItem: () => null, setItem: () => {} },
+  })) {
+    originals.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    Object.defineProperty(globalThis, key, {
+      value,
+      configurable: true,
+      writable: true,
+    });
+  }
+  const { act, createElement, useState, Fragment } = await import("react");
+  const { createRoot } = await import("react-dom/client");
+  const { Projects } = await import("../src/workbench/Projects.js");
+  const { ProjectSupport } = await import("../src/workbench/ProjectSupport.js");
+  const snapshot: Snapshot = {
+    version: "test",
+    dataPath: "/unused",
+    profiles: [],
+    projects: [project],
+    tasks: [
+      {
+        id: "project-work",
+        projectId: project.id,
+        title: "明确阅读器首版",
+        goal: "形成可交付范围",
+        goalVersion: 1,
+        kind: "project",
+        member: "cto",
+        workspace: "/unused/work",
+        status: "completed",
+        createdAt: "2026-09-11T12:00:00Z",
+        updatedAt: "2026-09-11T12:00:00Z",
+        messages: [],
+        events: [],
+        sources: [],
+        artifacts: [
+          {
+            id: "scope",
+            title: "首版范围",
+            path: "/unused/work/scope.md",
+            format: "md",
+            version: 2,
+            hash: "a".repeat(64),
+            goalVersion: 1,
+            updatedAt: "2026-09-11T12:00:00Z",
+            versions: [],
+          },
+        ],
+      },
+    ],
+    settings: {
+      aiRoot: "/unused/AI",
+      codeRoot: "/unused/Code",
+      workspaceRoot: "/unused/workspace",
+      defaultProfileId: "",
+      memberProfiles: { coordinator: "", researcher: "", cto: "" },
+      projectMonitoring: true,
+    },
+    system: {
+      state: "ready",
+      aiRoot: "/unused/AI",
+      codeRoot: "/unused/Code",
+      policyPath: "/unused/AI/system/POLICY.md",
+      issues: [],
+    },
+  };
+  const commands: Command[] = [],
+    opened: string[] = [],
+    artifacts: string[] = [],
+    discussions: string[] = [];
+  const dispatch = async (command: Command) => {
+    commands.push(command);
+    return snapshot;
+  };
+  function Harness() {
+    const [id, setId] = useState<string | null>(null);
+    const [section, setSection] = useState<"software" | "media">("software");
+    return createElement(
+      Fragment,
+      null,
+      createElement(ProjectSupport, {
+        snapshot,
+        section,
+        onSection: setSection,
+      }),
+      createElement(Projects, {
+        snapshot,
+        dispatch,
+        selectedProjectId: id,
+        onSelectProject: (item) => setId(item.id),
+        onClearSelection: () => setId(null),
+        onTask: (task) => opened.push(task),
+        onArtifact: (task, artifact) => artifacts.push(`${task}:${artifact}`),
+        onDiscussProject: (item) => discussions.push(item.id),
+      }),
+    );
+  }
+  const root = createRoot(document.getElementById("root")!);
+  const click = async (text: string) => {
+    const button = Array.from(document.querySelectorAll("button")).find(
+      (item) =>
+        item.textContent?.trim() === text ||
+        item.getAttribute("aria-label") === text,
+    );
+    assert.ok(button, `action ${text} exists`);
+    await act(async () =>
+      button.dispatchEvent(new window.Event("click", { bubbles: true })),
+    );
+  };
+  try {
+    await act(async () => root.render(createElement(Harness)));
+    assert.equal(
+      commands.length,
+      0,
+      "listing projects performs no browse or task creation",
+    );
+    assert.equal(document.querySelector(".project-explorer-layout"), null);
+    assert.equal(document.querySelector('[aria-label="项目当前工作"]'), null);
+    assert.equal(
+      document.querySelectorAll('[aria-label="项目类型"] button').length,
+      2,
+    );
+    assert.doesNotMatch(
+      document.querySelector('[aria-label="项目类型"]')!.textContent!,
+      /例行|交付|待处理/,
+    );
+    assert.match(
+      document.querySelector(".project-status-table")!.textContent!,
+      /项目 \/ 当前目标/,
+    );
+    assert.match(
+      document.querySelector(".project-status-table")!.textContent!,
+      /成果可审阅/,
+    );
+    assert.match(
+      document.querySelector(".project-status-table")!.textContent!,
+      /形成可交付范围/,
+    );
+    await click("打开项目 阅读工具");
+    assert.match(
+      document.querySelector('[aria-label="项目当前成果"]')!.textContent!,
+      /首版范围/,
+    );
+    assert.match(
+      document.querySelector('[aria-label="项目当前工作"]')!.textContent!,
+      /明确阅读器首版/,
+    );
+    assert.equal(document.querySelector(".project-explorer-layout"), null);
+    assert.equal(
+      commands.length,
+      0,
+      "opening a project presents objects without reading its files",
+    );
+    await act(async () =>
+      document
+        .querySelector(".project-result-list button")!
+        .dispatchEvent(new window.Event("click", { bubbles: true })),
+    );
+    assert.deepEqual(artifacts, ["project-work:scope"]);
+    await act(async () =>
+      document
+        .querySelector(".project-work-rows button")!
+        .dispatchEvent(new window.Event("click", { bubbles: true })),
+    );
+    assert.deepEqual(opened, ["project-work"]);
+    await click("开始项目工作");
+    assert.deepEqual(discussions, [project.id]);
+    await click("查看文件与状态");
+    assert.ok(document.querySelector(".project-explorer-layout"));
+    assert.equal(
+      commands.some((command) => command.type === "task.create"),
+      false,
+    );
+    assert.ok(
+      commands.some(
+        (command) =>
+          command.type === "project.browse" && command.projectId === project.id,
+      ),
+    );
+    await click("收起文件与状态");
+    assert.equal(
+      document.querySelector(".project-file-inspector")?.hasAttribute("hidden"),
+      true,
+    );
+    await click("全部软件项目");
+    assert.equal(document.querySelector(".project-explorer-layout"), null);
+    assert.ok(document.querySelector('[aria-label="打开项目 阅读工具"]'));
+    await click("暂停监控");
+    const saved = commands.at(-1);
+    assert.ok(saved?.type === "settings.save");
+    assert.equal(saved.settings.projectMonitoring, false);
+    assert.deepEqual(
+      saved.settings.memberProfiles,
+      snapshot.settings.memberProfiles,
+    );
+    await click("刷新状态");
+    assert.deepEqual(commands.at(-1), { type: "project.refresh" });
+    await click("新建项目");
+    assert.match(
+      document.querySelector('[role="dialog"]')!.textContent!,
+      /从目标准备项目规则、资料和开发目录/,
+    );
+    assert.ok(document.querySelector('input[placeholder="my-reading-tool"]'));
+    const fileRequests: string[] = [],
+      intents: string[] = [];
+    await act(async () =>
+      root.render(
+        createElement(Projects, {
+          snapshot,
+          dispatch,
+          selectedProjectId: project.id,
+          overviewOnly: true,
+          hideHeading: true,
+          onShowFiles: (item) => fileRequests.push(item.id),
+          onDiscussProject: (item, intent) =>
+            intents.push(`${item.id}:${intent}`),
+        }),
+      ),
+    );
+    assert.equal(
+      document.querySelector(".project-status-page h1"),
+      null,
+      "embedded status does not repeat the workspace heading",
+    );
+    assert.ok(document.querySelector('[aria-label="项目状态概览"]'));
+    assert.match(
+      document.querySelector('[aria-label="项目已确认记录"]')!.textContent!,
+      /尚无用户确认/,
+    );
+    assert.match(
+      document.querySelector('[aria-label="项目变化依据"]')!.textContent!,
+      /未提交改动文件/,
+    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await click("查看文件与状态");
+    assert.deepEqual(fileRequests, [project.id]);
+    assert.equal(
+      document.querySelector(".project-explorer-layout"),
+      null,
+      "the shared workspace owns the requested file surface",
+    );
+    await click("重新理解状态");
+    assert.deepEqual(intents, [`${project.id}:understand`]);
+    assert.equal(
+      commands.some((command) => command.type === "task.create"),
+      false,
+      "status understanding is an explicit workspace intent, not automatic work on read",
     );
   } finally {
     await act(async () => root.unmount());

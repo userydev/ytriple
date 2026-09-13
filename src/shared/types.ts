@@ -1,8 +1,17 @@
-import type { ReadingTopic } from "@ytriple/source-contract";
+import type {
+  ReadingTopic,
+  EditorialResponse,
+  EditorialRevision,
+} from "@ytriple/source-contract";
 import type { ProjectBrowserState } from "./project-files.js";
 import type { MemberSettingsMap } from "./member-settings.js";
+import type {
+  SkillCatalogEntry,
+  SkillDefinition,
+  SkillPolicy,
+} from "./skills.js";
 import type { ProjectObservation, ProjectDiscoveryState } from "./projects.js";
-export type MemberId = "coordinator" | "cto" | "researcher";
+export type MemberId = "coordinator" | "cto" | "researcher" | "editor";
 export type TaskStatus =
   "idle" | "running" | "waiting" | "paused" | "failed" | "completed";
 export type TaskKind = "research" | "project" | "learning" | "brainstorm";
@@ -13,6 +22,7 @@ export interface ModelProfile {
   provider: "gemini" | "deepseek" | "ark" | "compatible";
   protocol: "google" | "openai";
   execution?: "model" | "google-agent";
+  streamingMode?: "buffered" | "incremental";
   baseURL: string;
   modelId: string;
   apiKeyEnv: string;
@@ -27,10 +37,12 @@ export interface AppSettings {
   codeRoot: string;
   workspaceRoot: string;
   defaultProfileId: string;
-  memberProfiles: Record<MemberId, string>;
+  memberProfiles: Record<"coordinator" | "cto" | "researcher", string> &
+    Partial<Record<"editor", string>>;
   memberSettings?: MemberSettingsMap;
   projectMonitoring?: boolean;
   libraryRecall?: boolean;
+  backgroundRoutines?: boolean;
 }
 export type SourceCoverageLevel =
   "listing" | "metadata" | "fulltext" | "transcript" | "vision";
@@ -256,6 +268,9 @@ export interface RadarEvidenceRevision {
 export interface RadarSnapshot {
   serviceURL?: string;
   readingTopics?: ReadingTopic[];
+  editorial?: Omit<EditorialResponse, "meta">;
+  editorialVersions?: Record<string, EditorialRevision>;
+  editorialIdentity?: string;
   configured: boolean;
   connection: RadarConnectionState;
   follows: RadarFollow[];
@@ -311,6 +326,14 @@ export interface TaskEvent {
   data?: Record<string, unknown>;
 }
 export interface Task {
+  requestId?: string;
+  isolatedContext?: boolean;
+  teamMode?: "software" | "media";
+  skillPolicy?: SkillPolicy;
+  /** Exact versions already selected by this task, including disabled methods. */
+  skillPins?: SkillDefinition[];
+  /** Exact enabled method versions available to the current run. */
+  skillBindings?: SkillDefinition[];
   id: string;
   projectId?: string;
   archivedAt?: string;
@@ -347,6 +370,7 @@ export interface SystemStatus {
   policyText?: string;
 }
 export interface ProjectInfo {
+  imported?: boolean;
   registered?: boolean;
   lifecycle?: string;
   manifestPath?: string;
@@ -446,6 +470,13 @@ export interface DesktopState {
   open: Record<WindowKind, boolean>;
 }
 export interface Snapshot {
+  attention?: import("./attention.js").AttentionSnapshot;
+  portable?: import("./portable.js").PortableSnapshot;
+  workService?: import("./work-service.js").WorkServiceSnapshot;
+  media?: import("./media.js").MediaSnapshot;
+  delivery?: import("./delivery.js").DeliverySnapshot;
+  routines?: import("./routines.js").RoutineSnapshot;
+  skills?: SkillCatalogEntry[];
   version: string;
   dataPath: string;
   tasks: Task[];
@@ -460,6 +491,33 @@ export interface Snapshot {
   radar?: RadarSnapshot;
 }
 export type Command =
+  | import("./attention.js").AttentionCommand
+  | { type: "project.import" }
+  | import("./portable.js").PortableCommand
+  | import("./skill-library.js").SkillCommand
+  | import("./work-service.js").WorkServiceCommand
+  | import("./media.js").MediaCommand
+  | import("./delivery.js").DeliveryCommand
+  | import("./routines.js").RoutineCommand
+  | { type: "skill.setEnabled"; skillId: string; enabled: boolean }
+  | { type: "task.setSkills"; taskId: string; policy: SkillPolicy }
+  | { type: "radar.reload" }
+  | { type: "radar.editorialVersion"; issueId: string; revisionId: string }
+  | {
+      type: "radar.correctEditorial";
+      issueId: string;
+      revisionId: string;
+      text: string;
+      requestId: string;
+    }
+  | {
+      type: "radar.discussEditorial";
+      issueId: string;
+      revisionId: string;
+      requestId: string;
+      title?: string;
+      instruction?: string;
+    }
   | { type: "radar.connect"; baseURL: string; bootstrapToken?: string }
   | {
       type: "project.browse";
@@ -478,12 +536,21 @@ export type Command =
   | { type: "task.archive" | "task.delete" | "task.restore"; taskId: string }
   | { type: "window.rightMode"; mode: "split" | "evidence" | "artifact" }
   | { type: "project.refresh" }
-  | { type: "process.save"; taskId: string; member?: MemberId }
+  | {
+      type: "process.save";
+      taskId: string;
+      member?: MemberId;
+      scope?: "all" | "goal" | "run";
+    }
   | { type: "window.resize"; main: number; evidence: number }
   | { type: "window.expand"; window: WindowKind | null }
   | { type: "snapshot" }
   | {
       type: "task.create";
+      requestId?: string;
+      isolatedContext?: boolean;
+      teamMode?: "software" | "media";
+      skillPolicy?: SkillPolicy;
       projectId?: string;
       goal: string;
       title?: string;
@@ -501,7 +568,13 @@ export type Command =
     }
   | { type: "task.run"; taskId: string }
   | { type: "task.stop"; taskId: string }
-  | { type: "source.addText"; taskId: string; title: string; text: string }
+  | {
+      type: "source.addText";
+      taskId: string;
+      title: string;
+      text: string;
+      expectedGoalVersion?: number;
+    }
   | { type: "source.addURL"; taskId: string; url: string }
   | { type: "source.import"; taskId: string }
   | {
@@ -630,5 +703,11 @@ export const MEMBERS: {
     name: "Deep Research · 研究员",
     shortName: "研究员",
     description: "寻找依据，核查材料，扩展理解",
+  },
+  {
+    id: "editor",
+    name: "内容编辑",
+    shortName: "内容编辑",
+    description: "原创表达、脚本修订、制作说明与发布准备",
   },
 ];

@@ -9,6 +9,13 @@ import {
   MAX_ITEM_CONTENT_BYTES,
   RecommendedSourcesResponseSchema,
   ReadingResponseSchema,
+  EditorialResponseSchema,
+  EditorialRevisionResponseSchema,
+  EditorialCorrectionResponseSchema,
+  type EditorialResponse,
+  type EditorialRevision,
+  type EditorialCorrection,
+  type EditorialCorrectionRequest,
   type ReadingTopic,
   RevisionResponseSchema,
   SourceFollowJobResponseSchema,
@@ -46,6 +53,7 @@ export interface RadarCatalog extends RemoteSourceIdentity {
   follows: RadarFollow[];
   recommendedSources: RadarRecommendedSource[];
   readingTopics?: ReadingTopic[];
+  editorial?: Omit<EditorialResponse, "meta">;
 }
 
 export type CreateRadarFollowInput =
@@ -63,6 +71,15 @@ export type CreateRadarFollowInput =
 export interface SourceGateway {
   addURL(url: string): Promise<Source>;
   radarCatalog?(): Promise<RadarCatalog>;
+  editorialRevision?(
+    issueId: string,
+    revisionId: string,
+  ): Promise<RemoteSourceIdentity & { revision: EditorialRevision }>;
+  correctEditorial?(
+    issueId: string,
+    input: EditorialCorrectionRequest,
+    requestId: string,
+  ): Promise<RemoteSourceIdentity & { correction: EditorialCorrection }>;
   follow?(input: CreateRadarFollowInput): Promise<RadarFollow>;
   setFollowState?(
     followId: string,
@@ -115,6 +132,7 @@ export class HttpSourceGateway implements SourceGateway {
   private stream?: Promise<void>;
   private closed = false;
   private supportsReadingTopics = false;
+  private supportsEditorial = false;
 
   constructor(options: HttpSourceGatewayOptions) {
     let base: URL;
@@ -354,9 +372,59 @@ export class HttpSourceGateway implements SourceGateway {
     });
   }
 
+  async editorialRevision(issueId: string, revisionId: string) {
+    return this.runOperation(async (signal) => {
+      const identity = await this.radarIdentity(signal);
+      if (!this.supportsEditorial)
+        throw new Error("信息源服务尚未提供分析栏目。");
+      const response = await this.request(
+        `/v1/editorial/${encodeURIComponent(issueId)}/revisions/${encodeURIComponent(revisionId)}`,
+        { method: "GET" },
+        EditorialRevisionResponseSchema,
+        signal,
+      );
+      this.assertInstance(response.meta.serverInstanceId, identity);
+      if (
+        response.revision.issueId !== issueId ||
+        response.revision.id !== revisionId
+      )
+        throw new Error("服务返回的解读版本不一致。");
+      return { ...identity, revision: response.revision };
+    });
+  }
+  async correctEditorial(
+    issueId: string,
+    input: EditorialCorrectionRequest,
+    requestId: string,
+  ) {
+    return this.runOperation(async (signal) => {
+      const identity = await this.radarIdentity(signal);
+      if (!this.supportsEditorial)
+        throw new Error("信息源服务尚未提供解读纠正。");
+      const response = await this.request(
+        `/v1/editorial/${encodeURIComponent(issueId)}/corrections`,
+        {
+          method: "POST",
+          headers: { "Idempotency-Key": requestId },
+          body: JSON.stringify(input),
+        },
+        EditorialCorrectionResponseSchema,
+        signal,
+      );
+      this.assertInstance(response.meta.serverInstanceId, identity);
+      if (
+        response.correction.issueId !== issueId ||
+        response.correction.revisionId !== input.revisionId ||
+        response.correction.text !== input.text
+      )
+        throw new Error("服务返回的纠正记录不一致。");
+      return { ...identity, correction: response.correction };
+    });
+  }
+
   private async radarCatalogWithin(signal: AbortSignal): Promise<RadarCatalog> {
     const identity = await this.radarIdentity(signal);
-    const [follows, recommended, reading] = await Promise.all([
+    const [follows, recommended, reading, editorial] = await Promise.all([
       this.request(
         "/v1/follows",
         { method: "GET" },
@@ -369,7 +437,7 @@ export class HttpSourceGateway implements SourceGateway {
         RecommendedSourcesResponseSchema,
         signal,
       ),
-      this.supportsReadingTopics
+      this.supportsReadingTopics && !this.supportsEditorial
         ? this.request(
             "/v1/reading",
             { method: "GET" },
@@ -377,10 +445,20 @@ export class HttpSourceGateway implements SourceGateway {
             signal,
           )
         : undefined,
+      this.supportsEditorial
+        ? this.request(
+            "/v1/editorial",
+            { method: "GET" },
+            EditorialResponseSchema,
+            signal,
+          )
+        : undefined,
     ]);
     this.assertInstance(follows.meta.serverInstanceId, identity);
     this.assertInstance(recommended.meta.serverInstanceId, identity);
     if (reading) this.assertInstance(reading.meta.serverInstanceId, identity);
+    if (editorial)
+      this.assertInstance(editorial.meta.serverInstanceId, identity);
     return {
       ...identity,
       follows: follows.follows.map((follow) => this.mapFollow(follow)),
@@ -388,6 +466,13 @@ export class HttpSourceGateway implements SourceGateway {
         this.mapRecommendedSource(source),
       ),
       readingTopics: reading?.topics,
+      editorial: editorial
+        ? {
+            issues: editorial.issues,
+            status: editorial.status,
+            edition: editorial.edition,
+          }
+        : undefined,
     };
   }
 
@@ -407,6 +492,7 @@ export class HttpSourceGateway implements SourceGateway {
       throw new Error("信息源服务尚不支持 Radar 来源关注。");
     if (this.tenantId && this.tenantId !== capabilities.tenantId)
       throw new Error("信息源服务的租户身份与本机配置不一致。");
+    this.supportsEditorial = capabilities.capabilities.editorial === true;
     this.supportsReadingTopics =
       capabilities.capabilities.readingTopics === true;
     return {

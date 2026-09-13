@@ -2,10 +2,57 @@
   display: block;
 }
 .radar-reader {
-  display: grid;
-  grid-template-columns: 178px minmax(0, 1fr);
-  gap: 30px;
-  align-items: start;
+  display: block;
+}
+.radar-reader-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 24px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+.radar-reader-filters[hidden] {
+  display: none;
+}
+.radar-reader-origins {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-right: auto;
+}
+.radar-reader-origins button {
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  padding: 7px 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.radar-reader-origins button.active {
+  background: #e9efe1;
+  color: #34583e;
+}
+.radar-reader-origins button span {
+  margin-left: 6px;
+  font-size: 10px;
+}
+.radar-reader-filters select {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  padding: 7px 9px;
+  border-radius: 5px;
+  max-width: 190px;
+  font-size: 12px;
+}
+.radar-reader-filters .radar-manage-sources {
+  border: 0;
+  padding: 7px 0 7px 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
 }
 .radar-reader-nav {
   display: grid;

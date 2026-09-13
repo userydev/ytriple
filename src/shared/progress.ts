@@ -34,7 +34,7 @@ export interface AgentProgress {
 }
 const text = (value: unknown): string | undefined =>
   typeof value === "string" ? value : undefined;
-const members = new Set<string>(["coordinator", "cto", "researcher"]);
+const members = new Set<string>(["coordinator", "cto", "researcher", "editor"]);
 const memberId = (value: unknown): MemberId | undefined =>
   typeof value === "string" && members.has(value)
     ? (value as MemberId)

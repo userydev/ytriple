@@ -29,6 +29,7 @@ const sse = (value: unknown, cursor: string) =>
 async function fixture(
   t: { after(fn: () => unknown): void },
   sourceGateway?: SourceGateway,
+  lifecycle?: { closed: boolean },
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ytriple-gateway-"));
   const service = new WorkbenchService(
@@ -38,7 +39,7 @@ async function fixture(
     sourceGateway ? { sourceGateway } : {},
   );
   t.after(async () => {
-    await service.close();
+    if (!lifecycle?.closed) await service.close();
     await fs.rm(root, { recursive: true, force: true });
   });
   service.store.setConfig("settings", {
@@ -464,7 +465,7 @@ test("closing the HTTP source gateway aborts in-flight work", async () => {
   await assert.rejects(pending, /请求已停止/);
 });
 
-test("WorkbenchService requires a gateway and checks the task before remote access", async (t) => {
+test("WorkbenchService checks the task before remote access and screens local fallback URLs", async (t) => {
   let calls = 0;
   const gateway: SourceGateway = {
     addURL: async () => {
@@ -477,7 +478,7 @@ test("WorkbenchService requires a gateway and checks the task before remote acce
     configured.execute({
       type: "source.addURL",
       taskId: "missing-task",
-      url: "https://example.com/article",
+      url: "http://127.0.0.1/private",
     }),
     /找不到/,
   );
@@ -491,9 +492,9 @@ test("WorkbenchService requires a gateway and checks the task before remote acce
     unconfigured.execute({
       type: "source.addURL",
       taskId: task.id,
-      url: "https://example.com/article",
+      url: "http://127.0.0.1/private",
     }),
-    /信息源服务未配置/,
+    /公开|禁止|不允许|不能|本地|地址|HTTPS/,
   );
 });
 
@@ -1493,4 +1494,202 @@ test("legacy generated inbox migrates into Radar while a user-modified inbox is 
   } finally {
     await reopened.close();
   }
+});
+
+test("editorial delivery, corrections and immutable versions are cached without automatic tasks", async (t) => {
+  const { editorialRevision } = await import("./fixtures/editorial.js");
+  const first = editorialRevision();
+  const identity = { serverInstanceId, tenantId: "editorial-tenant" };
+  let available = true;
+  let lookups = 0;
+  const requests: string[] = [];
+  const gateway: SourceGateway = {
+    addURL: async () => {
+      throw new Error("unused");
+    },
+    radarCatalog: async () => {
+      if (!available) throw new Error("offline");
+      return {
+        ...identity,
+        follows: [],
+        recommendedSources: [],
+        editorial: {
+          status: { state: "ready" },
+          issues: [
+            {
+              id: first.issueId,
+              focus: "AI",
+              createdAt: first.createdAt,
+              updatedAt: first.createdAt,
+              latest: first,
+              history: [first],
+              corrections: [],
+            },
+          ],
+        },
+      };
+    },
+    editorialRevision: async () => {
+      lookups++;
+      return { ...identity, revision: first };
+    },
+    correctEditorial: async (issueId, input, requestId) => {
+      requests.push(requestId);
+      return {
+        ...identity,
+        correction: {
+          ...input,
+          issueId,
+          id: "d95c065c-3374-4b3b-bcda-b50d9e3d4ac4",
+          createdAt: first.createdAt,
+          status: "pending",
+        },
+      };
+    },
+  };
+  const lifecycle = { closed: false };
+  const service = await fixture(t, gateway, lifecycle);
+  let snapshot = await service.connectSourceService(
+    gateway,
+    "https://editorial.example.com",
+  );
+  assert.equal(snapshot.radar?.editorial?.issues.length, 1);
+  assert.equal(snapshot.tasks.length, 0);
+  snapshot = await service.execute({
+    type: "radar.editorialVersion",
+    issueId: first.issueId,
+    revisionId: first.id,
+  });
+  assert.deepEqual(snapshot.radar?.editorialVersions?.[first.id], first);
+  assert.equal(lookups, 0, "current version comes from validated local feed");
+  const requestId = randomUUID();
+  snapshot = await service.execute({
+    type: "radar.correctEditorial",
+    issueId: first.issueId,
+    revisionId: first.id,
+    text: "请复核当前证据的完整性。",
+    requestId,
+  });
+  assert.equal(
+    snapshot.radar?.editorial?.issues[0]?.corrections[0]?.status,
+    "pending",
+  );
+  assert.deepEqual(requests, [requestId]);
+  assert.equal(snapshot.tasks.length, 0);
+  available = false;
+  const taskId = randomUUID();
+  snapshot = await service.execute({
+    type: "radar.discussEditorial",
+    issueId: first.issueId,
+    revisionId: first.id,
+    requestId: taskId,
+  });
+  const task = snapshot.tasks.find((task) => task.id === taskId)!;
+  assert.ok(task);
+  assert.match(task.sources[0]!.text, /未取得全文/);
+  assert.ok(task.sources[0]!.text.includes(first.id));
+  assert.match(task.sources[0]!.text, /当时使用的材料/);
+  snapshot = await service.execute({
+    type: "radar.discussEditorial",
+    issueId: first.issueId,
+    revisionId: first.id,
+    requestId: taskId,
+  });
+  assert.equal(
+    snapshot.tasks.length,
+    1,
+    "uncertain retry must not duplicate a discussion",
+  );
+  assert.equal(lookups, 0);
+  await service.close();
+  lifecycle.closed = true;
+  const reopened = new WorkbenchService(
+    service.store.dataPath,
+    () => undefined,
+    () => {},
+    { sourceGateway: gateway, autoDigestRadar: false },
+  );
+  try {
+    const restored = await reopened.initialize();
+    assert.equal(restored.radar?.editorial?.issues[0]?.latest.id, first.id);
+    assert.deepEqual(restored.radar?.editorialVersions?.[first.id], first);
+    assert.equal(restored.tasks.length, 1);
+  } finally {
+    await reopened.close();
+  }
+});
+
+test("HTTP editorial endpoints preserve identity, revisions, and correction idempotency", async () => {
+  const { editorialRevision } = await import("./fixtures/editorial.js");
+  const first = editorialRevision();
+  const requestId = randomUUID();
+  const calls: string[] = [];
+  const gateway = new HttpSourceGateway({
+    baseURL: "https://editorial.example.com",
+    token: "device-key",
+    fetch: async (input, request) => {
+      const pathname = new URL(String(input)).pathname;
+      calls.push(pathname);
+      if (pathname === "/v1/capabilities")
+        return json({
+          meta,
+          tenantId: "tenant-editorial",
+          capabilities: {
+            publicUrl: true,
+            explicitRefresh: true,
+            changes: true,
+            itemRevisions: true,
+            sourceFollows: true,
+            recommendedSources: true,
+            readingTopics: true,
+            editorial: true,
+          },
+          scopes: ["content:read", "sources:read", "sources:write"],
+        });
+      if (pathname === "/v1/follows") return json({ meta, follows: [] });
+      if (pathname === "/v1/recommended-sources")
+        return json({ meta, sources: [] });
+      if (pathname === "/v1/editorial")
+        return json({ meta, issues: [], status: { state: "waiting" } });
+      if (pathname.endsWith("/corrections")) {
+        assert.equal(
+          new Headers(request?.headers).get("Idempotency-Key"),
+          requestId,
+        );
+        return json(
+          {
+            meta,
+            correction: {
+              id: randomUUID(),
+              issueId: first.issueId,
+              revisionId: first.id,
+              text: "明确独立证据的缺口。",
+              createdAt: first.createdAt,
+              status: "pending",
+            },
+          },
+          201,
+        );
+      }
+      if (pathname.endsWith(`/revisions/${first.id}`))
+        return json({ meta, revision: first });
+      throw new Error("unexpected request");
+    },
+  });
+  const catalog = await gateway.radarCatalog();
+  assert.equal(catalog.editorial?.status.state, "waiting");
+  assert.ok(
+    !calls.includes("/v1/reading"),
+    "new delivery does not request abandoned category summaries",
+  );
+  const old = await gateway.editorialRevision(first.issueId, first.id);
+  assert.deepEqual(old.revision, first);
+  assert.equal(old.serverInstanceId, serverInstanceId);
+  const corrected = await gateway.correctEditorial(
+    first.issueId,
+    { revisionId: first.id, text: "明确独立证据的缺口。" },
+    requestId,
+  );
+  assert.equal(corrected.correction.status, "pending");
+  await gateway.close();
 });

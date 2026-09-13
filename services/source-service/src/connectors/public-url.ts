@@ -11,6 +11,7 @@ import {
   MAX_ITEM_CONTENT_BYTES,
 } from "@ytriple/source-contract";
 import { parseHTML } from "linkedom";
+import { z } from "zod";
 
 const MAX_REDIRECTS = 5;
 const MAX_RESPONSE_BYTES = 3 * 1024 * 1024;
@@ -81,6 +82,11 @@ export interface FetchPublicURLOptions {
    * to the HTTPS URL hostname. Never enable this mode remotely.
    */
   localDevEgressMode?: "orbstack-loopback";
+  /** Desktop-only recovery for system DNS returning exclusively 198.18/15 fake IPs.
+   * Resolve again through a fixed TLS-authenticated, IP-pinned public resolver;
+   * synthetic/private addresses themselves never become eligible targets.
+   */
+  syntheticDNSFallback?: "cloudflare";
 }
 
 export interface NormalizedPublicURL {
@@ -346,7 +352,10 @@ async function resolvePublicTarget(
   lookup: PublicURLLookup,
   timeoutMs: number,
   localDevEgressMode?: "orbstack-loopback",
+  syntheticDNSFallback?: "cloudflare",
+  request: PublicURLRequest = defaultRequest,
 ): Promise<PublicURLLookupAddress> {
+  const deadline = Date.now() + timeoutMs;
   if (!HttpUrlSchema.safeParse(url.href).success)
     throw new PublicURLConnectorError(
       "INVALID_SOURCE_URL",
@@ -424,6 +433,24 @@ async function resolvePublicTarget(
       "SOURCE_HTTP_ERROR",
       "来源地址没有可用的网络地址。",
     );
+  if (
+    syntheticDNSFallback === "cloudflare" &&
+    addresses.every(
+      ({ address, family }) =>
+        family === 4 &&
+        isIP(address) === 4 &&
+        isBenchmarkEgressAddress(address),
+    )
+  ) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0)
+      throw new PublicURLConnectorError("SOURCE_TIMEOUT", "来源地址解析超时。");
+    addresses = await resolveTrustedPublicDNS(
+      hostname,
+      request,
+      Math.min(8000, remaining),
+    );
+  }
   const trustedSyntheticAddress = (address: string, family: 4 | 6) =>
     Boolean(
       localDevEgressMode === "orbstack-loopback" &&
@@ -446,6 +473,109 @@ async function resolvePublicTarget(
       "来源地址解析到本机、私人或非公网网络。",
     );
   return addresses[0]!;
+}
+
+const dnsJSONSchema = z.object({
+  Status: z.literal(0),
+  TC: z.literal(false).optional(),
+  Question: z
+    .array(z.object({ name: z.string().max(254), type: z.number().int() }))
+    .length(1),
+  Answer: z
+    .array(
+      z.object({
+        name: z.string().max(254),
+        type: z.number().int(),
+        data: z.string().max(2048),
+      }),
+    )
+    .max(32)
+    .default([]),
+});
+
+/** The resolver URL and connecting IP are constants, never derived from source content or DNS. */
+async function resolveTrustedPublicDNS(
+  hostname: string,
+  request: PublicURLRequest,
+  timeoutMs: number,
+): Promise<PublicURLLookupAddress[]> {
+  const answers = await Promise.all(
+    ([1, 28] as const).map(async (type) => {
+      const url = new URL("https://cloudflare-dns.com/dns-query");
+      url.searchParams.set("name", hostname);
+      url.searchParams.set("type", String(type));
+      const response = await requestWithTimeout(request, {
+        url,
+        address: "1.1.1.1",
+        family: 4,
+        timeoutMs,
+        headers: {
+          Accept: "application/dns-json",
+          "Accept-Encoding": "identity",
+          "User-Agent": "ytriple-public-dns/0.1",
+        },
+      });
+      if (
+        response.status !== 200 ||
+        headerValue(response.headers, "content-type")
+          ?.split(";", 1)[0]
+          ?.trim()
+          .toLowerCase() !== "application/dns-json"
+      )
+        throw new PublicURLConnectorError(
+          "SOURCE_HTTP_ERROR",
+          "本机返回了合成 DNS 地址，可信公网解析暂不可用。",
+          { status: response.status },
+        );
+      const bytes = checkedBody(response);
+      if (bytes.byteLength > 65536)
+        throw new PublicURLConnectorError(
+          "SOURCE_TOO_LARGE",
+          "公网 DNS 响应超过允许大小。",
+        );
+      let data: z.infer<typeof dnsJSONSchema>;
+      try {
+        data = dnsJSONSchema.parse(JSON.parse(bytes.toString("utf8")));
+      } catch (error) {
+        throw new PublicURLConnectorError(
+          "SOURCE_HTTP_ERROR",
+          "可信公网解析未返回有效 DNS 结果。",
+          { cause: error },
+        );
+      }
+      const question = data.Question[0]!;
+      if (
+        question.name.toLowerCase().replace(/\.$/, "") !==
+          hostname.toLowerCase().replace(/\.$/, "") ||
+        question.type !== type
+      )
+        throw new PublicURLConnectorError(
+          "SOURCE_URL_BLOCKED",
+          "公网 DNS 回应与请求的来源不一致。",
+        );
+      return data.Answer.flatMap((answer) => {
+        if (answer.type === 5) return [];
+        const family = type === 1 ? 4 : 6;
+        if (
+          answer.type !== type ||
+          isIP(answer.data) !== family ||
+          !isPublicAddress(answer.data)
+        )
+          throw new PublicURLConnectorError(
+            "SOURCE_URL_BLOCKED",
+            "可信 DNS 仍解析到非公网地址，已停止读取。",
+          );
+        return [{ address: answer.data, family: family as 4 | 6 }];
+      });
+    }),
+  );
+  const result = answers.flat();
+  if (!result.length)
+    throw new PublicURLConnectorError(
+      "SOURCE_HTTP_ERROR",
+      "可信公网解析没有返回可用地址。",
+    );
+  return result;
 }
 
 async function requestWithTimeout(
@@ -500,10 +630,10 @@ export interface PublicDocument {
  * Fetches a public URL through a DNS-pinned transport and returns canonical
  * source content. Every redirect is parsed, resolved, and screened again.
  */
-export async function fetchPublicDocument(
+export async function fetchPublicResource(
   raw: string,
   options: FetchPublicURLOptions = {},
-): Promise<PublicDocument> {
+): Promise<Omit<PublicDocument, "rawContent"> & { bytes: Buffer }> {
   const lookup = options.lookup ?? defaultLookup;
   const request = options.request ?? defaultRequest;
   let url = parseInitialURL(raw);
@@ -527,6 +657,8 @@ export async function fetchPublicDocument(
       lookup,
       remaining(),
       options.localDevEgressMode,
+      options.syntheticDNSFallback,
+      request,
     );
     const response = await requestWithTimeout(request, {
       url: new URL(url.href),
@@ -535,7 +667,7 @@ export async function fetchPublicDocument(
       timeoutMs: remaining(),
       headers: {
         Accept:
-          "application/rss+xml,application/atom+xml,application/xml,text/xml,text/html,text/plain,application/json",
+          "application/rss+xml,application/atom+xml,application/xml,text/xml,text/html,text/plain,application/json,image/jpeg,image/png,image/webp",
         "Accept-Encoding": "identity",
         "User-Agent": "ytriple-source-service/0.1",
       },
@@ -584,10 +716,18 @@ export async function fetchPublicDocument(
     return {
       url: url.href,
       contentType,
-      rawContent: body.toString("utf8"),
+      bytes: body,
       observedAt: new Date().toISOString(),
     };
   }
+}
+
+export async function fetchPublicDocument(
+  raw: string,
+  options: FetchPublicURLOptions = {},
+): Promise<PublicDocument> {
+  const { bytes, ...resource } = await fetchPublicResource(raw, options);
+  return { ...resource, rawContent: bytes.toString("utf8") };
 }
 
 export function normalizePublicDocument(

@@ -303,18 +303,22 @@ function ProjectOverview({
 
 export function ProjectExplorer({
   snapshot,
+  projectOnly = false,
   dispatch,
   selectedProjectId,
   onSelectProject,
   onDiscussProject,
 }: {
   snapshot: Snapshot | null;
+  projectOnly?: boolean;
   dispatch: Dispatch;
   selectedProjectId?: string | null;
   onSelectProject?: (project: ProjectInfo) => void;
   onDiscussProject?: (project: ProjectInfo) => void;
 }) {
-  const projects = snapshot?.projects ?? [];
+  const projects = (snapshot?.projects ?? []).filter(
+    (item) => !projectOnly || item.id === selectedProjectId,
+  );
   const [localSelection, setLocalSelection] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [worktrees, setWorktrees] = useState<Record<string, string>>({});
@@ -695,7 +699,7 @@ export function ProjectExplorer({
       style={{ "--project-tree-width": `${treeWidth}px` } as CSSProperties}
     >
       <aside className="project-file-sidebar" aria-label="项目文件系统">
-        <label className="project-file-search">
+        <label className="project-file-search" hidden={projectOnly}>
           <Search size={13} />
           <input
             aria-label="搜索本机项目"

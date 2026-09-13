@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useId, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -27,8 +27,10 @@ export const STATUS_NAMES: Record<TaskStatus, string> = {
   failed: "需要处理",
   completed: "已完成",
 };
-export const memberName = (id: MemberId) =>
-  MEMBERS.find((member) => member.id === id)?.shortName ?? id;
+export const memberName = (id: MemberId, teamMode?: "software" | "media") =>
+  id === "coordinator" && teamMode === "media"
+    ? "主编"
+    : (MEMBERS.find((member) => member.id === id)?.shortName ?? id);
 export const formatTime = (date: string) => {
   const value = new Date(date);
   return Number.isNaN(value.getTime())
@@ -147,6 +149,7 @@ export function Modal({
   wide?: boolean;
 }) {
   const container = useRef<HTMLDivElement>(null);
+  const titleId = useId();
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {
@@ -154,12 +157,17 @@ export function Modal({
     const focusable = () =>
       Array.from(
         container.current?.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]',
+          'button:not([disabled]), a[href], summary, input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex="0"]',
         ) ?? [],
-      );
+      ).filter((element) => !element.closest("[hidden]"));
     focusable()[0]?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close.current();
+      const dialogs = document.querySelectorAll('[aria-modal="true"]');
+      if (dialogs[dialogs.length - 1] !== container.current) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        close.current();
+      }
       if (event.key === "Tab") {
         const items = focusable();
         const first = items[0];
@@ -190,12 +198,12 @@ export function Modal({
         className={`modal ${wide ? "modal-wide" : ""}`}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="modal-title"
+        aria-labelledby={titleId}
         ref={container}
       >
         <header className="modal-header">
           <div>
-            <h2 id="modal-title">{title}</h2>
+            <h2 id={titleId}>{title}</h2>
             {description ? <p>{description}</p> : null}
           </div>
           <button

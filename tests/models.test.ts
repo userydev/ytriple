@@ -131,6 +131,20 @@ test("compatible profiles use independent ChatCompletions clients and the actual
     );
     assert.ok(calls.every((call) => call.url === "/v1/chat/completions"));
     assert.ok(calls.some((call) => call.stream));
+    const beforeBuffered = calls.length;
+    const buffered = await probeProfile(
+      { ...first, streamingMode: "buffered" },
+      () => "probe-secret-for-local-test",
+    );
+    assert.deepEqual(
+      buffered.capabilities,
+      { text: true, tools: true, streaming: true },
+      buffered.error,
+    );
+    assert.ok(
+      calls.slice(beforeBuffered).every((call) => !call.stream),
+      "buffered transport preserves complete responses instead of inventing deltas",
+    );
   } finally {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));

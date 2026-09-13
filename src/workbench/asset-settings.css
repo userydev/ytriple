@@ -1,0 +1,313 @@
+.asset-library-page,
+.settings-focus-page {
+  width: 100%;
+  box-sizing: border-box;
+  max-width: 1160px;
+  margin: 0 auto;
+}
+.asset-library-page .page-heading,
+.settings-focus-page .page-heading {
+  margin-bottom: 22px;
+}
+.asset-library-page .page-heading p,
+.settings-focus-page .page-heading p {
+  max-width: none;
+}
+.asset-management-bar {
+  display: flex;
+  justify-content: flex-end;
+  gap: 18px;
+  margin: -8px 0 16px;
+}
+.asset-management-bar button {
+  font-size: 12px;
+}
+.asset-management-surface {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+.asset-management-heading,
+.asset-catalog-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.asset-management-heading h2 {
+  margin: 0;
+  font-size: 17px;
+}
+.asset-library-page .library-search {
+  margin: 0 0 14px;
+}
+.asset-library-page .library-tabbar {
+  margin-bottom: 22px;
+  border-bottom: 1px solid var(--line);
+}
+.asset-library-page .asset-library-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.asset-library-page .saved-library-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 5px 24px;
+  padding: 18px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+}
+.asset-library-page .saved-library-card > div {
+  grid-column: 2;
+  grid-row: 1;
+  justify-content: flex-end;
+  font-size: 11px;
+}
+.asset-library-page .saved-library-card > div svg {
+  display: none;
+}
+.asset-library-page .saved-library-card h3 {
+  grid-column: 1;
+  grid-row: 1;
+  margin: 0;
+  font-size: 15px;
+}
+.asset-library-page .saved-library-card p {
+  grid-column: 1;
+  margin: 0;
+  font-size: 12px;
+  max-width: 720px;
+}
+.asset-library-page .saved-library-card footer {
+  grid-column: 2;
+  grid-row: 2;
+  margin: 0;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.asset-library-page .saved-library-card:hover {
+  background: var(--green-soft);
+}
+.asset-library-page .library-row,
+.asset-library-page .library-document {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.asset-library-page .library-document {
+  padding: 8px 0;
+}
+.asset-library-page .library-row {
+  border-bottom: 1px solid var(--line);
+  padding-inline: 0;
+}
+.asset-operation-tabs,
+.settings-member-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.asset-operation-tabs button,
+.settings-member-picker button {
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.asset-operation-tabs button[aria-pressed="true"],
+.settings-member-picker button[aria-pressed="true"] {
+  color: var(--ink);
+  background: var(--green-soft);
+  font-weight: 600;
+}
+.settings-focus-page {
+  display: block;
+  align-content: start;
+}
+.settings-focus-page > * {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  margin-left: 0;
+  margin-right: 0;
+}
+.settings-focus-page .settings-page-heading {
+  grid-column: 1 / -1;
+}
+.settings-groups {
+  display: flex;
+  flex-direction: row;
+  align-self: start;
+  gap: 5px;
+  padding-top: 4px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.settings-groups button {
+  border: 0;
+  background: transparent;
+  text-align: left;
+  padding: 11px 14px;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+.settings-groups button[aria-current="page"] {
+  color: var(--ink);
+  background: var(--green-soft);
+  font-weight: 600;
+}
+.settings-current-surface {
+  min-width: 0;
+  padding-top: 4px;
+}
+.settings-focus-page .settings-section,
+.settings-focus-page .member-settings-card,
+.settings-focus-page .default-model-settings,
+.settings-focus-page .profile-editor,
+.settings-focus-page .service-settings {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0;
+}
+.settings-focus-page .models-layout {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 24px;
+}
+.settings-focus-page .connection-test-panel {
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  margin: 16px 0 0;
+  padding: 14px 0 0;
+  box-shadow: none;
+}
+.settings-focus-page .connection-test-heading h4 {
+  display: none;
+}
+.settings-focus-page .connection-test-heading p {
+  margin: 0;
+  font-size: 11px;
+}
+.settings-focus-page .connection-test-heading {
+  gap: 12px;
+  align-items: center;
+}
+.settings-focus-page .connection-test-panel .capability-results {
+  margin: 12px 0 0;
+}
+.settings-focus-page .google-catalog {
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+}
+.settings-focus-page .connection-advanced,
+.settings-focus-page .connection-execution {
+  margin: 8px 0 18px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.settings-focus-page .connection-advanced summary,
+.settings-focus-page .connection-execution summary {
+  cursor: pointer;
+}
+.settings-focus-page .connection-advanced .form-grid {
+  margin-top: 14px;
+}
+.settings-focus-page .profile-list {
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  padding-right: 18px;
+  background: transparent;
+}
+.settings-focus-page .profile-item {
+  padding: 10px 8px;
+  border: 0;
+  border-radius: 5px;
+}
+.settings-focus-page .profile-item .provider-mark {
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  font-size: 11px;
+}
+.settings-focus-page .profile-workspace {
+  min-width: 0;
+}
+.settings-focus-page .team-model-reference {
+  border: 0;
+  background: transparent;
+  padding: 0 0 18px;
+  margin: 0;
+}
+.settings-focus-page .member-configs {
+  display: block;
+}
+.settings-focus-page .member-model-status {
+  background: transparent;
+  border: 0;
+  padding: 8px 0 18px;
+}
+.settings-focus-page
+  .environment-settings
+  .settings-section
+  + .settings-section {
+  margin-top: 24px;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+}
+.settings-focus-page .field-hint,
+.settings-focus-page .profile-note {
+  line-height: 1.6;
+}
+.settings-focus-page [hidden],
+.asset-library-page [hidden],
+.skill-catalog [hidden],
+.portable-panel [hidden],
+.service-settings [hidden] {
+  display: none !important;
+}
+@media (max-width: 960px) {
+  .settings-focus-page {
+    grid-template-columns: 1fr;
+  }
+  .settings-groups {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
+  }
+  .settings-focus-page .models-layout {
+    grid-template-columns: 180px minmax(0, 1fr);
+  }
+  .asset-library-page .saved-library-card {
+    display: block;
+  }
+  .asset-library-page .saved-library-card > div {
+    float: right;
+  }
+  .asset-library-page .saved-library-card p {
+    margin: 6px 0;
+  }
+}

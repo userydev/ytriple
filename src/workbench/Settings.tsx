@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ServiceSettings } from "./ServiceSettings";
 import type {
   MemberSettings,
   MemberSettingsMap,
@@ -65,7 +66,7 @@ const PROVIDERS: Record<
     keyEnv: "",
   },
 };
-export type SettingsSection = "models" | "team" | "environment";
+export type SettingsSection = "models" | "team" | "environment" | "service";
 
 const PROFILE_STATUS: Record<ModelProfile["status"], string> = {
   ready: "已验证",
@@ -97,7 +98,10 @@ function CapabilityStatus({ profile }: { profile: ModelProfile }) {
             profile.execution === "google-agent" ? "专项回复" : "文本响应",
           ],
           ["tools", "工具调用"],
-          ["streaming", "流式响应"],
+          [
+            "streaming",
+            profile.streamingMode === "buffered" ? "完整响应接续" : "流式响应",
+          ],
         ] as const
       ).map(([id, name]) => {
         const notApplicable =
@@ -133,7 +137,10 @@ function MemberModelStatus({
   profiles: ModelProfile[];
   onOpenModels?: (profileId?: string) => void;
 }) {
-  const selected = settings.memberProfiles[member] || settings.defaultProfileId;
+  const selected =
+    settings.memberProfiles[member] ||
+    (member === "editor" ? settings.memberProfiles.researcher : "") ||
+    settings.defaultProfileId;
   const profile = profiles.find((item) => item.id === selected);
   return (
     <div className="member-model-status">
@@ -309,78 +316,6 @@ function ProfileEditor({
             </span>
           ) : null}
         </div>
-        <section className="connection-test-panel" aria-label="连接测试">
-          <div className="connection-test-heading">
-            <div>
-              <h4>连接与能力测试</h4>
-              <p>
-                {profile.execution === "google-agent"
-                  ? "发送简短测试任务，检查专项 Agent 回复。"
-                  : "检查文本响应、实际工具调用和流式响应。"}
-                仅发送合成内容。
-              </p>
-            </div>
-            <button
-              className="button primary"
-              type="button"
-              disabled={
-                !connected ||
-                saving ||
-                probing ||
-                !profile.name.trim() ||
-                !profile.modelId.trim() ||
-                (profile.protocol !== "google" && !profile.baseURL.trim())
-              }
-              onClick={() => void save(true)}
-            >
-              {probing ? (
-                <LoaderCircle size={14} className="spin" />
-              ) : (
-                <RefreshCw size={14} />
-              )}
-              {probing
-                ? "正在测试连接"
-                : dirty || !original
-                  ? "保存并测试"
-                  : "测试连接"}
-            </button>
-          </div>
-          <div aria-live="polite">
-            {probing ? (
-              <p className="test-progress">
-                测试中，请稍候。
-                {profile.execution === "google-agent"
-                  ? "专项 Agent 最多检查 90 秒。"
-                  : "将依次检查三项能力。"}
-              </p>
-            ) : null}
-            {!dirty && original ? (
-              <>
-                <CapabilityStatus profile={original} />
-                {original.testedAt ? (
-                  <p className="field-hint">
-                    最近测试：{formatDate(original.testedAt)}
-                  </p>
-                ) : (
-                  <p className="field-hint">
-                    尚未执行连接测试，配置完成不等于能力已通过。
-                  </p>
-                )}
-                {original.lastError ? (
-                  <div className="inline-notice warning">
-                    {original.lastError}
-                  </div>
-                ) : null}
-              </>
-            ) : (
-              <p className="field-hint">
-                {dirty
-                  ? "当前修改尚未测试，测试前将保存这份配置。"
-                  : "填写配置后即可保存并测试。"}
-              </p>
-            )}
-          </div>
-        </section>
         <div className="form-grid">
           <label className="field">
             连接名称
@@ -460,24 +395,27 @@ function ProfileEditor({
                 </optgroup>
               </select>
             </label>
-            <label className="field">
-              执行方式
-              <select
-                aria-label="执行方式"
-                value={profile.execution ?? "model"}
-                onChange={(event) =>
-                  updateProfile({
-                    execution: event.currentTarget
-                      .value as ModelProfile["execution"],
-                  })
-                }
-              >
-                <option value="model">通用模型 · 使用工作台工具</option>
-                <option value="google-agent">
-                  Google 专项 Agent · Interactions
-                </option>
-              </select>
-            </label>
+            <details className="connection-execution">
+              <summary>执行方式与专项能力</summary>
+              <label className="field">
+                执行方式
+                <select
+                  aria-label="执行方式"
+                  value={profile.execution ?? "model"}
+                  onChange={(event) =>
+                    updateProfile({
+                      execution: event.currentTarget
+                        .value as ModelProfile["execution"],
+                    })
+                  }
+                >
+                  <option value="model">通用模型 · 使用工作台工具</option>
+                  <option value="google-agent">
+                    Google 专项 Agent · Interactions
+                  </option>
+                </select>
+              </label>
+            </details>
             {profile.execution === "google-agent" ? (
               <p className="field-hint">
                 在 Google 端检索与执行，公开进度回到过程面板，报告保存为本地
@@ -529,37 +467,6 @@ function ProfileEditor({
             disabled={!connected}
           />
         </label>
-        <div className="form-grid">
-          <label className="field">
-            调用协议
-            <select
-              value={profile.protocol}
-              onChange={(event) =>
-                updateProfile({
-                  protocol: event.currentTarget
-                    .value as ModelProfile["protocol"],
-                })
-              }
-              disabled={!connected || profile.provider !== "compatible"}
-            >
-              <option value="google">Google 原生</option>
-              <option value="openai">OpenAI 兼容</option>
-            </select>
-          </label>
-          <label className="field">
-            密钥环境变量
-            <input
-              value={profile.apiKeyEnv}
-              onInput={(event) =>
-                updateProfile({ apiKeyEnv: event.currentTarget.value })
-              }
-              placeholder="例如 GEMINI_API_KEY"
-              autoCapitalize="off"
-              spellCheck={false}
-              disabled={!connected}
-            />
-          </label>
-        </div>
         <label className="field">
           临时输入密钥 <span className="optional">可选</span>
           <div className="input-with-icon">
@@ -584,6 +491,40 @@ function ProfileEditor({
             已有密钥不会回显到界面；保存后清空本次输入。
           </span>
         </label>
+        <details className="connection-advanced">
+          <summary>高级连接参数</summary>
+          <div className="form-grid">
+            <label className="field">
+              调用协议
+              <select
+                value={profile.protocol}
+                onChange={(event) =>
+                  updateProfile({
+                    protocol: event.currentTarget
+                      .value as ModelProfile["protocol"],
+                  })
+                }
+                disabled={!connected || profile.provider !== "compatible"}
+              >
+                <option value="google">Google 原生</option>
+                <option value="openai">OpenAI 兼容</option>
+              </select>
+            </label>
+            <label className="field">
+              密钥环境变量
+              <input
+                value={profile.apiKeyEnv}
+                onInput={(event) =>
+                  updateProfile({ apiKeyEnv: event.currentTarget.value })
+                }
+                placeholder="例如 GEMINI_API_KEY"
+                autoCapitalize="off"
+                spellCheck={false}
+                disabled={!connected}
+              />
+            </label>
+          </div>
+        </details>
         <div className="form-actions">
           <button
             className="button primary"
@@ -598,6 +539,80 @@ function ProfileEditor({
             {saving ? "正在保存" : saved ? "已保存" : "保存连接"}
           </button>
         </div>
+        <section className="connection-test-panel" aria-label="连接测试">
+          <div className="connection-test-heading">
+            <div>
+              <h4>连接与能力测试</h4>
+              <p>
+                {profile.execution === "google-agent"
+                  ? "发送简短测试任务，检查专项 Agent 回复。"
+                  : "检查文本响应、实际工具调用和流式响应。"}
+                仅发送合成内容。
+              </p>
+            </div>
+            <button
+              className="button primary"
+              type="button"
+              disabled={
+                !connected ||
+                saving ||
+                probing ||
+                !profile.name.trim() ||
+                !profile.modelId.trim() ||
+                (profile.protocol !== "google" && !profile.baseURL.trim())
+              }
+              onClick={() => void save(true)}
+            >
+              {probing ? (
+                <LoaderCircle size={14} className="spin" />
+              ) : (
+                <RefreshCw size={14} />
+              )}
+              {probing
+                ? "正在测试连接"
+                : dirty || !original
+                  ? "保存并测试"
+                  : "测试连接"}
+            </button>
+          </div>
+          <div aria-live="polite">
+            {probing ? (
+              <p className="test-progress">
+                测试中，请稍候。
+                {profile.execution === "google-agent"
+                  ? "专项 Agent 最多检查 90 秒。"
+                  : "将依次检查三项能力。"}
+              </p>
+            ) : null}
+            {!dirty && original ? (
+              <>
+                {original.capabilities ? (
+                  <CapabilityStatus profile={original} />
+                ) : null}
+                {original.testedAt ? (
+                  <p className="field-hint">
+                    最近测试：{formatDate(original.testedAt)}
+                  </p>
+                ) : (
+                  <p className="field-hint">
+                    尚未执行连接测试，配置完成不等于能力已通过。
+                  </p>
+                )}
+                {original.lastError ? (
+                  <div className="inline-notice warning">
+                    {original.lastError}
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <p className="field-hint">
+                {dirty
+                  ? "当前修改尚未测试，测试前将保存这份配置。"
+                  : "填写配置后即可保存并测试。"}
+              </p>
+            )}
+          </div>
+        </section>
       </fieldset>
     </form>
   );
@@ -606,13 +621,22 @@ function ProfileEditor({
 type SettingsPatch = Partial<
   Pick<
     AppSettings,
-    "aiRoot" | "codeRoot" | "workspaceRoot" | "defaultProfileId"
+    | "aiRoot"
+    | "codeRoot"
+    | "workspaceRoot"
+    | "defaultProfileId"
+    | "backgroundRoutines"
   >
 > & {
   memberProfiles?: Partial<Record<MemberId, string>>;
   memberSettings?: Partial<Record<MemberId, Partial<MemberSettings>>>;
 };
-const environmentKeys = ["aiRoot", "codeRoot", "workspaceRoot"] as const;
+const environmentKeys = [
+  "aiRoot",
+  "codeRoot",
+  "workspaceRoot",
+  "backgroundRoutines",
+] as const;
 function mergeSettings(base: AppSettings, patch: SettingsPatch): AppSettings {
   const members = normalizeTeamSettings(base.memberSettings);
   for (const member of MEMBERS)
@@ -629,7 +653,14 @@ function mergeSettings(base: AppSettings, patch: SettingsPatch): AppSettings {
 }
 function settingsPatch(before: AppSettings, after: AppSettings): SettingsPatch {
   const patch: SettingsPatch = {};
-  for (const key of [...environmentKeys, "defaultProfileId"] as const)
+  if (before.backgroundRoutines !== after.backgroundRoutines)
+    patch.backgroundRoutines = after.backgroundRoutines;
+  for (const key of [
+    "aiRoot",
+    "codeRoot",
+    "workspaceRoot",
+    "defaultProfileId",
+  ] as const)
     if (before[key] !== after[key]) patch[key] = after[key];
   for (const { id } of MEMBERS) {
     if (before.memberProfiles[id] !== after.memberProfiles[id])
@@ -706,6 +737,7 @@ function EnvironmentSettings({
   connected: boolean;
   onOpenModels?: (profileId?: string) => void;
 }) {
+  const [selectedMember, setSelectedMember] = useState<MemberId>("coordinator");
   const [patch, setPatch] = useState<SettingsPatch>({});
   const settings = mergeSettings(snapshot.settings, patch);
   const setSettings = (next: AppSettings) => {
@@ -795,6 +827,24 @@ function EnvironmentSettings({
                   />
                 </label>
               </div>
+              <label className="field">
+                <span>
+                  <input
+                    type="checkbox"
+                    checked={settings.backgroundRoutines === true}
+                    onChange={(event) =>
+                      setSettings({
+                        ...settings,
+                        backgroundRoutines: event.currentTarget.checked,
+                      })
+                    }
+                  />{" "}
+                  关闭窗口后继续本机例行工作
+                </span>
+                <span className="field-hint">
+                  有已启用例行工作时保留菜单栏执行器；电脑休眠期间暂停。通过菜单栏“退出并暂停本机执行”可完全退出。
+                </span>
+              </label>
               <label className="field">
                 工作资料目录
                 <input
@@ -910,8 +960,24 @@ function EnvironmentSettings({
               ) : null}
             </div>
             <div className="member-configs">
+              <nav className="settings-member-picker" aria-label="选择团队成员">
+                {MEMBERS.map((member) => (
+                  <button
+                    type="button"
+                    key={member.id}
+                    aria-pressed={selectedMember === member.id}
+                    onClick={() => setSelectedMember(member.id)}
+                  >
+                    {member.name}
+                  </button>
+                ))}
+              </nav>
               {MEMBERS.map((member) => (
-                <section className="member-settings-card" key={member.id}>
+                <section
+                  className="member-settings-card"
+                  key={member.id}
+                  hidden={selectedMember !== member.id}
+                >
                   <div className="section-heading">
                     <div>
                       <h4>{member.name}</h4>
@@ -1149,22 +1215,39 @@ export function Settings({
   connected,
   section,
   onOpenModels,
+  onTask,
+  onSectionChange,
 }: {
   snapshot: Snapshot | null;
   dispatch: Dispatch;
   connected: boolean;
   section?: SettingsSection;
   onOpenModels?: (profileId?: string) => void;
+  onTask?: (id: string) => void;
+  onSectionChange?: (section: SettingsSection) => void;
 }) {
-  const [localSection, setLocalSection] = useState<SettingsSection>("models");
-  const tab = section ?? localSection;
+  const [localSection, setLocalSection] = useState<SettingsSection>(
+    section ?? "models",
+  );
+  useEffect(() => {
+    if (section !== undefined) setLocalSection(section);
+  }, [section]);
+  const tab = localSection;
+  const navigate = (next: SettingsSection) => {
+    setLocalSection(next);
+    onSectionChange?.(next);
+  };
+  const [modelSurface, setModelSurface] = useState<"connections" | "default">(
+    "connections",
+  );
   const openModels = (profileId?: string) => {
+    setLocalSection("models");
+    setModelSurface("connections");
     if (profileId && !profileBusy) {
       setSelected(profileId);
       setSelectionInitialized(true);
     }
     if (onOpenModels) onOpenModels(profileId);
-    else if (section === undefined) setLocalSection("models");
   };
   const [selected, setSelected] = useState<string | null>(
     snapshot?.profiles[0]?.id ?? null,
@@ -1210,144 +1293,160 @@ export function Settings({
     (profile) => profile.id === selected,
   );
   return (
-    <div className="settings-page">
+    <div className="settings-page settings-focus-page">
       <div className="page-heading settings-page-heading">
-        <span className="eyebrow">
-          {tab === "models"
-            ? "AI CONNECTIONS"
-            : tab === "team"
-              ? "AGENT TEAM"
-              : "LOCAL WORKSPACE"}
-        </span>
-        <h1>
-          {tab === "models"
-            ? "AI 模型"
-            : tab === "team"
-              ? "多 Agent 团队"
-              : "本机环境"}
-        </h1>
-        <p>
-          {tab === "models"
-            ? "管理模型连接、密钥和能力验证，选择工作台默认模型。"
-            : tab === "team"
-              ? "定义谁来工作，以及成员各自的职责与协作方式。"
-              : "管理规则、资料与项目目录，让本机工作有序延续。"}
-        </p>
+        <h1>设置</h1>
+        <p>连接、成员与本机环境。</p>
       </div>
-      {section === undefined ? (
-        <div className="page-tabs">
+      <nav className="settings-groups" aria-label="设置分组">
+        {(
+          [
+            ["models", "模型连接"],
+            ["team", "团队成员"],
+            ["environment", "本机与规则"],
+            ["service", "账户与服务"],
+          ] as const
+        ).map(([id, label]) => (
           <button
-            className={tab === "models" ? "active" : ""}
-            onClick={() => setLocalSection("models")}
+            type="button"
+            key={id}
+            aria-current={tab === id ? "page" : undefined}
+            onClick={() => navigate(id)}
           >
-            模型连接
+            {label}
           </button>
-          <button
-            className={tab === "environment" ? "active" : ""}
-            onClick={() => setLocalSection("environment")}
-          >
-            本机环境
-          </button>
-          <button
-            className={tab === "team" ? "active" : ""}
-            onClick={() => setLocalSection("team")}
-          >
-            常驻成员
-          </button>
-        </div>
-      ) : null}
-      <div
-        className={
-          tab === "models" ? "models-page-content" : "settings-tab-hidden"
-        }
-      >
-        {snapshot ? (
-          <DefaultModelSettings
-            snapshot={snapshot}
-            dispatch={dispatch}
-            connected={connected}
-          />
-        ) : null}
-        <div className="models-layout">
-          <aside className="profile-list">
-            {snapshot?.profiles.map((profile) => (
-              <button
-                className={`profile-item ${profile.id === selected ? "active" : ""}`}
-                key={profile.id}
-                disabled={profileBusy}
-                onClick={() => setSelected(profile.id)}
-              >
-                <span className={`provider-mark ${profile.provider}`}>
-                  {profile.provider === "gemini"
-                    ? "G"
-                    : profile.provider === "deepseek"
-                      ? "D"
-                      : profile.provider === "ark"
-                        ? "A"
-                        : "↗"}
-                </span>
-                <span>
-                  <strong>{profile.name}</strong>
-                  <small>{profileStatus(profile)}</small>
-                </span>
-                <ChevronRight size={14} />
-              </button>
-            ))}
-            <button
-              className={`add-profile ${selected === null ? "active" : ""}`}
-              disabled={!connected || profileBusy}
-              onClick={() => addConnection()}
-            >
-              <Plus size={15} />
-              添加模型连接
-            </button>
-            <p className="profile-note">
-              选中连接后，点击右侧「测试连接」。测试结果会保留；修改模型、接口或密钥后需重新测试。
-            </p>
-          </aside>
-          <div className="profile-workspace">
-            <ProfileEditor
-              key={original?.id ?? newProfile?.id ?? "new"}
-              draft={profileDrafts.current.get(
-                original?.id ?? newProfile?.id ?? "new",
-              )}
-              onDraft={(draft) =>
-                profileDrafts.current.set(
-                  original?.id ?? newProfile?.id ?? "new",
-                  draft,
-                )
-              }
-              original={original}
-              initial={newProfile}
+        ))}
+      </nav>
+      <div className="settings-current-surface">
+        <div hidden={tab !== "service"}>
+          {snapshot ? (
+            <ServiceSettings
+              snapshot={snapshot}
               dispatch={dispatch}
-              onSaved={(id) =>
-                setSelected((current) =>
-                  current === null && newProfile?.id === id ? id : current,
-                )
-              }
-              onBusy={setProfileBusy}
-              connected={connected}
+              onTask={onTask}
             />
+          ) : null}
+        </div>
+        <div
+          hidden={tab !== "models"}
+          className={
+            tab === "models" ? "models-page-content" : "settings-tab-hidden"
+          }
+        >
+          <nav className="asset-operation-tabs" aria-label="模型设置内容">
+            <button
+              type="button"
+              aria-pressed={modelSurface === "connections"}
+              onClick={() => setModelSurface("connections")}
+            >
+              已保存的连接
+            </button>
+            <button
+              type="button"
+              aria-pressed={modelSurface === "default"}
+              onClick={() => setModelSurface("default")}
+            >
+              默认模型
+            </button>
+          </nav>
+          <div hidden={modelSurface !== "default"}>
+            {snapshot ? (
+              <DefaultModelSettings
+                snapshot={snapshot}
+                dispatch={dispatch}
+                connected={connected}
+              />
+            ) : null}
+          </div>
+          <div
+            className="models-layout"
+            hidden={modelSurface !== "connections"}
+          >
+            <aside className="profile-list">
+              {snapshot?.profiles.map((profile) => (
+                <button
+                  className={`profile-item ${profile.id === selected ? "active" : ""}`}
+                  key={profile.id}
+                  disabled={profileBusy}
+                  onClick={() => setSelected(profile.id)}
+                >
+                  <span className={`provider-mark ${profile.provider}`}>
+                    {profile.provider === "gemini"
+                      ? "G"
+                      : profile.provider === "deepseek"
+                        ? "D"
+                        : profile.provider === "ark"
+                          ? "A"
+                          : "↗"}
+                  </span>
+                  <span>
+                    <strong>{profile.name}</strong>
+                    <small>{profileStatus(profile)}</small>
+                  </span>
+                  <ChevronRight size={14} />
+                </button>
+              ))}
+              <button
+                className={`add-profile ${selected === null ? "active" : ""}`}
+                disabled={!connected || profileBusy}
+                onClick={() => addConnection()}
+              >
+                <Plus size={15} />
+                添加模型连接
+              </button>
+              <p className="profile-note">
+                选中连接后，点击右侧「测试连接」。测试结果会保留；修改模型、接口或密钥后需重新测试。
+              </p>
+            </aside>
+            <div className="profile-workspace">
+              <ProfileEditor
+                key={original?.id ?? newProfile?.id ?? "new"}
+                draft={profileDrafts.current.get(
+                  original?.id ?? newProfile?.id ?? "new",
+                )}
+                onDraft={(draft) =>
+                  profileDrafts.current.set(
+                    original?.id ?? newProfile?.id ?? "new",
+                    draft,
+                  )
+                }
+                original={original}
+                initial={newProfile}
+                dispatch={dispatch}
+                onSaved={(id) =>
+                  setSelected((current) =>
+                    current === null && newProfile?.id === id ? id : current,
+                  )
+                }
+                onBusy={setProfileBusy}
+                connected={connected}
+              />
+            </div>
           </div>
         </div>
+        {snapshot ? (
+          <div
+            hidden={tab === "models" || tab === "service"}
+            className={
+              tab === "models" || tab === "service" ? "settings-tab-hidden" : ""
+            }
+          >
+            <EnvironmentSettings
+              snapshot={snapshot}
+              dispatch={dispatch}
+              connected={connected}
+              mode={tab === "team" ? "team" : "environment"}
+              onOpenModels={openModels}
+            />
+          </div>
+        ) : tab !== "models" && tab !== "service" ? (
+          <div className="section-empty">
+            <FolderOpen size={30} strokeWidth={1.3} />
+            <h3>桌面连接后读取本机环境</h3>
+            <p>浏览器布局预览无法发现本机规则与路径。</p>
+          </div>
+        ) : null}
       </div>
-      {snapshot ? (
-        <div className={tab === "models" ? "settings-tab-hidden" : ""}>
-          <EnvironmentSettings
-            snapshot={snapshot}
-            dispatch={dispatch}
-            connected={connected}
-            mode={tab === "team" ? "team" : "environment"}
-            onOpenModels={openModels}
-          />
-        </div>
-      ) : tab !== "models" ? (
-        <div className="section-empty">
-          <FolderOpen size={30} strokeWidth={1.3} />
-          <h3>桌面连接后读取本机环境</h3>
-          <p>浏览器布局预览无法发现本机规则与路径。</p>
-        </div>
-      ) : null}
     </div>
   );
 }

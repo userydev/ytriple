@@ -1,0 +1,168 @@
+.routines-panel {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 24px;
+}
+.routines-panel > header h2 {
+  margin: 0 0 8px;
+  font-size: 24px;
+}
+.routines-panel > header p,
+.routine-card p {
+  margin: 8px 0;
+  line-height: 1.6;
+}
+.routine-note {
+  color: var(--muted, #6c706d);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.routine-new,
+.routine-card {
+  border: 1px solid var(--border, #dce1da);
+  border-radius: 12px;
+  padding: 18px;
+  margin-top: 16px;
+  background: var(--panel, #fff);
+}
+.routine-card > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+.routine-card h3 {
+  font-size: 16px;
+  margin: 0 0 5px;
+}
+.routine-origin {
+  padding: 0;
+  background: none;
+  border: 0;
+  color: var(--muted, #6c706d);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.routine-state {
+  font-size: 11px;
+  border-radius: 16px;
+  padding: 4px 9px;
+  white-space: nowrap;
+  background: #eef3ec;
+  color: #49613e;
+}
+.routine-state.is-failed,
+.routine-state.is-waiting {
+  background: #fff1d8;
+  color: #806028;
+}
+.routine-state.is-paused,
+.routine-state.is-stopped {
+  background: #f0f0ee;
+  color: #767975;
+}
+.routine-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.routine-actions button,
+.routine-form > button {
+  padding: 7px 12px;
+  border: 1px solid var(--border, #dce1da);
+  border-radius: 7px;
+  background: var(--panel, #fff);
+  cursor: pointer;
+  font-size: 12px;
+}
+.routine-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.routine-form {
+  display: grid;
+  gap: 12px;
+  padding: 16px 0 4px;
+}
+.routine-form label,
+.routine-new > label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+}
+.routine-form input:not([type="checkbox"]),
+.routine-form select,
+.routine-form textarea,
+.routine-new select {
+  width: 100%;
+  border: 1px solid var(--border, #dce1da);
+  border-radius: 7px;
+  background: var(--panel, #fff);
+  padding: 9px;
+  font: inherit;
+  color: inherit;
+}
+.routine-form label.routine-check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}
+.routine-form details > label {
+  margin-top: 12px;
+}
+.routines-panel summary,
+.routine-form summary {
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 0;
+}
+.routine-attention,
+.routine-form [role="alert"],
+.routine-card > [role="alert"] {
+  background: #fff5e5;
+  padding: 10px 12px;
+  border-radius: 6px;
+  color: #74571f;
+  font-size: 12px;
+}
+.routine-history {
+  padding-left: 18px;
+  font-size: 12px;
+}
+.routine-history li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border, #dce1da);
+}
+.routine-history p {
+  white-space: pre-wrap;
+}
+.routine-history small {
+  color: var(--muted, #6c706d);
+}
+.routine-empty {
+  padding: 32px 0;
+  line-height: 1.8;
+  color: var(--muted, #6c706d);
+  font-size: 13px;
+}
+.task-routine-action {
+  position: relative;
+}
+.task-routine-action > .routine-form {
+  padding: 14px;
+  border: 1px solid var(--border, #dce1da);
+  border-radius: 10px;
+  min-width: 280px;
+}
+@media (max-width: 600px) {
+  .routines-panel {
+    padding: 14px;
+  }
+  .routine-card {
+    padding: 14px;
+  }
+}

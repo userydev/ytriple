@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -15,20 +16,18 @@ import {
   ArrowRight,
   Check,
   ChevronDown,
-  Download,
   FileText,
   FolderOpen,
   History,
   Image,
   Pencil,
-  PanelLeftClose,
-  PanelLeftOpen,
   Plus,
   Presentation,
   Save,
   X,
 } from "lucide-react";
-import type { Artifact, Source, Task } from "../shared/types";
+import type { Artifact, Source, Task, Snapshot } from "../shared/types";
+import { ArtifactDeliveryPanel } from "./Deliveries";
 import { formatDate, formatTime, Markdown, type Dispatch } from "./common";
 import { discardTaskDocumentDrafts, useDocumentDraft } from "./drafts";
 import { LIBRARY_ASSESSMENT_LABELS } from "../shared/library";
@@ -68,7 +67,9 @@ export function SourceList({
   onAdd?: () => void;
   onLibrary?: (entryId: string) => void;
 }) {
-  const [expanded, setExpanded] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(
+    () => sources[0]?.id ?? null,
+  );
   if (!sources.length)
     return (
       <div className="panel-empty">
@@ -91,7 +92,7 @@ export function SourceList({
     );
   return (
     <div className="source-list">
-      {sources.map((source, index) => (
+      {sources.map((source) => (
         <article
           className={`source-item ${source.library?.supersededAt ? "library-historical" : ""}`}
           key={source.id}
@@ -103,57 +104,54 @@ export function SourceList({
             }
             aria-expanded={expanded === source.id}
           >
-            <span className="source-number">
-              {String(index + 1).padStart(2, "0")}
-            </span>
             <span>{source.title}</span>
             <ChevronDown
               size={14}
               className={expanded === source.id ? "rotated" : ""}
             />
           </button>
-          <div className="source-meta">
-            <span>
-              {source.type === "url"
-                ? "网页"
-                : source.type === "file"
-                  ? "本地文件"
-                  : "文本"}
-            </span>
-            <span>{formatDate(source.addedAt)}</span>
-          </div>
-          <p className="coverage">
-            {source.library
-              ? "来自本地 Lib 的正文快照，保留原成果与版本关联。"
-              : source.coverage || "内容范围待核实"}
-          </p>
-          {source.library ? (
-            <div className="source-library-context">
-              <strong>
-                {source.library.supersededAt
-                  ? "历史 Lib 快照 · 本轮不再使用"
-                  : source.library.selection === "recalled"
-                    ? "为当前问题找到的 Lib"
-                    : "选入的 Lib"}{" "}
-                · v{source.library.version}
-              </strong>
-              <p>
-                {LIBRARY_ASSESSMENT_LABELS[source.library.assessment]} ·{" "}
-                {source.library.feedbackRevision} 条反馈
-              </p>
-              <p>{source.library.reason}</p>
-              {onLibrary ? (
-                <button
-                  className="text-button"
-                  onClick={() => onLibrary(source.library!.entryId)}
-                >
-                  查看资产与记录反馈 <ArrowUpRight size={13} />
-                </button>
-              ) : null}
-            </div>
-          ) : null}
           {expanded === source.id ? (
             <div className="source-expanded">
+              <div className="source-meta">
+                <span>
+                  {source.type === "url"
+                    ? "网页"
+                    : source.type === "file"
+                      ? "本地文件"
+                      : "文本"}
+                </span>
+                <span>{formatDate(source.addedAt)}</span>
+              </div>
+              <p className="coverage">
+                {source.library
+                  ? "来自本地资产 的正文快照，保留原成果与版本关联。"
+                  : source.coverage || "内容范围待核实"}
+              </p>
+              {source.library ? (
+                <div className="source-library-context">
+                  <strong>
+                    {source.library.supersededAt
+                      ? "历史资产快照 · 本轮不再使用"
+                      : source.library.selection === "recalled"
+                        ? "为当前问题找到的资产"
+                        : "选入的资产"}{" "}
+                    · v{source.library.version}
+                  </strong>
+                  <p>
+                    {LIBRARY_ASSESSMENT_LABELS[source.library.assessment]} ·{" "}
+                    {source.library.feedbackRevision} 条反馈
+                  </p>
+                  <p>{source.library.reason}</p>
+                  {onLibrary ? (
+                    <button
+                      className="text-button"
+                      onClick={() => onLibrary(source.library!.entryId)}
+                    >
+                      查看资产与记录反馈 <ArrowUpRight size={13} />
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
               {source.library ? (
                 <details>
                   <summary>来源与版本记录</summary>
@@ -248,11 +246,13 @@ export function ArtifactView({
   task,
   dispatch,
   compact = false,
+  delivery,
 }: {
   artifact: Artifact;
   task: Task;
   dispatch: Dispatch;
   compact?: boolean;
+  delivery?: ReactNode;
 }) {
   const {
     draft: editState,
@@ -387,14 +387,6 @@ export function ArtifactView({
   };
   return (
     <div className={`artifact-view ${compact ? "compact" : ""}`}>
-      <div className="artifact-heading">
-        <div>
-          <span className="eyebrow">
-            {artifact.format.toUpperCase()} · 版本 {artifact.version}
-          </span>
-          <h3>{artifact.title}</h3>
-        </div>
-      </div>
       <div className="artifact-actions grouped-artifact-actions">
         <div
           className="artifact-edit-actions"
@@ -467,35 +459,32 @@ export function ArtifactView({
           role="group"
           aria-label="导出与管理"
         >
-          {!editing &&
-          (artifact.format === "md" || artifact.format === "html") ? (
-            <ArtifactActionMenu
-              label={exporting ? "导出中…" : "导出"}
-              accessibleLabel="导出成果"
-              icon={<Download size={14} />}
-            >
-              <span className="action-menu-label">生成其他格式</span>
-              <button
-                disabled={exporting !== null || Boolean(artifact.readError)}
-                onClick={() => void exportArtifact("pptx")}
-              >
-                <Presentation size={14} />
-                演示文稿 · PPTX
-              </button>
-              <button
-                disabled={exporting !== null || Boolean(artifact.readError)}
-                onClick={() => void exportArtifact("png")}
-              >
-                <Image size={14} />
-                信息图 · PNG
-              </button>
-            </ArtifactActionMenu>
-          ) : null}
+          {delivery}
           <ArtifactActionMenu
-            label="管理"
-            accessibleLabel="管理成果"
+            label={exporting ? "导出中…" : "更多"}
+            accessibleLabel="更多成果操作"
             icon={<Archive size={14} />}
           >
+            {!editing &&
+            (artifact.format === "md" || artifact.format === "html") ? (
+              <>
+                <span className="action-menu-label">导出</span>
+                <button
+                  disabled={exporting !== null || Boolean(artifact.readError)}
+                  onClick={() => void exportArtifact("pptx")}
+                >
+                  <Presentation size={14} />
+                  演示文稿 · PPTX
+                </button>
+                <button
+                  disabled={exporting !== null || Boolean(artifact.readError)}
+                  onClick={() => void exportArtifact("png")}
+                >
+                  <Image size={14} />
+                  信息图 · PNG
+                </button>
+              </>
+            ) : null}
             {!editing ? (
               <>
                 <span className="action-menu-label">本地资产</span>
@@ -507,8 +496,8 @@ export function ArtifactView({
                   {collecting
                     ? "收藏中…"
                     : collectedHash === artifact.hash
-                      ? "已收藏到 Lib"
-                      : "收藏到 Lib"}
+                      ? "已收藏为资产"
+                      : "收藏为资产"}
                 </button>
               </>
             ) : null}
@@ -534,6 +523,17 @@ export function ArtifactView({
             </button>
           </ArtifactActionMenu>
         </div>
+      </div>
+      <div className="artifact-document-heading" title={artifact.title}>
+        <span className="work-content-muted">
+          v{artifact.version} · {artifact.format.toUpperCase()}
+        </span>
+        {artifact.format !== "md" ||
+        !/^#\s+\S/m.test(artifact.content ?? "") ? (
+          <h3>{artifact.title}</h3>
+        ) : (
+          <span className="sr-only">{artifact.title}</span>
+        )}
       </div>
       {refining && !editing ? (
         <form
@@ -679,6 +679,8 @@ export function ArtifactView({
 export function ArtifactList({
   task,
   dispatch,
+  snapshot,
+  onTask,
   compact = false,
   preferredArtifactId,
   detail,
@@ -687,6 +689,8 @@ export function ArtifactList({
 }: {
   task: Task;
   dispatch: Dispatch;
+  snapshot?: Snapshot;
+  onTask?: (id: string) => void;
   compact?: boolean;
   preferredArtifactId?: string;
   detail?: { id: string; title: string; content: string };
@@ -694,21 +698,32 @@ export function ArtifactList({
   onSaveDetail?: () => void | Promise<void>;
 }) {
   const [selected, setSelected] = useState<string | null>(null);
-  const [catalog, setCatalog] = useState(true);
-  const [query, setQuery] = useState("");
   const [savingDetail, setSavingDetail] = useState(false);
   const [visited, setVisited] = useState<Set<string>>(() => new Set());
+  const reader = useRef<HTMLDivElement>(null);
+  const positions = useRef(new Map<string, number>());
   useEffect(() => {
     if (preferredArtifactId) setSelected(preferredArtifactId);
   }, [preferredArtifactId]);
   const artifact =
     task.artifacts.find((item) => item.id === selected) ??
     task.artifacts.at(-1);
+  const readingKey = detail ? `detail:${detail.id}` : artifact?.id;
+  useLayoutEffect(() => {
+    if (reader.current && readingKey)
+      reader.current.scrollTop = positions.current.get(readingKey) ?? 0;
+  }, [readingKey]);
   useEffect(() => {
-    if (artifact)
+    if (artifact) {
+      setSelected((current) =>
+        task.artifacts.some((item) => item.id === current)
+          ? current
+          : artifact.id,
+      );
       setVisited((current) =>
         current.has(artifact.id) ? current : new Set([...current, artifact.id]),
       );
+    }
   }, [artifact?.id]);
   if (!artifact && !detail)
     return (
@@ -725,16 +740,6 @@ export function ArtifactList({
         <span className="empty-footnote">从一项真实工作开始</span>
       </div>
     );
-  const visible = task.artifacts.filter((item) =>
-    `${item.title} ${item.format}`
-      .toLowerCase()
-      .includes(query.trim().toLowerCase()),
-  );
-  const groups = [
-    { key: "documents", label: "文档", formats: ["md", "html"] },
-    { key: "images", label: "图片", formats: ["png"] },
-    { key: "slides", label: "演示文稿", formats: ["pptx"] },
-  ];
   const choose = (id: string) => {
     setSelected(id);
     onCloseDetail?.();
@@ -749,147 +754,98 @@ export function ArtifactList({
     }
   };
   return (
-    <section className="artifact-workspace" aria-label="成果目录与查看器">
-      <div className="artifact-library-toolbar">
-        <button
-          className="text-button"
-          aria-label={catalog ? "收起成果目录" : "展开成果目录"}
-          aria-expanded={catalog}
-          onClick={() => setCatalog(!catalog)}
-        >
-          {catalog ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
-          成果目录 <span>{task.artifacts.length}</span>
-        </button>
-        <span>
-          {detail
-            ? "对话详情"
-            : `${artifact?.format.toUpperCase()} · v${artifact?.version}`}
-        </span>
-      </div>
-      <div
-        className={`artifact-library-layout ${catalog ? "catalog-open" : ""}`}
-      >
-        {catalog ? (
-          <aside className="artifact-catalog" aria-label="成果目录">
-            <label className="artifact-catalog-search">
-              <span className="sr-only">搜索成果</span>
-              <input
-                placeholder="查找成果…"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </label>
-            {detail ? (
-              <div className="artifact-catalog-detail">
-                <span>对话详情</span>
-                <button
-                  className="artifact-catalog-item selected"
-                  aria-current="page"
-                >
-                  <FileText size={13} />
-                  <span>
-                    <strong>{detail.title}</strong>
-                    <small>尚未保存为文档</small>
-                  </span>
-                </button>
-              </div>
-            ) : null}
-            {groups.map((group) => {
-              const entries = visible.filter((item) =>
-                group.formats.includes(item.format),
-              );
-              return entries.length ? (
-                <details
-                  className="artifact-catalog-group"
-                  open
-                  key={group.key}
-                >
-                  <summary>
-                    {group.label}
-                    <span>{entries.length}</span>
-                  </summary>
-                  {entries.toReversed().map((item) => (
-                    <button
-                      key={item.id}
-                      className={`artifact-catalog-item ${!detail && artifact?.id === item.id ? "selected" : ""}`}
-                      aria-current={
-                        !detail && artifact?.id === item.id ? "page" : undefined
-                      }
-                      onClick={() => choose(item.id)}
-                      title={item.title}
-                    >
-                      <FileText size={13} />
-                      <span>
-                        <strong>{item.title}</strong>
-                        <small>
-                          v{item.version} · {formatDate(item.updatedAt)}
-                          {item.goalVersion !== task.goalVersion
-                            ? ` · 旧目标 v${item.goalVersion}`
-                            : ""}
-                        </small>
-                      </span>
-                    </button>
-                  ))}
-                </details>
-              ) : null;
-            })}
-            {!visible.length && task.artifacts.length ? (
-              <p className="analysis-empty">没有匹配的成果</p>
-            ) : null}
-          </aside>
-        ) : null}
-        <div className="artifact-reader">
-          {detail ? (
-            <div
-              className="artifact-view conversation-detail"
-              aria-label="对话完整内容"
+    <section className="artifact-workspace" aria-label="成果阅读与编辑">
+      {task.artifacts.length > 1 ? (
+        <div className="artifact-choice-row">
+          <label>
+            <span className="sr-only">选择成果</span>
+            <select
+              aria-label="选择成果"
+              value={artifact?.id ?? ""}
+              onChange={(event) => choose(event.target.value)}
             >
-              <div className="artifact-heading">
-                <div>
-                  <span className="eyebrow">对话详情</span>
-                  <h3>{detail.title}</h3>
-                </div>
-              </div>
-              <div className="artifact-actions">
-                <button
-                  className="button secondary small"
-                  disabled={savingDetail || !onSaveDetail}
-                  onClick={() => void saveDetail()}
-                >
-                  <Save size={13} />
-                  {savingDetail ? "保存中…" : "保存为文档"}
-                </button>
-                <button className="text-button" onClick={onCloseDetail}>
-                  <X size={13} />
-                  关闭详情
-                </button>
-              </div>
-              <Markdown
-                dispatch={dispatch}
-                onArtifactLink={(id) => {
-                  if (task.artifacts.some((item) => item.id === id)) choose(id);
-                }}
-              >
-                {detail.content}
-              </Markdown>
-            </div>
-          ) : null}
-          {task.artifacts
-            .filter((item) => item.id === artifact?.id || visited.has(item.id))
-            .map((item) => (
-              <div
-                hidden={Boolean(detail) || item.id !== artifact?.id}
-                key={item.id}
-              >
-                <ArtifactView
-                  artifact={item}
-                  task={task}
-                  dispatch={dispatch}
-                  compact={compact}
-                />
-              </div>
-            ))}
+              {task.artifacts.toReversed().map((item) => (
+                <option value={item.id} key={item.id}>
+                  {item.title} · v{item.version}
+                  {item.goalVersion !== task.goalVersion
+                    ? ` · 旧目标 v${item.goalVersion}`
+                    : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span>{task.artifacts.length} 份成果</span>
         </div>
+      ) : null}
+      <div
+        className="artifact-reader"
+        ref={reader}
+        onScroll={(event) => {
+          if (readingKey)
+            positions.current.set(readingKey, event.currentTarget.scrollTop);
+        }}
+      >
+        {detail ? (
+          <div
+            className="artifact-view conversation-detail"
+            aria-label="对话完整内容"
+          >
+            <div className="artifact-heading">
+              <div>
+                <span className="eyebrow">对话详情</span>
+                <h3>{detail.title}</h3>
+              </div>
+            </div>
+            <div className="artifact-actions">
+              <button
+                className="button secondary small"
+                disabled={savingDetail || !onSaveDetail}
+                onClick={() => void saveDetail()}
+              >
+                <Save size={13} />
+                {savingDetail ? "保存中…" : "保存为文档"}
+              </button>
+              <button className="text-button" onClick={onCloseDetail}>
+                <X size={13} />
+                关闭详情
+              </button>
+            </div>
+            <Markdown
+              dispatch={dispatch}
+              onArtifactLink={(id) => {
+                if (task.artifacts.some((item) => item.id === id)) choose(id);
+              }}
+            >
+              {detail.content}
+            </Markdown>
+          </div>
+        ) : null}
+        {task.artifacts
+          .filter((item) => item.id === artifact?.id || visited.has(item.id))
+          .map((item) => (
+            <div
+              hidden={Boolean(detail) || item.id !== artifact?.id}
+              key={item.id}
+            >
+              <ArtifactView
+                artifact={item}
+                task={task}
+                dispatch={dispatch}
+                compact={compact}
+                delivery={
+                  snapshot ? (
+                    <ArtifactDeliveryPanel
+                      task={task}
+                      artifact={item}
+                      snapshot={snapshot}
+                      dispatch={dispatch}
+                      onTask={onTask}
+                    />
+                  ) : undefined
+                }
+              />
+            </div>
+          ))}
       </div>
     </section>
   );

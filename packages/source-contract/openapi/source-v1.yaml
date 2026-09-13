@@ -622,6 +622,129 @@
                 },
             },
         },
+      "/v1/editorial":
+        {
+          "get":
+            {
+              "operationId": "getEditorial",
+              "summary": "List focused issues and their latest interpretations",
+              "security": [{ "DeviceToken": [] }],
+              "responses":
+                {
+                  "200":
+                    {
+                      "description": "Success",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/EditorialResponse",
+                                },
+                            },
+                        },
+                    },
+                  "401": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+        },
+      "/v1/editorial/{issueId}/revisions/{revisionId}":
+        {
+          "get":
+            {
+              "operationId": "getEditorialRevision",
+              "summary": "Read an immutable interpretation with its evidence",
+              "security": [{ "DeviceToken": [] }],
+              "parameters":
+                [
+                  {
+                    "name": "issueId",
+                    "in": "path",
+                    "required": true,
+                    "schema": { "$ref": "#/components/schemas/Uuid" },
+                  },
+                  {
+                    "name": "revisionId",
+                    "in": "path",
+                    "required": true,
+                    "schema": { "$ref": "#/components/schemas/Uuid" },
+                  },
+                ],
+              "responses":
+                {
+                  "200":
+                    {
+                      "description": "Success",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/EditorialRevisionResponse",
+                                },
+                            },
+                        },
+                    },
+                  "404": { "$ref": "#/components/responses/ErrorResponse" },
+                },
+            },
+        },
+      "/v1/editorial/{issueId}/corrections":
+        {
+          "post":
+            {
+              "operationId": "correctEditorial",
+              "summary": "Submit a correction for evidence-based review",
+              "security": [{ "DeviceToken": [] }],
+              "parameters":
+                [
+                  {
+                    "name": "issueId",
+                    "in": "path",
+                    "required": true,
+                    "schema": { "$ref": "#/components/schemas/Uuid" },
+                  },
+                  { "$ref": "#/components/parameters/IdempotencyKey" },
+                ],
+              "requestBody":
+                {
+                  "required": true,
+                  "content":
+                    {
+                      "application/json":
+                        {
+                          "schema":
+                            {
+                              "$ref": "#/components/schemas/EditorialCorrectionRequest",
+                            },
+                        },
+                    },
+                },
+              "responses":
+                {
+                  "201":
+                    {
+                      "description": "Success",
+                      "content":
+                        {
+                          "application/json":
+                            {
+                              "schema":
+                                {
+                                  "$ref": "#/components/schemas/EditorialCorrectionResponse",
+                                },
+                            },
+                        },
+                    },
+                  "409":
+                    {
+                      "description": "The interpretation changed, or the idempotency key was reused with different input.",
+                    },
+                },
+            },
+        },
     },
   "components":
     {
@@ -868,6 +991,7 @@
                       "type": "boolean",
                       "description": "Server-generated reading topics with immutable source evidence are available.",
                     },
+                  "editorial": { "type": "boolean" },
                 },
             },
           "CapabilitiesResponse":
@@ -1653,6 +1777,2224 @@
                     },
                 },
               "required": ["meta", "topics"],
+            },
+          "EditorialResponse":
+            {
+              "type": "object",
+              "properties":
+                {
+                  "meta":
+                    {
+                      "type": "object",
+                      "properties":
+                        {
+                          "protocolVersion":
+                            { "type": "string", "const": "1.0" },
+                          "serverInstanceId":
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                            },
+                        },
+                      "required": ["protocolVersion", "serverInstanceId"],
+                    },
+                  "issues":
+                    {
+                      "maxItems": 24,
+                      "type": "array",
+                      "items":
+                        {
+                          "type": "object",
+                          "properties":
+                            {
+                              "id":
+                                {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                                },
+                              "focus":
+                                {
+                                  "type": "string",
+                                  "enum": ["科技", "AI", "金融", "股票"],
+                                },
+                              "createdAt":
+                                {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                },
+                              "updatedAt":
+                                {
+                                  "type": "string",
+                                  "format": "date-time",
+                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                },
+                              "latest":
+                                {
+                                  "type": "object",
+                                  "properties":
+                                    {
+                                      "title":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 160,
+                                        },
+                                      "question":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 240,
+                                        },
+                                      "takeaway":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 1200,
+                                        },
+                                      "relationship":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 900,
+                                        },
+                                      "sections":
+                                        {
+                                          "minItems": 2,
+                                          "maxItems": 7,
+                                          "type": "array",
+                                          "items":
+                                            {
+                                              "type": "object",
+                                              "properties":
+                                                {
+                                                  "heading":
+                                                    {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 120,
+                                                    },
+                                                  "body":
+                                                    {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 2200,
+                                                    },
+                                                  "kind":
+                                                    {
+                                                      "type": "string",
+                                                      "enum":
+                                                        ["fact", "analysis"],
+                                                    },
+                                                  "sourceIds":
+                                                    {
+                                                      "minItems": 1,
+                                                      "maxItems": 12,
+                                                      "type": "array",
+                                                      "items":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 200,
+                                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                                                        },
+                                                    },
+                                                },
+                                              "required":
+                                                [
+                                                  "heading",
+                                                  "body",
+                                                  "kind",
+                                                  "sourceIds",
+                                                ],
+                                            },
+                                        },
+                                      "uncertainties":
+                                        {
+                                          "minItems": 1,
+                                          "maxItems": 5,
+                                          "type": "array",
+                                          "items":
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 700,
+                                            },
+                                        },
+                                      "watchFor":
+                                        {
+                                          "minItems": 1,
+                                          "maxItems": 5,
+                                          "type": "array",
+                                          "items":
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 700,
+                                            },
+                                        },
+                                      "sourceAppraisals":
+                                        {
+                                          "minItems": 1,
+                                          "maxItems": 12,
+                                          "type": "array",
+                                          "items":
+                                            {
+                                              "type": "object",
+                                              "properties":
+                                                {
+                                                  "itemId":
+                                                    {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200,
+                                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                                                    },
+                                                  "role":
+                                                    {
+                                                      "type": "string",
+                                                      "enum":
+                                                        [
+                                                          "primary",
+                                                          "report",
+                                                          "analysis",
+                                                          "unknown",
+                                                        ],
+                                                    },
+                                                  "sharedOriginWith":
+                                                    {
+                                                      "anyOf":
+                                                        [
+                                                          {
+                                                            "type": "string",
+                                                            "minLength": 1,
+                                                            "maxLength": 200,
+                                                            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                                                          },
+                                                          { "type": "null" },
+                                                        ],
+                                                    },
+                                                  "note":
+                                                    {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 600,
+                                                    },
+                                                },
+                                              "required":
+                                                [
+                                                  "itemId",
+                                                  "role",
+                                                  "sharedOriginWith",
+                                                  "note",
+                                                ],
+                                            },
+                                        },
+                                      "id":
+                                        {
+                                          "type": "string",
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                                        },
+                                      "issueId":
+                                        {
+                                          "type": "string",
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                                        },
+                                      "version":
+                                        {
+                                          "type": "integer",
+                                          "exclusiveMinimum": 0,
+                                          "maximum": 9007199254740991,
+                                        },
+                                      "createdAt":
+                                        {
+                                          "type": "string",
+                                          "format": "date-time",
+                                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                        },
+                                      "changeKind":
+                                        {
+                                          "type": "string",
+                                          "enum":
+                                            ["new", "update", "correction"],
+                                        },
+                                      "changeSummary":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 1000,
+                                        },
+                                      "model":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 120,
+                                        },
+                                      "evidence":
+                                        {
+                                          "minItems": 1,
+                                          "maxItems": 12,
+                                          "type": "array",
+                                          "items":
+                                            {
+                                              "type": "object",
+                                              "properties":
+                                                {
+                                                  "itemId":
+                                                    {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200,
+                                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                                                    },
+                                                  "revisionId":
+                                                    {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200,
+                                                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                                                    },
+                                                  "contentHash":
+                                                    {
+                                                      "type": "string",
+                                                      "pattern": "^[a-f0-9]{64}$",
+                                                    },
+                                                  "title":
+                                                    {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 500,
+                                                    },
+                                                  "url":
+                                                    {
+                                                      "type": "string",
+                                                      "maxLength": 4096,
+                                                      "format": "uri",
+                                                    },
+                                                  "sourceName":
+                                                    {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 200,
+                                                    },
+                                                  "origin":
+                                                    {
+                                                      "type": "string",
+                                                      "enum":
+                                                        [
+                                                          "user",
+                                                          "recommended",
+                                                          "server",
+                                                        ],
+                                                    },
+                                                  "coverage":
+                                                    {
+                                                      "type": "string",
+                                                      "enum":
+                                                        [
+                                                          "listing",
+                                                          "metadata",
+                                                          "fulltext",
+                                                          "transcript",
+                                                          "vision",
+                                                        ],
+                                                    },
+                                                  "missing":
+                                                    {
+                                                      "maxItems": 100,
+                                                      "type": "array",
+                                                      "items":
+                                                        {
+                                                          "type": "string",
+                                                          "maxLength": 200,
+                                                        },
+                                                    },
+                                                  "publishedAt":
+                                                    {
+                                                      "type": "string",
+                                                      "format": "date-time",
+                                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                                    },
+                                                  "observedAt":
+                                                    {
+                                                      "type": "string",
+                                                      "format": "date-time",
+                                                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                                    },
+                                                  "excerpt":
+                                                    {
+                                                      "type": "string",
+                                                      "minLength": 1,
+                                                      "maxLength": 8000,
+                                                    },
+                                                },
+                                              "required":
+                                                [
+                                                  "itemId",
+                                                  "revisionId",
+                                                  "contentHash",
+                                                  "title",
+                                                  "url",
+                                                  "sourceName",
+                                                  "origin",
+                                                  "coverage",
+                                                  "missing",
+                                                  "observedAt",
+                                                  "excerpt",
+                                                ],
+                                            },
+                                        },
+                                      "presentation":
+                                        {
+                                          "type": "object",
+                                          "properties":
+                                            {
+                                              "revisionId":
+                                                {
+                                                  "type": "string",
+                                                  "format": "uuid",
+                                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                                                },
+                                              "headline":
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 48,
+                                                },
+                                              "summary":
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 160,
+                                                },
+                                              "visual":
+                                                {
+                                                  "type": "object",
+                                                  "properties":
+                                                    {
+                                                      "kind":
+                                                        {
+                                                          "type": "string",
+                                                          "enum":
+                                                            [
+                                                              "comparison",
+                                                              "sequence",
+                                                              "factors",
+                                                              "none",
+                                                            ],
+                                                        },
+                                                      "title":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 44,
+                                                        },
+                                                      "items":
+                                                        {
+                                                          "maxItems": 4,
+                                                          "type": "array",
+                                                          "items":
+                                                            {
+                                                              "type": "object",
+                                                              "properties":
+                                                                {
+                                                                  "label":
+                                                                    {
+                                                                      "type": "string",
+                                                                      "minLength": 1,
+                                                                      "maxLength": 22,
+                                                                    },
+                                                                  "text":
+                                                                    {
+                                                                      "type": "string",
+                                                                      "minLength": 1,
+                                                                      "maxLength": 100,
+                                                                    },
+                                                                  "symbol":
+                                                                    {
+                                                                      "type": "string",
+                                                                      "enum":
+                                                                        [
+                                                                          "research",
+                                                                          "code",
+                                                                          "people",
+                                                                          "cost",
+                                                                          "energy",
+                                                                          "policy",
+                                                                          "product",
+                                                                          "check",
+                                                                          "change",
+                                                                          "data",
+                                                                        ],
+                                                                    },
+                                                                  "sectionIndex":
+                                                                    {
+                                                                      "type": "integer",
+                                                                      "minimum": 0,
+                                                                      "maximum": 6,
+                                                                    },
+                                                                  "quote":
+                                                                    {
+                                                                      "type": "string",
+                                                                      "minLength": 8,
+                                                                      "maxLength": 240,
+                                                                    },
+                                                                },
+                                                              "required":
+                                                                [
+                                                                  "label",
+                                                                  "text",
+                                                                  "symbol",
+                                                                  "sectionIndex",
+                                                                  "quote",
+                                                                ],
+                                                            },
+                                                        },
+                                                      "conclusion":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 120,
+                                                        },
+                                                    },
+                                                  "required":
+                                                    [
+                                                      "kind",
+                                                      "title",
+                                                      "items",
+                                                      "conclusion",
+                                                    ],
+                                                },
+                                              "boundary":
+                                                {
+                                                  "type": "object",
+                                                  "properties":
+                                                    {
+                                                      "text":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 120,
+                                                        },
+                                                      "quote":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 8,
+                                                          "maxLength": 240,
+                                                        },
+                                                    },
+                                                  "required": ["text", "quote"],
+                                                },
+                                              "watch":
+                                                {
+                                                  "type": "object",
+                                                  "properties":
+                                                    {
+                                                      "text":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 120,
+                                                        },
+                                                      "quote":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 8,
+                                                          "maxLength": 240,
+                                                        },
+                                                    },
+                                                  "required": ["text", "quote"],
+                                                },
+                                            },
+                                          "required":
+                                            [
+                                              "revisionId",
+                                              "headline",
+                                              "summary",
+                                              "visual",
+                                              "boundary",
+                                              "watch",
+                                            ],
+                                        },
+                                      "cover":
+                                        {
+                                          "type": "object",
+                                          "properties":
+                                            {
+                                              "data":
+                                                {
+                                                  "type": "string",
+                                                  "maxLength": 820000,
+                                                  "pattern": "^data:image\\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$",
+                                                },
+                                              "pageUrl":
+                                                {
+                                                  "type": "string",
+                                                  "maxLength": 4096,
+                                                  "format": "uri",
+                                                },
+                                              "imageUrl":
+                                                {
+                                                  "type": "string",
+                                                  "maxLength": 4096,
+                                                  "format": "uri",
+                                                },
+                                              "publisher":
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 120,
+                                                },
+                                              "description":
+                                                {
+                                                  "type": "string",
+                                                  "maxLength": 300,
+                                                },
+                                              "width":
+                                                {
+                                                  "type": "integer",
+                                                  "minimum": 320,
+                                                  "maximum": 4096,
+                                                },
+                                              "height":
+                                                {
+                                                  "type": "integer",
+                                                  "minimum": 180,
+                                                  "maximum": 4096,
+                                                },
+                                            },
+                                          "required":
+                                            [
+                                              "data",
+                                              "pageUrl",
+                                              "imageUrl",
+                                              "publisher",
+                                              "description",
+                                              "width",
+                                              "height",
+                                            ],
+                                        },
+                                    },
+                                  "required":
+                                    [
+                                      "title",
+                                      "question",
+                                      "takeaway",
+                                      "relationship",
+                                      "sections",
+                                      "uncertainties",
+                                      "watchFor",
+                                      "sourceAppraisals",
+                                      "id",
+                                      "issueId",
+                                      "version",
+                                      "createdAt",
+                                      "changeKind",
+                                      "changeSummary",
+                                      "model",
+                                      "evidence",
+                                    ],
+                                },
+                              "history":
+                                {
+                                  "maxItems": 30,
+                                  "type": "array",
+                                  "items":
+                                    {
+                                      "type": "object",
+                                      "properties":
+                                        {
+                                          "id":
+                                            {
+                                              "type": "string",
+                                              "format": "uuid",
+                                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                                            },
+                                          "issueId":
+                                            {
+                                              "type": "string",
+                                              "format": "uuid",
+                                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                                            },
+                                          "version":
+                                            {
+                                              "type": "integer",
+                                              "exclusiveMinimum": 0,
+                                              "maximum": 9007199254740991,
+                                            },
+                                          "createdAt":
+                                            {
+                                              "type": "string",
+                                              "format": "date-time",
+                                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                            },
+                                          "changeKind":
+                                            {
+                                              "type": "string",
+                                              "enum":
+                                                ["new", "update", "correction"],
+                                            },
+                                          "changeSummary":
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 1000,
+                                            },
+                                        },
+                                      "required":
+                                        [
+                                          "id",
+                                          "issueId",
+                                          "version",
+                                          "createdAt",
+                                          "changeKind",
+                                          "changeSummary",
+                                        ],
+                                    },
+                                },
+                              "corrections":
+                                {
+                                  "maxItems": 30,
+                                  "type": "array",
+                                  "items":
+                                    {
+                                      "type": "object",
+                                      "properties":
+                                        {
+                                          "revisionId":
+                                            {
+                                              "type": "string",
+                                              "format": "uuid",
+                                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                                            },
+                                          "text":
+                                            {
+                                              "type": "string",
+                                              "minLength": 3,
+                                              "maxLength": 3000,
+                                            },
+                                          "id":
+                                            {
+                                              "type": "string",
+                                              "format": "uuid",
+                                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                                            },
+                                          "issueId":
+                                            {
+                                              "type": "string",
+                                              "format": "uuid",
+                                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                                            },
+                                          "createdAt":
+                                            {
+                                              "type": "string",
+                                              "format": "date-time",
+                                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                            },
+                                          "status":
+                                            {
+                                              "type": "string",
+                                              "enum":
+                                                [
+                                                  "pending",
+                                                  "accepted",
+                                                  "unsupported",
+                                                  "needs_evidence",
+                                                ],
+                                            },
+                                          "response":
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 1200,
+                                            },
+                                          "reviewedAt":
+                                            {
+                                              "type": "string",
+                                              "format": "date-time",
+                                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                            },
+                                        },
+                                      "required":
+                                        [
+                                          "revisionId",
+                                          "text",
+                                          "id",
+                                          "issueId",
+                                          "createdAt",
+                                          "status",
+                                        ],
+                                    },
+                                },
+                            },
+                          "required":
+                            [
+                              "id",
+                              "focus",
+                              "createdAt",
+                              "updatedAt",
+                              "latest",
+                              "history",
+                              "corrections",
+                            ],
+                        },
+                    },
+                  "edition":
+                    {
+                      "type": "object",
+                      "properties":
+                        {
+                          "id":
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                            },
+                          "createdAt":
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            },
+                          "entries":
+                            {
+                              "maxItems": 5,
+                              "type": "array",
+                              "items":
+                                {
+                                  "type": "object",
+                                  "properties":
+                                    {
+                                      "issueId":
+                                        {
+                                          "type": "string",
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                                        },
+                                      "presentation":
+                                        {
+                                          "type": "object",
+                                          "properties":
+                                            {
+                                              "revisionId":
+                                                {
+                                                  "type": "string",
+                                                  "format": "uuid",
+                                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                                                },
+                                              "headline":
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 48,
+                                                },
+                                              "summary":
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 160,
+                                                },
+                                              "visual":
+                                                {
+                                                  "type": "object",
+                                                  "properties":
+                                                    {
+                                                      "kind":
+                                                        {
+                                                          "type": "string",
+                                                          "enum":
+                                                            [
+                                                              "comparison",
+                                                              "sequence",
+                                                              "factors",
+                                                              "none",
+                                                            ],
+                                                        },
+                                                      "title":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 44,
+                                                        },
+                                                      "items":
+                                                        {
+                                                          "maxItems": 4,
+                                                          "type": "array",
+                                                          "items":
+                                                            {
+                                                              "type": "object",
+                                                              "properties":
+                                                                {
+                                                                  "label":
+                                                                    {
+                                                                      "type": "string",
+                                                                      "minLength": 1,
+                                                                      "maxLength": 22,
+                                                                    },
+                                                                  "text":
+                                                                    {
+                                                                      "type": "string",
+                                                                      "minLength": 1,
+                                                                      "maxLength": 100,
+                                                                    },
+                                                                  "symbol":
+                                                                    {
+                                                                      "type": "string",
+                                                                      "enum":
+                                                                        [
+                                                                          "research",
+                                                                          "code",
+                                                                          "people",
+                                                                          "cost",
+                                                                          "energy",
+                                                                          "policy",
+                                                                          "product",
+                                                                          "check",
+                                                                          "change",
+                                                                          "data",
+                                                                        ],
+                                                                    },
+                                                                  "sectionIndex":
+                                                                    {
+                                                                      "type": "integer",
+                                                                      "minimum": 0,
+                                                                      "maximum": 6,
+                                                                    },
+                                                                  "quote":
+                                                                    {
+                                                                      "type": "string",
+                                                                      "minLength": 8,
+                                                                      "maxLength": 240,
+                                                                    },
+                                                                },
+                                                              "required":
+                                                                [
+                                                                  "label",
+                                                                  "text",
+                                                                  "symbol",
+                                                                  "sectionIndex",
+                                                                  "quote",
+                                                                ],
+                                                            },
+                                                        },
+                                                      "conclusion":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 120,
+                                                        },
+                                                    },
+                                                  "required":
+                                                    [
+                                                      "kind",
+                                                      "title",
+                                                      "items",
+                                                      "conclusion",
+                                                    ],
+                                                },
+                                              "boundary":
+                                                {
+                                                  "type": "object",
+                                                  "properties":
+                                                    {
+                                                      "text":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 120,
+                                                        },
+                                                      "quote":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 8,
+                                                          "maxLength": 240,
+                                                        },
+                                                    },
+                                                  "required": ["text", "quote"],
+                                                },
+                                              "watch":
+                                                {
+                                                  "type": "object",
+                                                  "properties":
+                                                    {
+                                                      "text":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 120,
+                                                        },
+                                                      "quote":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 8,
+                                                          "maxLength": 240,
+                                                        },
+                                                    },
+                                                  "required": ["text", "quote"],
+                                                },
+                                            },
+                                          "required":
+                                            [
+                                              "revisionId",
+                                              "headline",
+                                              "summary",
+                                              "visual",
+                                              "boundary",
+                                              "watch",
+                                            ],
+                                        },
+                                      "reason":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 240,
+                                        },
+                                      "cover":
+                                        {
+                                          "type": "object",
+                                          "properties":
+                                            {
+                                              "data":
+                                                {
+                                                  "type": "string",
+                                                  "maxLength": 820000,
+                                                  "pattern": "^data:image\\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$",
+                                                },
+                                              "pageUrl":
+                                                {
+                                                  "type": "string",
+                                                  "maxLength": 4096,
+                                                  "format": "uri",
+                                                },
+                                              "imageUrl":
+                                                {
+                                                  "type": "string",
+                                                  "maxLength": 4096,
+                                                  "format": "uri",
+                                                },
+                                              "publisher":
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 120,
+                                                },
+                                              "description":
+                                                {
+                                                  "type": "string",
+                                                  "maxLength": 300,
+                                                },
+                                              "width":
+                                                {
+                                                  "type": "integer",
+                                                  "minimum": 320,
+                                                  "maximum": 4096,
+                                                },
+                                              "height":
+                                                {
+                                                  "type": "integer",
+                                                  "minimum": 180,
+                                                  "maximum": 4096,
+                                                },
+                                            },
+                                          "required":
+                                            [
+                                              "data",
+                                              "pageUrl",
+                                              "imageUrl",
+                                              "publisher",
+                                              "description",
+                                              "width",
+                                              "height",
+                                            ],
+                                        },
+                                    },
+                                  "required":
+                                    ["issueId", "presentation", "reason"],
+                                },
+                            },
+                          "note":
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 400,
+                            },
+                        },
+                      "required": ["id", "createdAt", "entries", "note"],
+                    },
+                  "status":
+                    {
+                      "type": "object",
+                      "properties":
+                        {
+                          "state":
+                            {
+                              "type": "string",
+                              "enum": ["waiting", "ready", "retrying"],
+                            },
+                          "lastAttemptAt":
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            },
+                          "message": { "type": "string", "maxLength": 500 },
+                        },
+                      "required": ["state"],
+                    },
+                },
+              "required": ["meta", "issues", "status"],
+            },
+          "EditorialRevisionResponse":
+            {
+              "type": "object",
+              "properties":
+                {
+                  "meta":
+                    {
+                      "type": "object",
+                      "properties":
+                        {
+                          "protocolVersion":
+                            { "type": "string", "const": "1.0" },
+                          "serverInstanceId":
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                            },
+                        },
+                      "required": ["protocolVersion", "serverInstanceId"],
+                    },
+                  "revision":
+                    {
+                      "type": "object",
+                      "properties":
+                        {
+                          "title":
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 160,
+                            },
+                          "question":
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 240,
+                            },
+                          "takeaway":
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 1200,
+                            },
+                          "relationship":
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 900,
+                            },
+                          "sections":
+                            {
+                              "minItems": 2,
+                              "maxItems": 7,
+                              "type": "array",
+                              "items":
+                                {
+                                  "type": "object",
+                                  "properties":
+                                    {
+                                      "heading":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 120,
+                                        },
+                                      "body":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 2200,
+                                        },
+                                      "kind":
+                                        {
+                                          "type": "string",
+                                          "enum": ["fact", "analysis"],
+                                        },
+                                      "sourceIds":
+                                        {
+                                          "minItems": 1,
+                                          "maxItems": 12,
+                                          "type": "array",
+                                          "items":
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 200,
+                                              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                                            },
+                                        },
+                                    },
+                                  "required":
+                                    ["heading", "body", "kind", "sourceIds"],
+                                },
+                            },
+                          "uncertainties":
+                            {
+                              "minItems": 1,
+                              "maxItems": 5,
+                              "type": "array",
+                              "items":
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 700,
+                                },
+                            },
+                          "watchFor":
+                            {
+                              "minItems": 1,
+                              "maxItems": 5,
+                              "type": "array",
+                              "items":
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 700,
+                                },
+                            },
+                          "sourceAppraisals":
+                            {
+                              "minItems": 1,
+                              "maxItems": 12,
+                              "type": "array",
+                              "items":
+                                {
+                                  "type": "object",
+                                  "properties":
+                                    {
+                                      "itemId":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200,
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                                        },
+                                      "role":
+                                        {
+                                          "type": "string",
+                                          "enum":
+                                            [
+                                              "primary",
+                                              "report",
+                                              "analysis",
+                                              "unknown",
+                                            ],
+                                        },
+                                      "sharedOriginWith":
+                                        {
+                                          "anyOf":
+                                            [
+                                              {
+                                                "type": "string",
+                                                "minLength": 1,
+                                                "maxLength": 200,
+                                                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                                              },
+                                              { "type": "null" },
+                                            ],
+                                        },
+                                      "note":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 600,
+                                        },
+                                    },
+                                  "required":
+                                    [
+                                      "itemId",
+                                      "role",
+                                      "sharedOriginWith",
+                                      "note",
+                                    ],
+                                },
+                            },
+                          "id":
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                            },
+                          "issueId":
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                            },
+                          "version":
+                            {
+                              "type": "integer",
+                              "exclusiveMinimum": 0,
+                              "maximum": 9007199254740991,
+                            },
+                          "createdAt":
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            },
+                          "changeKind":
+                            {
+                              "type": "string",
+                              "enum": ["new", "update", "correction"],
+                            },
+                          "changeSummary":
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 1000,
+                            },
+                          "model":
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120,
+                            },
+                          "evidence":
+                            {
+                              "minItems": 1,
+                              "maxItems": 12,
+                              "type": "array",
+                              "items":
+                                {
+                                  "type": "object",
+                                  "properties":
+                                    {
+                                      "itemId":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200,
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                                        },
+                                      "revisionId":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200,
+                                          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+                                        },
+                                      "contentHash":
+                                        {
+                                          "type": "string",
+                                          "pattern": "^[a-f0-9]{64}$",
+                                        },
+                                      "title":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 500,
+                                        },
+                                      "url":
+                                        {
+                                          "type": "string",
+                                          "maxLength": 4096,
+                                          "format": "uri",
+                                        },
+                                      "sourceName":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 200,
+                                        },
+                                      "origin":
+                                        {
+                                          "type": "string",
+                                          "enum":
+                                            ["user", "recommended", "server"],
+                                        },
+                                      "coverage":
+                                        {
+                                          "type": "string",
+                                          "enum":
+                                            [
+                                              "listing",
+                                              "metadata",
+                                              "fulltext",
+                                              "transcript",
+                                              "vision",
+                                            ],
+                                        },
+                                      "missing":
+                                        {
+                                          "maxItems": 100,
+                                          "type": "array",
+                                          "items":
+                                            {
+                                              "type": "string",
+                                              "maxLength": 200,
+                                            },
+                                        },
+                                      "publishedAt":
+                                        {
+                                          "type": "string",
+                                          "format": "date-time",
+                                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                        },
+                                      "observedAt":
+                                        {
+                                          "type": "string",
+                                          "format": "date-time",
+                                          "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                        },
+                                      "excerpt":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 8000,
+                                        },
+                                    },
+                                  "required":
+                                    [
+                                      "itemId",
+                                      "revisionId",
+                                      "contentHash",
+                                      "title",
+                                      "url",
+                                      "sourceName",
+                                      "origin",
+                                      "coverage",
+                                      "missing",
+                                      "observedAt",
+                                      "excerpt",
+                                    ],
+                                },
+                            },
+                          "presentation":
+                            {
+                              "type": "object",
+                              "properties":
+                                {
+                                  "revisionId":
+                                    {
+                                      "type": "string",
+                                      "format": "uuid",
+                                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                                    },
+                                  "headline":
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 48,
+                                    },
+                                  "summary":
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 160,
+                                    },
+                                  "visual":
+                                    {
+                                      "type": "object",
+                                      "properties":
+                                        {
+                                          "kind":
+                                            {
+                                              "type": "string",
+                                              "enum":
+                                                [
+                                                  "comparison",
+                                                  "sequence",
+                                                  "factors",
+                                                  "none",
+                                                ],
+                                            },
+                                          "title":
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 44,
+                                            },
+                                          "items":
+                                            {
+                                              "maxItems": 4,
+                                              "type": "array",
+                                              "items":
+                                                {
+                                                  "type": "object",
+                                                  "properties":
+                                                    {
+                                                      "label":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 22,
+                                                        },
+                                                      "text":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 1,
+                                                          "maxLength": 100,
+                                                        },
+                                                      "symbol":
+                                                        {
+                                                          "type": "string",
+                                                          "enum":
+                                                            [
+                                                              "research",
+                                                              "code",
+                                                              "people",
+                                                              "cost",
+                                                              "energy",
+                                                              "policy",
+                                                              "product",
+                                                              "check",
+                                                              "change",
+                                                              "data",
+                                                            ],
+                                                        },
+                                                      "sectionIndex":
+                                                        {
+                                                          "type": "integer",
+                                                          "minimum": 0,
+                                                          "maximum": 6,
+                                                        },
+                                                      "quote":
+                                                        {
+                                                          "type": "string",
+                                                          "minLength": 8,
+                                                          "maxLength": 240,
+                                                        },
+                                                    },
+                                                  "required":
+                                                    [
+                                                      "label",
+                                                      "text",
+                                                      "symbol",
+                                                      "sectionIndex",
+                                                      "quote",
+                                                    ],
+                                                },
+                                            },
+                                          "conclusion":
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120,
+                                            },
+                                        },
+                                      "required":
+                                        [
+                                          "kind",
+                                          "title",
+                                          "items",
+                                          "conclusion",
+                                        ],
+                                    },
+                                  "boundary":
+                                    {
+                                      "type": "object",
+                                      "properties":
+                                        {
+                                          "text":
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120,
+                                            },
+                                          "quote":
+                                            {
+                                              "type": "string",
+                                              "minLength": 8,
+                                              "maxLength": 240,
+                                            },
+                                        },
+                                      "required": ["text", "quote"],
+                                    },
+                                  "watch":
+                                    {
+                                      "type": "object",
+                                      "properties":
+                                        {
+                                          "text":
+                                            {
+                                              "type": "string",
+                                              "minLength": 1,
+                                              "maxLength": 120,
+                                            },
+                                          "quote":
+                                            {
+                                              "type": "string",
+                                              "minLength": 8,
+                                              "maxLength": 240,
+                                            },
+                                        },
+                                      "required": ["text", "quote"],
+                                    },
+                                },
+                              "required":
+                                [
+                                  "revisionId",
+                                  "headline",
+                                  "summary",
+                                  "visual",
+                                  "boundary",
+                                  "watch",
+                                ],
+                            },
+                          "cover":
+                            {
+                              "type": "object",
+                              "properties":
+                                {
+                                  "data":
+                                    {
+                                      "type": "string",
+                                      "maxLength": 820000,
+                                      "pattern": "^data:image\\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$",
+                                    },
+                                  "pageUrl":
+                                    {
+                                      "type": "string",
+                                      "maxLength": 4096,
+                                      "format": "uri",
+                                    },
+                                  "imageUrl":
+                                    {
+                                      "type": "string",
+                                      "maxLength": 4096,
+                                      "format": "uri",
+                                    },
+                                  "publisher":
+                                    {
+                                      "type": "string",
+                                      "minLength": 1,
+                                      "maxLength": 120,
+                                    },
+                                  "description":
+                                    { "type": "string", "maxLength": 300 },
+                                  "width":
+                                    {
+                                      "type": "integer",
+                                      "minimum": 320,
+                                      "maximum": 4096,
+                                    },
+                                  "height":
+                                    {
+                                      "type": "integer",
+                                      "minimum": 180,
+                                      "maximum": 4096,
+                                    },
+                                },
+                              "required":
+                                [
+                                  "data",
+                                  "pageUrl",
+                                  "imageUrl",
+                                  "publisher",
+                                  "description",
+                                  "width",
+                                  "height",
+                                ],
+                            },
+                        },
+                      "required":
+                        [
+                          "title",
+                          "question",
+                          "takeaway",
+                          "relationship",
+                          "sections",
+                          "uncertainties",
+                          "watchFor",
+                          "sourceAppraisals",
+                          "id",
+                          "issueId",
+                          "version",
+                          "createdAt",
+                          "changeKind",
+                          "changeSummary",
+                          "model",
+                          "evidence",
+                        ],
+                    },
+                },
+              "required": ["meta", "revision"],
+            },
+          "EditorialCorrectionRequest":
+            {
+              "type": "object",
+              "properties":
+                {
+                  "revisionId":
+                    {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                    },
+                  "text":
+                    { "type": "string", "minLength": 3, "maxLength": 3000 },
+                },
+              "required": ["revisionId", "text"],
+            },
+          "EditorialCorrectionResponse":
+            {
+              "type": "object",
+              "properties":
+                {
+                  "meta":
+                    {
+                      "type": "object",
+                      "properties":
+                        {
+                          "protocolVersion":
+                            { "type": "string", "const": "1.0" },
+                          "serverInstanceId":
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                            },
+                        },
+                      "required": ["protocolVersion", "serverInstanceId"],
+                    },
+                  "correction":
+                    {
+                      "type": "object",
+                      "properties":
+                        {
+                          "revisionId":
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                            },
+                          "text":
+                            {
+                              "type": "string",
+                              "minLength": 3,
+                              "maxLength": 3000,
+                            },
+                          "id":
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                            },
+                          "issueId":
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                            },
+                          "createdAt":
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            },
+                          "status":
+                            {
+                              "type": "string",
+                              "enum":
+                                [
+                                  "pending",
+                                  "accepted",
+                                  "unsupported",
+                                  "needs_evidence",
+                                ],
+                            },
+                          "response":
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 1200,
+                            },
+                          "reviewedAt":
+                            {
+                              "type": "string",
+                              "format": "date-time",
+                              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            },
+                        },
+                      "required":
+                        [
+                          "revisionId",
+                          "text",
+                          "id",
+                          "issueId",
+                          "createdAt",
+                          "status",
+                        ],
+                    },
+                },
+              "required": ["meta", "correction"],
+            },
+          "EditorialPresentation":
+            {
+              "type": "object",
+              "properties":
+                {
+                  "revisionId":
+                    {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                    },
+                  "headline":
+                    { "type": "string", "minLength": 1, "maxLength": 48 },
+                  "summary":
+                    { "type": "string", "minLength": 1, "maxLength": 160 },
+                  "visual":
+                    {
+                      "type": "object",
+                      "properties":
+                        {
+                          "kind":
+                            {
+                              "type": "string",
+                              "enum":
+                                ["comparison", "sequence", "factors", "none"],
+                            },
+                          "title":
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 44,
+                            },
+                          "items":
+                            {
+                              "maxItems": 4,
+                              "type": "array",
+                              "items":
+                                {
+                                  "type": "object",
+                                  "properties":
+                                    {
+                                      "label":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 22,
+                                        },
+                                      "text":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 100,
+                                        },
+                                      "symbol":
+                                        {
+                                          "type": "string",
+                                          "enum":
+                                            [
+                                              "research",
+                                              "code",
+                                              "people",
+                                              "cost",
+                                              "energy",
+                                              "policy",
+                                              "product",
+                                              "check",
+                                              "change",
+                                              "data",
+                                            ],
+                                        },
+                                      "sectionIndex":
+                                        {
+                                          "type": "integer",
+                                          "minimum": 0,
+                                          "maximum": 6,
+                                        },
+                                      "quote":
+                                        {
+                                          "type": "string",
+                                          "minLength": 8,
+                                          "maxLength": 240,
+                                        },
+                                    },
+                                  "required":
+                                    [
+                                      "label",
+                                      "text",
+                                      "symbol",
+                                      "sectionIndex",
+                                      "quote",
+                                    ],
+                                },
+                            },
+                          "conclusion":
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120,
+                            },
+                        },
+                      "required": ["kind", "title", "items", "conclusion"],
+                    },
+                  "boundary":
+                    {
+                      "type": "object",
+                      "properties":
+                        {
+                          "text":
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120,
+                            },
+                          "quote":
+                            {
+                              "type": "string",
+                              "minLength": 8,
+                              "maxLength": 240,
+                            },
+                        },
+                      "required": ["text", "quote"],
+                    },
+                  "watch":
+                    {
+                      "type": "object",
+                      "properties":
+                        {
+                          "text":
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 120,
+                            },
+                          "quote":
+                            {
+                              "type": "string",
+                              "minLength": 8,
+                              "maxLength": 240,
+                            },
+                        },
+                      "required": ["text", "quote"],
+                    },
+                },
+              "required":
+                [
+                  "revisionId",
+                  "headline",
+                  "summary",
+                  "visual",
+                  "boundary",
+                  "watch",
+                ],
+            },
+          "EditorialEdition":
+            {
+              "type": "object",
+              "properties":
+                {
+                  "id":
+                    {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                    },
+                  "createdAt":
+                    {
+                      "type": "string",
+                      "format": "date-time",
+                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    },
+                  "entries":
+                    {
+                      "maxItems": 5,
+                      "type": "array",
+                      "items":
+                        {
+                          "type": "object",
+                          "properties":
+                            {
+                              "issueId":
+                                {
+                                  "type": "string",
+                                  "format": "uuid",
+                                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                                },
+                              "presentation":
+                                {
+                                  "type": "object",
+                                  "properties":
+                                    {
+                                      "revisionId":
+                                        {
+                                          "type": "string",
+                                          "format": "uuid",
+                                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                                        },
+                                      "headline":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 48,
+                                        },
+                                      "summary":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 160,
+                                        },
+                                      "visual":
+                                        {
+                                          "type": "object",
+                                          "properties":
+                                            {
+                                              "kind":
+                                                {
+                                                  "type": "string",
+                                                  "enum":
+                                                    [
+                                                      "comparison",
+                                                      "sequence",
+                                                      "factors",
+                                                      "none",
+                                                    ],
+                                                },
+                                              "title":
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 44,
+                                                },
+                                              "items":
+                                                {
+                                                  "maxItems": 4,
+                                                  "type": "array",
+                                                  "items":
+                                                    {
+                                                      "type": "object",
+                                                      "properties":
+                                                        {
+                                                          "label":
+                                                            {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 22,
+                                                            },
+                                                          "text":
+                                                            {
+                                                              "type": "string",
+                                                              "minLength": 1,
+                                                              "maxLength": 100,
+                                                            },
+                                                          "symbol":
+                                                            {
+                                                              "type": "string",
+                                                              "enum":
+                                                                [
+                                                                  "research",
+                                                                  "code",
+                                                                  "people",
+                                                                  "cost",
+                                                                  "energy",
+                                                                  "policy",
+                                                                  "product",
+                                                                  "check",
+                                                                  "change",
+                                                                  "data",
+                                                                ],
+                                                            },
+                                                          "sectionIndex":
+                                                            {
+                                                              "type": "integer",
+                                                              "minimum": 0,
+                                                              "maximum": 6,
+                                                            },
+                                                          "quote":
+                                                            {
+                                                              "type": "string",
+                                                              "minLength": 8,
+                                                              "maxLength": 240,
+                                                            },
+                                                        },
+                                                      "required":
+                                                        [
+                                                          "label",
+                                                          "text",
+                                                          "symbol",
+                                                          "sectionIndex",
+                                                          "quote",
+                                                        ],
+                                                    },
+                                                },
+                                              "conclusion":
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 120,
+                                                },
+                                            },
+                                          "required":
+                                            [
+                                              "kind",
+                                              "title",
+                                              "items",
+                                              "conclusion",
+                                            ],
+                                        },
+                                      "boundary":
+                                        {
+                                          "type": "object",
+                                          "properties":
+                                            {
+                                              "text":
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 120,
+                                                },
+                                              "quote":
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 8,
+                                                  "maxLength": 240,
+                                                },
+                                            },
+                                          "required": ["text", "quote"],
+                                        },
+                                      "watch":
+                                        {
+                                          "type": "object",
+                                          "properties":
+                                            {
+                                              "text":
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 1,
+                                                  "maxLength": 120,
+                                                },
+                                              "quote":
+                                                {
+                                                  "type": "string",
+                                                  "minLength": 8,
+                                                  "maxLength": 240,
+                                                },
+                                            },
+                                          "required": ["text", "quote"],
+                                        },
+                                    },
+                                  "required":
+                                    [
+                                      "revisionId",
+                                      "headline",
+                                      "summary",
+                                      "visual",
+                                      "boundary",
+                                      "watch",
+                                    ],
+                                },
+                              "reason":
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 240,
+                                },
+                              "cover":
+                                {
+                                  "type": "object",
+                                  "properties":
+                                    {
+                                      "data":
+                                        {
+                                          "type": "string",
+                                          "maxLength": 820000,
+                                          "pattern": "^data:image\\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$",
+                                        },
+                                      "pageUrl":
+                                        {
+                                          "type": "string",
+                                          "maxLength": 4096,
+                                          "format": "uri",
+                                        },
+                                      "imageUrl":
+                                        {
+                                          "type": "string",
+                                          "maxLength": 4096,
+                                          "format": "uri",
+                                        },
+                                      "publisher":
+                                        {
+                                          "type": "string",
+                                          "minLength": 1,
+                                          "maxLength": 120,
+                                        },
+                                      "description":
+                                        { "type": "string", "maxLength": 300 },
+                                      "width":
+                                        {
+                                          "type": "integer",
+                                          "minimum": 320,
+                                          "maximum": 4096,
+                                        },
+                                      "height":
+                                        {
+                                          "type": "integer",
+                                          "minimum": 180,
+                                          "maximum": 4096,
+                                        },
+                                    },
+                                  "required":
+                                    [
+                                      "data",
+                                      "pageUrl",
+                                      "imageUrl",
+                                      "publisher",
+                                      "description",
+                                      "width",
+                                      "height",
+                                    ],
+                                },
+                            },
+                          "required": ["issueId", "presentation", "reason"],
+                        },
+                    },
+                  "note":
+                    { "type": "string", "minLength": 1, "maxLength": 400 },
+                },
+              "required": ["id", "createdAt", "entries", "note"],
+            },
+          "EditorialCover":
+            {
+              "type": "object",
+              "properties":
+                {
+                  "data":
+                    {
+                      "type": "string",
+                      "maxLength": 820000,
+                      "pattern": "^data:image\\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$",
+                    },
+                  "pageUrl":
+                    { "type": "string", "maxLength": 4096, "format": "uri" },
+                  "imageUrl":
+                    { "type": "string", "maxLength": 4096, "format": "uri" },
+                  "publisher":
+                    { "type": "string", "minLength": 1, "maxLength": 120 },
+                  "description": { "type": "string", "maxLength": 300 },
+                  "width":
+                    { "type": "integer", "minimum": 320, "maximum": 4096 },
+                  "height":
+                    { "type": "integer", "minimum": 180, "maximum": 4096 },
+                },
+              "required":
+                [
+                  "data",
+                  "pageUrl",
+                  "imageUrl",
+                  "publisher",
+                  "description",
+                  "width",
+                  "height",
+                ],
             },
         },
     },

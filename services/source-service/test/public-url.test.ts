@@ -10,6 +10,210 @@ import {
 
 const publicAddress = { address: "93.184.216.34", family: 4 as const };
 const publicLookup: PublicURLLookup = async () => [publicAddress];
+const fakeLookup: PublicURLLookup = async () => [
+  { address: "198.18.1.232", family: 4 },
+];
+const dnsResponse = (url: URL, address = publicAddress.address) => {
+  const type = Number(url.searchParams.get("type"));
+  const name = url.searchParams.get("name")!;
+  return {
+    status: 200,
+    headers: { "content-type": "application/dns-json" },
+    body: JSON.stringify({
+      Status: 0,
+      TC: false,
+      Question: [{ name, type }],
+      Answer: type === 1 ? [{ name, type, data: address }] : [],
+    }),
+  };
+};
+
+test("explicit desktop fake-DNS fallback uses a fixed TLS resolver and pins real public addresses for every redirect", async () => {
+  const calls: { host: string; address: string; type: string | null }[] = [];
+  const result = await fetchAndNormalizePublicURL(
+    "https://first.example/article",
+    {
+      lookup: fakeLookup,
+      syntheticDNSFallback: "cloudflare",
+      request: async (input) => {
+        calls.push({
+          host: input.url.hostname,
+          address: input.address,
+          type: input.url.searchParams.get("type"),
+        });
+        if (input.url.hostname === "cloudflare-dns.com") {
+          assert.equal(input.url.protocol, "https:");
+          assert.equal(input.url.pathname, "/dns-query");
+          assert.equal(input.address, "1.1.1.1");
+          assert.equal(input.family, 4);
+          assert.equal(input.headers.Accept, "application/dns-json");
+          return dnsResponse(
+            input.url,
+            input.url.searchParams.get("name") === "first.example"
+              ? publicAddress.address
+              : "104.20.23.154",
+          );
+        }
+        if (input.url.hostname === "first.example")
+          return {
+            status: 302,
+            headers: { location: "https://second.example/article" },
+            body: "",
+          };
+        return {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+          body: "Actual public source content obtained through a strictly pinned real address.",
+        };
+      },
+    },
+  );
+  assert.match(result.content, /Actual public source/);
+  assert.deepEqual(
+    calls.filter((call) => call.host !== "cloudflare-dns.com"),
+    [
+      { host: "first.example", address: publicAddress.address, type: null },
+      { host: "second.example", address: "104.20.23.154", type: null },
+    ],
+  );
+  assert.equal(
+    calls.filter((call) => call.host === "cloudflare-dns.com").length,
+    4,
+    "both A and AAAA answers checked on each hop",
+  );
+});
+
+test("fake-DNS fallback never runs for private/mixed answers, local names, literal IPs or ordinary production lookups", async () => {
+  const request: PublicURLRequest = async () =>
+    assert.fail("Neither DoH nor origin transport should be used");
+  for (const addresses of [
+    [{ address: "10.0.0.1", family: 4 as const }],
+    [{ address: "198.18.0.1", family: 4 as const }, publicAddress],
+    [
+      { address: "198.18.0.1", family: 4 as const },
+      { address: "10.0.0.1", family: 4 as const },
+    ],
+  ])
+    await rejectsWithCode(
+      () =>
+        fetchAndNormalizePublicURL("https://private.example/", {
+          lookup: async () => addresses,
+          request,
+          syntheticDNSFallback: "cloudflare",
+        }),
+      "SOURCE_URL_BLOCKED",
+    );
+  for (const url of [
+    "https://127.0.0.1/",
+    "https://198.18.1.1/",
+    "https://localhost/",
+    "https://machine.local/",
+  ])
+    await rejectsWithCode(
+      () =>
+        fetchAndNormalizePublicURL(url, {
+          lookup: fakeLookup,
+          request,
+          syntheticDNSFallback: "cloudflare",
+        }),
+      "SOURCE_URL_BLOCKED",
+    );
+  await rejectsWithCode(
+    () =>
+      fetchAndNormalizePublicURL("https://example.com/", {
+        lookup: fakeLookup,
+        request,
+      }),
+    "SOURCE_URL_BLOCKED",
+  );
+});
+
+test("trusted fallback rejects private IPv6, mismatched questions, resolver redirects and malformed DNS instead of using a fake address", async () => {
+  for (const variant of [
+    "private-v6",
+    "private-v4",
+    "wrong-question",
+    "redirect",
+    "malformed",
+    "synthetic",
+  ] as const) {
+    let targets = 0;
+    await assert.rejects(
+      fetchAndNormalizePublicURL("https://source.example/", {
+        lookup: fakeLookup,
+        syntheticDNSFallback: "cloudflare",
+        request: async ({ url }) => {
+          if (url.hostname !== "cloudflare-dns.com") {
+            targets++;
+            return {
+              status: 200,
+              headers: { "content-type": "text/plain" },
+              body: "must not be reached",
+            };
+          }
+          if (variant === "redirect")
+            return {
+              status: 302,
+              headers: { location: "https://internal.example/dns" },
+              body: "",
+            };
+          if (variant === "malformed")
+            return {
+              status: 200,
+              headers: { "content-type": "application/dns-json" },
+              body: "not JSON",
+            };
+          const response = dnsResponse(
+            url,
+            variant === "private-v4"
+              ? "127.0.0.1"
+              : variant === "synthetic"
+                ? "198.18.0.1"
+                : publicAddress.address,
+          );
+          const body = JSON.parse(response.body);
+          if (variant === "wrong-question")
+            body.Question[0].name = "other.example";
+          if (variant === "private-v6" && url.searchParams.get("type") === "28")
+            body.Answer = [
+              { name: "source.example", type: 28, data: "fd00::1" },
+            ];
+          return { ...response, body: JSON.stringify(body) };
+        },
+      }),
+      PublicURLConnectorError,
+    );
+    assert.equal(targets, 0, variant);
+  }
+});
+
+test("fake-DNS redirect to a private real DNS result is blocked before contacting the redirected target", async () => {
+  const targets: string[] = [];
+  await rejectsWithCode(
+    () =>
+      fetchAndNormalizePublicURL("https://first.example/", {
+        lookup: fakeLookup,
+        syntheticDNSFallback: "cloudflare",
+        request: async ({ url }) => {
+          if (url.hostname === "cloudflare-dns.com")
+            return dnsResponse(
+              url,
+              url.searchParams.get("name") === "first.example"
+                ? publicAddress.address
+                : "169.254.169.254",
+            );
+          targets.push(url.hostname);
+          return {
+            status: 302,
+            headers: { location: "https://metadata.example/latest/" },
+            body: "",
+          };
+        },
+      }),
+    "SOURCE_URL_BLOCKED",
+  );
+  assert.deepEqual(targets, ["first.example"]);
+});
 
 async function rejectsWithCode(
   action: () => Promise<unknown>,

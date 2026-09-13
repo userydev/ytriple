@@ -1024,6 +1024,13 @@ test("raw model reasoning events and provider metadata never enter public task e
     new RegExp(secretReasoning),
   );
   assert.equal(f.task.messages.at(-1)?.content, "这是公开回复。");
+  assert.deepEqual(
+    f.task.events
+      .filter((event) => event.type === "public_response")
+      .map((event) => event.data?.content),
+    ["这是公开回复。"],
+    "actual outward text is captured once, with no invented analysis report",
+  );
   assert.ok(f.task.events.some((event) => event.type === "member_output"));
   assert.ok(
     !f.task.events.some((event) => event.type === "progress_reported"),
@@ -1250,6 +1257,13 @@ test("hosted execution uses actual adapter callbacks, receives material text, sa
   assert.equal(f.task.status, "completed", f.task.error);
   assert.equal(posts, 1);
   assert.equal(f.task.artifacts[0].content, report);
+  assert.deepEqual(
+    f.task.events
+      .filter((event) => event.type === "public_response")
+      .map((event) => event.data?.content),
+    [report],
+    "hosted public explanation is retained even when the main message is brief",
+  );
   assert.ok(f.task.messages.at(-1)!.content.length < 700);
   assert.match(f.task.messages.at(-1)!.content, /已保存/);
   assert.ok(!f.task.events.some((event) => event.type === "tool_started"));
@@ -1800,7 +1814,83 @@ test("real hosted adapter callback persists public summaries and verified source
   const { buildProcessDocument } =
     await import("../src/core/process-document.js");
   const document = buildProcessDocument(f.task).content;
-  assert.match(document, /研究进展说明/);
+  assert.match(document, /先比较证据覆盖，再确认局限/);
   assert.match(document, /example.com\/evidence/);
   assert.match(document, /已读取/);
+});
+
+test("SDK public explanations are collected without report_progress, preserve complete text and freeze actual read coverage", async () => {
+  const f = fixture();
+  const framing = "## 问题理解\n先核查资料给出的数值，再判断它能否支持结论。";
+  const comparison =
+    "## 依据与比较\n资料只给出 ORCHID 42，没有对照组，所以不能宣称提高了效率。";
+  const result =
+    "## 判断\n保留 ORCHID 42 作为所给材料中的观察值。\n\n## 未验证\n" +
+    "适用范围仍需独立样本验证。".repeat(100) +
+    "PUBLIC-END";
+  const model = new ScriptedModel([
+    [
+      assistantMessage(framing),
+      functionCall(
+        "read_source",
+        { sourceId: "source-1", start: 0, maxCharacters: 1000 },
+        { callId: "read-public" },
+      ),
+    ],
+    modelResponder((call) => {
+      assert.match(JSON.stringify(call.request.input), /ORCHID 42/);
+      return [
+        assistantMessage(comparison),
+        functionCall("write_artifact", draft, { callId: "save-public" }),
+      ];
+    }),
+    [assistantMessage(result)],
+  ]);
+  await new TeamRuntime(f.hooks, { modelFactory: () => model }).run(f.task.id);
+  assert.equal(f.task.status, "completed", f.task.error);
+  model.assertComplete();
+  assert.equal(
+    model.calls.length,
+    3,
+    "capturing the public explanation never starts a paid retrospective model call",
+  );
+  const captured = f.task.events.filter(
+    (event) => event.type === "public_response",
+  );
+  assert.deepEqual(
+    captured.map((event) => event.data?.content),
+    [framing, comparison, result],
+  );
+  assert.equal(captured.at(-1)?.data?.truncated, false);
+  assert.deepEqual(captured[0]?.data?.sourceIds, []);
+  assert.deepEqual(captured.at(-1)?.data?.sourceIds, ["source-1"]);
+  const read = f.task.events.find(
+    (event) =>
+      event.type === "tool_completed" && event.data?.tool === "read_source",
+  )!;
+  assert.equal(
+    read.data?.sourceHash,
+    createHash("sha256").update(f.task.sources[0].text).digest("hex"),
+  );
+  assert.equal(read.data?.readStart, 0);
+  assert.equal(read.data?.readEnd, f.task.sources[0].text.length);
+  const { buildProcessStory } = await import("../src/shared/process-story.js");
+  const story = buildProcessStory(f.task);
+  assert.equal(story.coverage.reports, 0);
+  assert.equal(story.coverage.replies, 3);
+  assert.match(
+    story.entries.map((entry) => entry.content).join("\n"),
+    /PUBLIC-END/,
+  );
+  assert.match(
+    story.entries.map((entry) => entry.content).join("\n"),
+    /不能宣称提高了效率/,
+  );
+  assert.ok(
+    story.entries.some((entry) =>
+      entry.references.some(
+        (ref) => ref.kind === "source" && ref.hash === read.data?.sourceHash,
+      ),
+    ),
+  );
 });

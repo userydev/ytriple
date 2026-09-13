@@ -60,13 +60,15 @@ export function SourceConnectionForm({
   );
   const [code, setCode] = useState("");
   const [pending, setPending] = useState(false);
+  const busy = useRef(false);
   const [error, setError] = useState("");
   return (
     <form
       className="radar-connect-form"
       onSubmit={async (event) => {
         event.preventDefault();
-        if (pending) return;
+        if (busy.current) return;
+        busy.current = true;
         setPending(true);
         setError("");
         try {
@@ -80,6 +82,7 @@ export function SourceConnectionForm({
         } catch {
           setError("未能连接服务，请检查地址与配对码。");
         } finally {
+          busy.current = false;
           setPending(false);
         }
       }}
@@ -133,12 +136,14 @@ export function RadarReader({
   onTask,
   onSources,
   tasks,
+  onImport,
 }: {
   radar: RadarSnapshot;
   dispatch: Dispatch;
   onTask: (id: string, task?: Task) => void;
   onSources: () => void;
   tasks: Task[];
+  onImport?: () => void;
 }) {
   const identity = `${radar.serviceURL ?? ""}:${radar.items[0]?.tenantId ?? ""}`;
   const [state, setState] = useState<ReaderState>(
@@ -262,81 +267,94 @@ export function RadarReader({
       setPending(false);
     }
   };
-  if (!radar.configured && !items.length)
-    return <SourceConnectionForm radar={radar} dispatch={dispatch} />;
   return (
     <div className="radar-reader" aria-label="信息阅读" ref={readerRoot}>
-      <aside className="radar-reader-nav">
-        <span className="radar-reader-eyebrow">我的阅读</span>
-        {(
-          [
-            { id: "all", label: "总览" },
-            { id: "server", label: "订阅服务" },
-            { id: "user", label: "我的来源" },
-          ] as const
-        ).map((option) => (
-          <button
-            key={option.id}
-            className={state.origin === option.id ? "active" : ""}
-            onClick={() =>
+      <div
+        className="radar-reader-filters"
+        aria-label="来源材料筛选"
+        hidden={Boolean(selected)}
+      >
+        <div className="radar-reader-origins">
+          {(
+            [
+              { id: "all", label: "总览" },
+              { id: "server", label: "订阅服务" },
+              { id: "user", label: "我的来源" },
+            ] as const
+          ).map((option) => (
+            <button
+              key={option.id}
+              className={state.origin === option.id ? "active" : ""}
+              onClick={() =>
+                change({
+                  origin: option.id,
+                  category: "",
+                  source: "",
+                  selected: undefined,
+                })
+              }
+            >
+              {option.label}
+              <span>
+                {
+                  items.filter(
+                    (item) =>
+                      option.id === "all" ||
+                      (option.id === "user"
+                        ? item.origin === "user"
+                        : item.origin !== "user"),
+                  ).length
+                }
+              </span>
+            </button>
+          ))}
+        </div>
+        <label>
+          <span className="sr-only">内容分类</span>
+          <select
+            aria-label="内容分类"
+            value={state.category}
+            onChange={(event) =>
               change({
-                origin: option.id,
-                category: "",
+                category: event.target.value,
                 source: "",
                 selected: undefined,
               })
             }
           >
-            {option.label}
-            <span>
-              {
-                items.filter(
-                  (item) =>
-                    option.id === "all" ||
-                    (option.id === "user"
-                      ? item.origin === "user"
-                      : item.origin !== "user"),
-                ).length
-              }
-            </span>
-          </button>
-        ))}
-        <span className="radar-reader-eyebrow">内容分类</span>
-        <button
-          className={!state.category ? "active" : ""}
-          onClick={() =>
-            change({ category: "", source: "", selected: undefined })
-          }
-        >
-          全部分类
-        </button>
-        {categories.map((category) => (
-          <button
-            key={category}
-            className={state.category === category ? "active" : ""}
-            onClick={() =>
-              change({ category, source: "", selected: undefined })
+            <option value="">全部分类</option>
+            {categories.map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span className="sr-only">来源</span>
+          <select
+            aria-label="筛选来源"
+            value={state.source}
+            onChange={(event) =>
+              change({
+                source: event.target.value,
+                category: "",
+                selected: undefined,
+              })
             }
           >
-            {category}
-          </button>
-        ))}
-        <span className="radar-reader-eyebrow">来源</span>
-        {sources.map(([id, name]) => (
-          <button
-            key={id}
-            className={state.source === id ? "active" : ""}
-            onClick={() =>
-              change({ source: id, category: "", selected: undefined })
-            }
-          >
-            {name}
-          </button>
-        ))}
+            <option value="">全部来源</option>
+            {sources.map(([id, name]) => (
+              <option key={id} value={id}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
         <button className="radar-manage-sources" onClick={onSources}>
           管理来源与订阅
         </button>
-      </aside>
+      </div>
       <div className="radar-reading-content">
         {selected ? (
           <article className="radar-article" key={selected.id}>
@@ -434,7 +452,7 @@ export function RadarReader({
                         ? "我的来源"
                         : state.origin === "server"
                           ? "订阅更新"
-                          : "值得打开的内容")}
+                          : "已取得的材料")}
                 </h2>
                 <p>
                   {filtered.length} 条已接收内容 · {radar.unreadCount} 条未读
@@ -450,12 +468,14 @@ export function RadarReader({
                 />
               </label>
             </div>
-            <ServerTopics
-              topics={topics}
-              items={items}
-              onRead={select}
-              dispatch={dispatch}
-            />
+            {!radar.editorial && (
+              <ServerTopics
+                topics={topics}
+                items={items}
+                onRead={select}
+                dispatch={dispatch}
+              />
+            )}
             {groups.length ? (
               groups.map(([category, group]) => (
                 <section
@@ -532,13 +552,24 @@ export function RadarReader({
               <div className="radar-reading-empty">
                 <BookOpen size={25} />
                 <h3>
-                  {items.length ? "没有符合条件的内容" : "正在等待来源更新"}
+                  {items.length
+                    ? "没有符合条件的内容"
+                    : radar.configured
+                      ? "正在等待来源更新"
+                      : "还没有自己的阅读材料"}
                 </h3>
                 <p>
                   {items.length
                     ? "调整分类、来源或搜索词后继续浏览。"
-                    : "服务器取得内容后会自动出现在这里。可以在来源管理中查看进度。"}
+                    : radar.configured
+                      ? "服务器取得内容后会自动出现在这里。可以在来源管理中查看进度。"
+                      : "导入链接或收藏就能开始整理；持续来源可在需要时连接信息服务。"}
                 </p>
+                {!radar.configured && onImport ? (
+                  <button className="button primary small" onClick={onImport}>
+                    导入链接或收藏
+                  </button>
+                ) : null}
                 <button className="button secondary small" onClick={onSources}>
                   查看来源
                 </button>

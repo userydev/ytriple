@@ -156,7 +156,7 @@ async function worktree(
     !allowed.some((item) => path.resolve(item) === path.resolve(selected))
   )
     throw new Error("工作目录不属于当前项目。");
-  const root = path.resolve(codeRoot),
+  const root = path.resolve(project.imported ? project.root : codeRoot),
     location = path.resolve(selected);
   if (!inside(root, location) || !inside(path.resolve(project.root), location))
     throw new Error("项目目录不在配置的 Code 范围内。");

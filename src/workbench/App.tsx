@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type FormEvent,
@@ -67,11 +68,30 @@ import {
 import { Settings } from "./Settings";
 import { Library } from "./Library";
 import { ProcessView } from "./ProcessView";
+import {
+  SkillPolicyPicker,
+  TaskSkills,
+  skillPolicyLabel,
+  validSkillSelection,
+} from "./Skills";
+import { DEFAULT_SKILL_POLICY, type SkillPolicy } from "../shared/skills";
 import { Projects } from "./Projects";
-import { ProjectWorkspace } from "./ProjectWorkspace";
+import { ProjectExplorer } from "./ProjectExplorer";
+import {
+  projectContextDocuments,
+  projectDiscussionGoal,
+  projectRequestText,
+} from "../shared/project-context";
+import { WorkbenchHome } from "./WorkbenchHome";
+import { WorkSurface, type WorkContext } from "./WorkSurface";
+import { Attention } from "./Attention";
+import { ProjectSupport, type ProjectSection } from "./ProjectSupport";
+import { MediaProjects } from "./MediaProjects";
+import { DeliveryOverview } from "./Deliveries";
+import { RoutinesPanel, TaskRoutineAction } from "./Routines";
+import { TaskRemoteAction } from "./ServiceSettings";
 import { Radar } from "./Radar";
-import { WorkspaceControls } from "./WindowControls";
-import { WorkspacePanels } from "./WorkspacePanels";
+
 import {
   Markdown,
   Modal,
@@ -83,18 +103,29 @@ import {
 } from "./common";
 
 type Page =
-  "work" | "radar" | "projects" | "library" | "models" | "team" | "environment";
+  | "home"
+  | "work"
+  | "radar"
+  | "projects"
+  | "library"
+  | "models"
+  | "team"
+  | "environment"
+  | "service"
+  | "attention"
+  | "deliveries"
+  | "routines";
 const isSettingsPage = (page: Page) =>
-  ["models", "team", "environment"].includes(page);
-const UI_PREFERENCES_KEY = "ytriple.navigation.v1";
+  ["models", "team", "environment", "service"].includes(page);
+const UI_PREFERENCES_KEY = "ytriple.navigation.v2";
 function readPinnedSidebar() {
   try {
     return (
       JSON.parse(window.localStorage.getItem(UI_PREFERENCES_KEY) ?? "{}")
-        .pinned === true
+        .pinned !== false
     );
   } catch {
-    return false;
+    return true;
   }
 }
 type Dialog = "source" | "project" | null;
@@ -103,6 +134,7 @@ type ComposerDraft = {
   kind: TaskKind;
   member: MemberId;
   profileId: string;
+  skillPolicy?: SkillPolicy;
 };
 const EMPTY_DRAFT: ComposerDraft = {
   text: "",
@@ -110,42 +142,6 @@ const EMPTY_DRAFT: ComposerDraft = {
   member: "coordinator",
   profileId: "",
 };
-const DIRECTIONS: {
-  kind: TaskKind;
-  label: string;
-  description: string;
-  seed: string;
-  icon: typeof Search;
-}[] = [
-  {
-    kind: "research",
-    label: "深入研究一个问题",
-    description: "找到依据，形成自己的判断",
-    seed: "我想深入研究：",
-    icon: Search,
-  },
-  {
-    kind: "project",
-    label: "把想法变成项目",
-    description: "讨论雏形，准备开发的起点",
-    seed: "我有一个产品想法：",
-    icon: Sprout,
-  },
-  {
-    kind: "learning",
-    label: "打开一个知识点",
-    description: "从好奇出发，把理解再推进一步",
-    seed: "我想理解这个知识点：",
-    icon: BookOpen,
-  },
-  {
-    kind: "brainstorm",
-    label: "一起扩展一个创意",
-    description: "换个视角，找到更多可能",
-    seed: "和我一起想一想：",
-    icon: Lightbulb,
-  },
-];
 
 function Logo() {
   return (
@@ -461,10 +457,7 @@ function Sidebar({
     snapshot?.tasks.filter((task) => !task.archivedAt && !task.deletedAt) ?? [];
   const archived =
     snapshot?.tasks.filter((task) => task.archivedAt || task.deletedAt) ?? [];
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  useEffect(() => {
-    if (isSettingsPage(page)) setSettingsOpen(true);
-  }, [page]);
+
   return (
     <aside className={`sidebar ${collapsed ? "sidebar-hidden" : ""}`}>
       <div className="sidebar-brand">
@@ -493,23 +486,37 @@ function Sidebar({
       <nav className="primary-nav" aria-label="工作台导航">
         {(
           [
-            { id: "work", label: "工作台", icon: Compass },
+            { id: "home", label: "工作台", icon: Compass },
             { id: "radar", label: "雷达", icon: RadarIcon },
             { id: "projects", label: "项目", icon: Folder },
-            { id: "library", label: "本地 Lib", icon: BookOpen },
+            { id: "library", label: "资产", icon: BookOpen },
           ] as const
         ).map((item) => (
           <button
             key={item.id}
-            className={page === item.id ? "active" : ""}
+            className={
+              page === item.id ||
+              (item.id === "home" &&
+                ["work", "attention", "deliveries", "routines"].includes(page))
+                ? "active"
+                : ""
+            }
             onClick={() => onPage(item.id)}
           >
             <item.icon size={17} strokeWidth={1.7} />
             <span>{item.label}</span>
-            {item.id === "radar" && snapshot?.radar?.unreadCount ? (
+            {item.id === "radar" &&
+            !snapshot?.radar?.editorial &&
+            snapshot?.radar?.unreadCount ? (
               <span className="nav-count">{snapshot.radar.unreadCount}</span>
-            ) : item.id === "projects" && snapshot?.projects.length ? (
-              <span className="nav-count">{snapshot.projects.length}</span>
+            ) : item.id === "home" &&
+              snapshot?.attention?.notification.count ? (
+              <span
+                className="nav-count"
+                title={snapshot.attention.notification.summary}
+              >
+                {snapshot.attention.notification.count}
+              </span>
             ) : null}
           </button>
         ))}
@@ -557,36 +564,13 @@ function Sidebar({
             ))}
           </details>
         ) : null}
-        <details
-          className="sidebar-settings-group"
-          open={settingsOpen}
-          onToggle={(event) => setSettingsOpen(event.currentTarget.open)}
+        <button
+          className={`settings-nav ${isSettingsPage(page) ? "active" : ""}`}
+          onClick={() => onPage("models")}
         >
-          <summary>
-            <Settings2 size={16} />
-            设置
-            <ChevronDown size={13} />
-          </summary>
-          <nav className="configuration-nav" aria-label="工作台配置">
-            {(
-              [
-                { id: "team", label: "Agent 团队", icon: Bot },
-                { id: "models", label: "AI 模型", icon: Cpu },
-                { id: "environment", label: "本机设置", icon: Settings2 },
-              ] as const
-            ).map((item) => (
-              <button
-                key={item.id}
-                className={`settings-nav ${page === item.id ? "active" : ""}`}
-                onClick={() => onPage(item.id)}
-              >
-                <item.icon size={16} />
-                {item.label}
-                <ChevronRight size={14} />
-              </button>
-            ))}
-          </nav>
-        </details>
+          <Settings2 size={16} />
+          设置
+        </button>
       </div>
     </aside>
   );
@@ -613,6 +597,7 @@ function Composer({
     kind: TaskKind,
     member: MemberId,
     profileId?: string,
+    skillPolicy?: SkillPolicy,
   ) => Promise<void>;
   onAdd: () => void;
   draft: ComposerDraft;
@@ -621,6 +606,9 @@ function Composer({
   onConfigure: () => void;
 }) {
   const { text, member, profileId } = draft;
+  const skillPolicy = draft.skillPolicy ?? DEFAULT_SKILL_POLICY;
+  const validSkills =
+    Boolean(task) || validSkillSelection(skillPolicy, snapshot?.skills ?? []);
   const [reviseGoal, setReviseGoal] = useState(false);
   const [sending, setSending] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -628,7 +616,7 @@ function Composer({
     if (seedRevision > 0) textarea.current?.focus();
   }, [seedRevision]);
   const send = async () => {
-    if (!text.trim() || !connected || sending) return;
+    if (!text.trim() || !connected || sending || !validSkills) return;
     setSending(true);
     if (task) {
       const result = await dispatch({
@@ -646,7 +634,13 @@ function Composer({
         setReviseGoal(false);
       }
     } else
-      await onCreate(text.trim(), draft.kind, member, profileId || undefined);
+      await onCreate(
+        text.trim(),
+        draft.kind,
+        member,
+        profileId || undefined,
+        skillPolicy,
+      );
     setSending(false);
   };
   const configured = snapshot?.profiles.some(
@@ -654,6 +648,30 @@ function Composer({
   );
   return (
     <div className="composer-area">
+      {task && snapshot ? (
+        <TaskSkills
+          task={task}
+          snapshot={snapshot}
+          dispatch={dispatch}
+          connected={connected}
+        />
+      ) : (
+        <details className="work-skills" aria-label="新工作的 Skills">
+          <summary>
+            <BookOpen size={13} />
+            <span>Skill · {skillPolicyLabel(skillPolicy)}</span>
+            <ChevronDown size={12} />
+          </summary>
+          <SkillPolicyPicker
+            policy={skillPolicy}
+            catalog={snapshot?.skills ?? []}
+            disabled={!connected || sending}
+            onChange={(skillPolicy) =>
+              setDraft((current) => ({ ...current, skillPolicy }))
+            }
+          />
+        </details>
+      )}
       {task && reviseGoal ? (
         <div className="revise-banner">
           <Lightbulb size={14} />
@@ -735,7 +753,9 @@ function Composer({
               >
                 {MEMBERS.map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.id === "coordinator" ? "团队 · 统筹" : item.shortName}
+                    {item.id === "coordinator"
+                      ? `团队 · ${task?.teamMode === "media" ? "主编" : "统筹"}`
+                      : item.shortName}
                   </option>
                 ))}
               </select>
@@ -765,7 +785,7 @@ function Composer({
             type="submit"
             className="send-button"
             aria-label={task ? "发送消息" : "开始工作"}
-            disabled={!connected || !text.trim() || sending}
+            disabled={!connected || !text.trim() || sending || !validSkills}
           >
             {sending ? (
               <LoaderCircle size={17} className="spin" />
@@ -805,287 +825,12 @@ function Composer({
   );
 }
 
-function ProjectDecision({
-  project,
-  snapshot,
-  dispatch,
-  connected,
-  drafts,
-  onOpenTask,
-  onConfigure,
-  onDetail,
-  onArtifact,
-}: {
-  project?: ProjectInfo;
-  snapshot: Snapshot | null;
-  dispatch: Dispatch;
-  connected: boolean;
-  drafts: Map<string, ComposerDraft>;
-  onDetail: (task: Task, message: Task["messages"][number]) => void;
-  onArtifact: (task: Task, artifactId: string) => void;
-  onOpenTask: (id: string) => void;
-  onConfigure: () => void;
-}) {
-  const related =
-    snapshot?.tasks.filter(
-      (task) =>
-        !task.archivedAt &&
-        !task.deletedAt &&
-        ((project && task.projectId === project.id) ||
-          (project &&
-            task.events.some(
-              (event) =>
-                event.type === "project.initialized" &&
-                event.data?.projectId === project.id,
-            ))),
-    ) ?? [];
-  const [chosenTaskId, setChosenTaskId] = useState<string | null>(() =>
-    drafts.get(`project:${project?.id}:new`)?.text
-      ? null
-      : (related[0]?.id ?? null),
-  );
-  const task = related.find((item) => item.id === chosenTaskId);
-  const draftKey = task?.id ?? `project:${project?.id ?? "none"}:new`;
-  const [draft, updateDraft] = useState<ComposerDraft>(
-    () =>
-      drafts.get(draftKey) ?? {
-        ...EMPTY_DRAFT,
-        kind: "project",
-        member: task?.member ?? "coordinator",
-        profileId: task?.profileId ?? "",
-      },
-  );
-  const mounted = useRef(true);
-  const selectionVersion = useRef(0);
-  const draftRef = useRef(draft);
-  draftRef.current = draft;
-  useEffect(() => {
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-  const setDraft: ReactDispatch<SetStateAction<ComposerDraft>> = (next) =>
-    updateDraft((current) => {
-      const value = typeof next === "function" ? next(current) : next;
-      draftRef.current = value;
-      drafts.set(draftKey, value);
-      return value;
-    });
-  const [adding, setAdding] = useState(false);
-  const selectDiscussion = (
-    id: string | null,
-    created?: Task,
-    preserveDraft = true,
-  ) => {
-    selectionVersion.current += 1;
-    if (preserveDraft) drafts.set(draftKey, draft);
-    const selected = created ?? related.find((item) => item.id === id);
-    setChosenTaskId(id);
-    updateDraft(
-      drafts.get(id ?? `project:${project?.id}:new`) ?? {
-        ...EMPTY_DRAFT,
-        kind: "project",
-        member: selected?.member ?? "coordinator",
-        profileId: selected?.profileId ?? "",
-      },
-    );
-  };
-  const create = async (
-    text: string,
-    _kind: TaskKind,
-    member: MemberId,
-    profileId?: string,
-    run = true,
-  ) => {
-    if (!project) return null;
-    const submittedDraft = draftRef.current;
-    const submittedSelection = selectionVersion.current;
-    const existing = new Set(snapshot?.tasks.map((item) => item.id));
-    const context = [
-      `围绕本机项目「${project.name}」讨论。`,
-      `项目 ID：${project.id}；目录：${project.root}`,
-      `以下仅为本地扫描概况，尚未读取项目文件正文。`,
-      ...(project.observation?.issues ?? []).map(
-        (issue) => `状态提示：${issue}`,
-      ),
-      ...(project.observation?.worktrees ?? []).map(
-        (tree) =>
-          `工作目录：${tree.path}；分支：${tree.branch ?? "未知"}；改动文件：${tree.changedFiles ?? "未知"}`,
-      ),
-      `我的问题：${text}`,
-    ].join("\n");
-    const result = await dispatch({
-      type: "task.create",
-      projectId: project.id,
-      title: `${project.name} · ${text.slice(0, 35)}`,
-      goal: context,
-      kind: "project",
-      member,
-      ...(profileId ? { profileId } : {}),
-    });
-    const created = result?.tasks.find(
-      (item) =>
-        !existing.has(item.id) &&
-        item.projectId === project.id &&
-        item.goal === context,
-    );
-    if (!created) return null;
-    if (drafts.get(draftKey) === submittedDraft) drafts.delete(draftKey);
-    if (
-      mounted.current &&
-      selectionVersion.current === submittedSelection &&
-      draftRef.current === submittedDraft
-    )
-      selectDiscussion(created.id, created, false);
-    if (run) await dispatch({ type: "task.run", taskId: created.id });
-    return created;
-  };
-  return (
-    <aside className="project-decision" aria-label="项目决策与讨论">
-      <header className="project-decision-header">
-        <div>
-          <span className="eyebrow">决策与讨论</span>
-          <h2>{project?.name ?? "一起推进项目"}</h2>
-        </div>
-        <MessageSquare size={18} />
-      </header>
-      {project ? (
-        <>
-          <div className="project-discussion-controls">
-            <label>
-              <span className="sr-only">项目讨论记录</span>
-              <select
-                aria-label="项目讨论记录"
-                value={chosenTaskId ?? ""}
-                onChange={(event) =>
-                  selectDiscussion(event.target.value || null)
-                }
-              >
-                <option value="">新的项目讨论</option>
-                {related.map((item) => (
-                  <option value={item.id} key={item.id}>
-                    {item.title}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {task ? (
-              <button
-                className="text-button"
-                onClick={() => selectDiscussion(null)}
-              >
-                <Plus size={13} />
-                新讨论
-              </button>
-            ) : null}
-          </div>
-          {task ? (
-            <>
-              <div className="decision-task-actions">
-                <TaskControl task={task} dispatch={dispatch} />
-                <button
-                  className="text-button"
-                  onClick={() => onOpenTask(task.id)}
-                >
-                  查看过程与成果
-                  <ArrowUpRight size={13} />
-                </button>
-              </div>
-              <Conversation
-                key={task.id}
-                task={task}
-                dispatch={dispatch}
-                onDetail={(message) => onDetail(task, message)}
-                onArtifact={(id) => onArtifact(task, id)}
-              />
-            </>
-          ) : (
-            <div className="project-discussion-intro">
-              <span className="project-discussion-mark">
-                <MessageSquare size={23} />
-              </span>
-              <h3>围绕这个项目，直接讨论</h3>
-              <p>梳理进展、讨论取舍，或确定下一步。</p>
-              <div className="project-discussion-seeds">
-                {[
-                  "梳理当前项目状态与待处理事项",
-                  "一起讨论这个项目下一步的优先级",
-                ].map((text) => (
-                  <button
-                    key={text}
-                    onClick={() =>
-                      setDraft((current) => ({ ...current, text }))
-                    }
-                  >
-                    {text}
-                    <ArrowUpRight size={13} />
-                  </button>
-                ))}
-              </div>
-              <small>发送时带入当前项目概况；可添加文档补充背景。</small>
-            </div>
-          )}
-          <Composer
-            key={draftKey}
-            task={task}
-            snapshot={snapshot}
-            connected={connected}
-            dispatch={dispatch}
-            draft={draft}
-            setDraft={setDraft}
-            seedRevision={0}
-            onCreate={async (...args) => {
-              await create(...args);
-            }}
-            onAdd={() => setAdding(true)}
-            onConfigure={onConfigure}
-          />
-          {adding ? (
-            <SourceDialog
-              connected={connected}
-              dispatch={dispatch}
-              ensureTask={async () =>
-                task ??
-                create(
-                  draft.text.trim() || "理解项目资料，讨论后续工作",
-                  "project",
-                  draft.member,
-                  draft.profileId || undefined,
-                  false,
-                )
-              }
-              onClose={() => setAdding(false)}
-            />
-          ) : null}
-        </>
-      ) : (
-        <div className="project-discussion-intro unselected">
-          <span className="project-discussion-mark">
-            <MessageSquare size={25} />
-          </span>
-          <h3>选一个项目，开始交流</h3>
-          <p>
-            从左侧文件系统选择项目。
-            <br />
-            这里保留决策与讨论，过程和成果可随时回到工作台查看。
-          </p>
-        </div>
-      )}
-    </aside>
-  );
-}
-
 function userMessageText(
   task: Task,
   message: Task["messages"][number],
 ): string {
-  if (
-    task.projectId &&
-    message.content.startsWith("围绕本机项目") &&
-    message.content.includes("我的问题：")
-  )
-    return message.content.split("我的问题：").slice(1).join("我的问题：");
+  if (task.projectId && message.content.startsWith("围绕本机项目"))
+    return projectRequestText(message.content);
   if (!message.content.startsWith("继续处理已选成果")) return message.content;
   const request = task.events.find(
     (event) =>
@@ -1099,34 +844,69 @@ function userMessageText(
   return `继续处理《${artifact?.title ?? "选定成果"}》：\n${request.data.instruction}`;
 }
 
+const conversationPositions = new Map<
+  string,
+  { top: number; history: boolean }
+>();
+
 function Conversation({
   task,
+  active = true,
   dispatch,
   onDetail,
   onArtifact,
 }: {
   task: Task;
+  active?: boolean;
   dispatch: Dispatch;
   onDetail?: (message: Task["messages"][number]) => void;
   onArtifact?: (artifactId: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const [showHistory, setShowHistory] = useState(
+    conversationPositions.get(task.id)?.history ?? false,
+  );
+  // Adding a source advances context without replacing the user's discussion.
+  const displayedGoal = task.messages.some(
+    (item) => item.goalVersion === task.goalVersion,
+  )
+    ? task.goalVersion
+    : (task.messages.at(-1)?.goalVersion ?? task.goalVersion);
+  const historyCount = task.messages.filter(
+    (item) => item.goalVersion !== displayedGoal,
+  ).length;
   const stickToBottom = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
   const lastMessage = task.messages.at(-1);
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    if (!active || !element) return;
+    const saved = conversationPositions.get(task.id);
+    element.scrollTop = saved?.top ?? 0;
+    stickToBottom.current =
+      !saved ||
+      element.scrollHeight - element.scrollTop - element.clientHeight < 100;
+  }, [task.id, active]);
   useEffect(() => {
-    if (stickToBottom.current)
-      bottomRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
-    else setShowLatest(true);
-  }, [lastMessage?.id, lastMessage?.content, task.status]);
+    const element = scrollRef.current;
+    if (!active || !element) return;
+    // Only scroll this reading surface; hidden work must never move another page.
+    if (stickToBottom.current && task.status === "running")
+      element.scrollTop = element.scrollHeight;
+    else if (!stickToBottom.current) setShowLatest(true);
+  }, [lastMessage?.id, lastMessage?.content, task.status, active]);
   return (
     <div
       className="conversation-scroll"
       ref={scrollRef}
       onScroll={() => {
         const element = scrollRef.current;
-        if (element) {
+        if (element && active) {
+          conversationPositions.set(task.id, {
+            top: element.scrollTop,
+            history: showHistory,
+          });
           stickToBottom.current =
             element.scrollHeight - element.scrollTop - element.clientHeight <
             100;
@@ -1136,17 +916,6 @@ function Conversation({
     >
       <div className="conversation-inner">
         <div className="task-overview">
-          <span className="eyebrow">
-            {
-              {
-                research: "研究与判断",
-                project: "项目孵化",
-                learning: "知识扩展",
-                brainstorm: "创意探索",
-              }[task.kind]
-            }
-          </span>
-          <h1>{task.title}</h1>
           <details className="goal-details">
             <summary>
               <span>当前目标</span>
@@ -1155,11 +924,6 @@ function Conversation({
             </summary>
             <p>{task.goal}</p>
           </details>
-          <div className="task-overview-meta">
-            <Status task={task} />
-            <span>{task.sources.length} 份资料</span>
-            <span>{task.artifacts.length} 项成果</span>
-          </div>
           {task.status === "paused" &&
           task.events.some(
             (event) =>
@@ -1182,63 +946,93 @@ function Conversation({
             </p>
           </div>
         ) : null}
+        {historyCount ? (
+          <button
+            className="conversation-history-toggle"
+            aria-expanded={showHistory}
+            onClick={() => {
+              const next = !showHistory;
+              setShowHistory(next);
+              conversationPositions.set(task.id, {
+                top: scrollRef.current?.scrollTop ?? 0,
+                history: next,
+              });
+            }}
+          >
+            此前讨论 · {historyCount}
+            <ChevronDown size={13} />
+          </button>
+        ) : null}
         <div className="messages">
-          {task.messages.map((message) => {
-            const report =
-              message.role === "assistant"
-                ? decisionExcerpt(message.content)
-                : null;
-            return (
-              <article
-                className={`message ${message.role} ${message.goalVersion !== task.goalVersion ? "superseded" : ""}`}
-                key={message.id}
-              >
-                <div className="message-byline">
-                  <span className={`message-avatar ${message.role}`}>
-                    {message.role === "user" ? "Y" : <Layers2 size={14} />}
-                  </span>
-                  <strong>
-                    {message.role === "user"
-                      ? "你"
-                      : memberName(message.member)}
-                  </strong>
-                  <time dateTime={message.createdAt}>
-                    {formatTime(message.createdAt)}
-                  </time>
-                  {message.goalVersion !== task.goalVersion ? (
-                    <span className="old-goal">
-                      此前目标 v{message.goalVersion}
+          {task.messages
+            .filter(
+              (message) => showHistory || message.goalVersion === displayedGoal,
+            )
+            .map((message) => {
+              const report =
+                message.role === "assistant"
+                  ? decisionExcerpt(message.content)
+                  : null;
+              return (
+                <article
+                  className={`message ${message.role} ${message.goalVersion !== displayedGoal ? "superseded" : ""}`}
+                  key={message.id}
+                >
+                  <div className="message-byline">
+                    <span className={`message-avatar ${message.role}`}>
+                      {message.role === "user" ? "Y" : <Layers2 size={14} />}
                     </span>
-                  ) : null}
-                </div>
-                <div className="message-content">
-                  {message.role === "assistant" ? (
-                    <>
-                      <Markdown dispatch={dispatch} onArtifactLink={onArtifact}>
-                        {report!.text}
-                      </Markdown>
-                      {report!.detailed && onDetail ? (
-                        <button
-                          className="decision-detail-link"
-                          onClick={() => onDetail?.(message)}
+                    <strong>
+                      {message.role === "user"
+                        ? "你"
+                        : memberName(message.member, task.teamMode)}
+                    </strong>
+                    <time dateTime={message.createdAt}>
+                      {formatTime(message.createdAt)}
+                    </time>
+                    {message.goalVersion !== displayedGoal ? (
+                      <span className="old-goal">
+                        此前目标 v{message.goalVersion}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="message-content">
+                    {message.role === "assistant" ? (
+                      <>
+                        <Markdown
+                          dispatch={dispatch}
+                          onArtifactLink={onArtifact}
                         >
-                          查看完整内容
-                          <ArrowUpRight size={13} />
-                        </button>
-                      ) : null}
-                    </>
-                  ) : (
-                    <p>{userMessageText(task, message)}</p>
-                  )}
-                </div>
-              </article>
-            );
-          })}
+                          {report!.text}
+                        </Markdown>
+                        {report!.detailed && onDetail ? (
+                          <button
+                            className="decision-detail-link"
+                            onClick={() => onDetail?.(message)}
+                          >
+                            查看完整内容
+                            <ArrowUpRight size={13} />
+                          </button>
+                        ) : null}
+                      </>
+                    ) : (
+                      <p>{userMessageText(task, message)}</p>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
         </div>
         {task.status === "running" || task.status === "waiting" ? (
           <div className="decision-progress-note">
-            <LoaderCircle size={13} className="spin" />
-            团队正在处理，详细过程见右侧。
+            {task.status === "running" ? (
+              <LoaderCircle size={13} className="spin" />
+            ) : (
+              <CircleAlert size={13} />
+            )}
+            {task.status === "running"
+              ? "团队正在处理，可在过程里查看进展。"
+              : "这项工作正在等待确认或补充。"}
           </div>
         ) : null}
         {task.error ? (
@@ -1256,7 +1050,8 @@ function Conversation({
         <button
           className="jump-latest"
           onClick={() => {
-            bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+            if (scrollRef.current)
+              scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
             stickToBottom.current = true;
             setShowLatest(false);
           }}
@@ -1414,6 +1209,13 @@ function SourceDialog({
   const [title, setTitle] = useState("");
   const [value, setValue] = useState("");
   const [pending, setPending] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const submit = async (event?: FormEvent) => {
     event?.preventDefault();
     setPending(true);
@@ -1435,7 +1237,7 @@ function SourceDialog({
             },
     );
     setPending(false);
-    if (result) onClose();
+    if (result && mounted.current) onClose();
   };
   return (
     <Modal
@@ -1550,6 +1352,7 @@ function SourceDialog({
 
 export function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const snapshotRef = useRef<Snapshot | null>(null);
   const [messageDetail, setMessageDetail] = useState<{
     taskId: string;
     id: string;
@@ -1565,12 +1368,47 @@ export function App() {
   const [connection, setConnection] = useState<
     "loading" | "connected" | "unavailable" | "failed"
   >(() => (window.ytriple ? "loading" : "unavailable"));
-  const [page, setPage] = useState<Page>("work");
+  const navigationRevision = useRef(0);
+  const [page, setCurrentPage] = useState<Page>("home");
+  const setPage = useCallback((next: Page) => {
+    navigationRevision.current += 1;
+    setCurrentPage(next);
+  }, []);
+  const [projectSection, setProjectSection] =
+    useState<ProjectSection>("software");
+  const [mediaFocus, setMediaFocus] = useState<{
+    channelId: string;
+    workId: string;
+    revision: number;
+  }>();
+  const openMediaWork = (channelId: string, workId: string) => {
+    setMediaFocus({ channelId, workId, revision: Date.now() });
+    setProjectSection("media");
+    setPage("projects");
+  };
+  const openMediaSetup = () => {
+    setProjectSection("media");
+    setPage("projects");
+  };
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const selectedTaskRef = useRef(selectedTaskId);
   selectedTaskRef.current = selectedTaskId;
   const [sidebarPinned, setSidebarPinned] = useState(readPinnedSidebar);
-  const [sidebarOpen, setSidebarOpen] = useState(readPinnedSidebar);
+  const [sidebarOpen, setSidebarOpen] = useState(
+    () => readPinnedSidebar() && window.innerWidth > 800,
+  );
+  useEffect(() => {
+    let narrow = window.innerWidth <= 800;
+    const resize = () => {
+      const next = window.innerWidth <= 800;
+      if (next !== narrow) {
+        setSidebarOpen(!next && sidebarPinned);
+        narrow = next;
+      }
+    };
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, [sidebarPinned]);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(
     null,
   );
@@ -1597,9 +1435,15 @@ export function App() {
     panel: WindowKind;
     sequence: number;
   }>({ panel: "main", sequence: 0 });
-  const [evidenceTab, setEvidenceTab] = useState<"process" | "sources">(
-    "process",
-  );
+  const [contextTab, setContextTab] = useState<WorkContext>("artifact");
+  const [workActions, setWorkActions] = useState(false);
+  const [homeDraft, setHomeDraft] = useState<ComposerDraft>({ ...EMPTY_DRAFT });
+  const [sourceTaskId, setSourceTaskId] = useState<string | null>(null);
+  const sourcePrepared = useRef<Task | null>(null);
+  const sourceSession = useRef(0);
+  const [sourceDialogId, setSourceDialogId] = useState(0);
+  const [workProjectId, setWorkProjectId] = useState<string | null>(null);
+  const [sourceProject, setSourceProject] = useState<ProjectInfo | undefined>();
   const initialSelectionLoaded = useRef(false);
   const [libraryEntryId, setLibraryEntryId] = useState<string | null>(null);
   const composerDrafts = useRef(new Map<string, ComposerDraft>());
@@ -1608,13 +1452,15 @@ export function App() {
   const [composerDraft, setComposerDraft] = useState<ComposerDraft>(() => ({
     ...EMPTY_DRAFT,
   }));
+  const composerKey =
+    selectedTaskId ?? (workProjectId ? `project:${workProjectId}:new` : "new");
   useEffect(() => {
-    composerDrafts.current.set(selectedTaskId ?? "new", composerDraft);
-  }, [selectedTaskId, composerDraft]);
+    composerDrafts.current.set(composerKey, composerDraft);
+  }, [composerKey, composerDraft]);
   const navigate = (next: Page) => {
     if (next === "work")
       setComposerDraft(
-        composerDrafts.current.get(selectedTaskId ?? "new") ?? composerDraft,
+        composerDrafts.current.get(composerKey) ?? composerDraft,
       );
     setPage(next);
     closeTransientSidebar();
@@ -1636,15 +1482,34 @@ export function App() {
   const linkedProject = snapshot?.projects.find(
     (project) => project.id === linkedProjectId,
   );
-  const triple = snapshot?.desktop?.mode !== "single";
+  const workProject = snapshot?.projects.find(
+    (project) => project.id === (linkedProjectId ?? workProjectId),
+  );
+  const projectTasks = workProject
+    ? (snapshot?.tasks ?? [])
+        .filter(
+          (item) =>
+            !item.archivedAt &&
+            !item.deletedAt &&
+            (item.projectId === workProject.id ||
+              item.events.some(
+                (event) =>
+                  event.type === "project.initialized" &&
+                  event.data?.projectId === workProject.id,
+              )),
+        )
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    : [];
+
   const acceptSnapshot = useCallback((value: Snapshot) => {
-    setSnapshot((current) => {
-      const currentRevision = current?.desktop?.revision ?? -1;
-      const incomingRevision = value.desktop?.revision ?? -1;
-      return current && currentRevision > incomingRevision
+    const current = snapshotRef.current;
+    const next =
+      current &&
+      (current.desktop?.revision ?? -1) > (value.desktop?.revision ?? -1)
         ? { ...value, desktop: current.desktop }
         : value;
-    });
+    snapshotRef.current = next;
+    setSnapshot(next);
     if (!initialSelectionLoaded.current) {
       initialSelectionLoaded.current = true;
       if (value.desktop) {
@@ -1741,11 +1606,17 @@ export function App() {
           const artifactId = result.tasks
             .find((task) => task.id === command.taskId)
             ?.artifacts.at(-1)?.id;
-          if (artifactId)
+          if (artifactId) {
             setArtifactFocus({ taskId: command.taskId, artifactId });
+            setContextTab("artifact");
+          }
         }
         if (command.type === "window.focus" || command.type === "window.open") {
           setPage("work");
+          if (command.window !== "main")
+            setContextTab(
+              command.window === "artifact" ? "artifact" : "process",
+            );
           setFocusRequest((current) => ({
             panel: command.window,
             sequence: current.sequence + 1,
@@ -1790,20 +1661,28 @@ export function App() {
     };
   }, [acceptSnapshot]);
   const closeDialog = useCallback(() => {
+    navigationRevision.current += 1;
+    sourceSession.current += 1;
     setDialog(null);
     setSourceDraft(null);
   }, []);
   const newWork = useCallback(() => {
-    if (page === "work")
-      composerDrafts.current.set(selectedTaskId ?? "new", composerDraft);
+    if (page === "work") composerDrafts.current.set(composerKey, composerDraft);
     setSelectedTaskId(null);
+    setWorkProjectId(null);
     void dispatch({ type: "window.select", taskId: null });
-    setPage("work");
+    setPage("home");
     if (!sidebarPinned) setSidebarOpen(false);
-    setComposerDraft({ ...EMPTY_DRAFT });
     setSeedRevision((value) => value + 1);
     setNewWorkRevision((value) => value + 1);
-  }, [dispatch, composerDraft, selectedTaskId, sidebarPinned, page]);
+  }, [
+    dispatch,
+    composerDraft,
+    selectedTaskId,
+    composerKey,
+    sidebarPinned,
+    page,
+  ]);
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
@@ -1817,15 +1696,28 @@ export function App() {
   const selectTask = (id: string, created?: Task) => {
     const selected =
       created ??
-      snapshot?.tasks.find(
+      snapshotRef.current?.tasks.find(
         (item) => item.id === id && !item.archivedAt && !item.deletedAt,
       );
     if (!selected) return;
-    if (page === "work")
-      composerDrafts.current.set(selectedTaskId ?? "new", composerDraft);
+    if (page === "work") composerDrafts.current.set(composerKey, composerDraft);
     setSelectedTaskId(id);
+    setWorkProjectId(
+      selected.projectId ??
+        (selected.events.findLast(
+          (event) => event.type === "project.initialized",
+        )?.data?.projectId as string | undefined) ??
+        null,
+    );
     void dispatch({ type: "window.select", taskId: id });
+    void dispatch({ type: "window.expand", window: null });
     setPage("work");
+    setContextTab("artifact");
+    setFocusRequest((current) => ({
+      panel: "main",
+      sequence: current.sequence + 1,
+    }));
+    setWorkActions(false);
     if (!sidebarPinned) setSidebarOpen(false);
     setComposerDraft(
       composerDrafts.current.get(id) ?? {
@@ -1837,16 +1729,66 @@ export function App() {
     );
     setSeedRevision((value) => value + 1);
   };
+  const openProject = (project: ProjectInfo, intent?: "understand" | "new") => {
+    if (page === "work") composerDrafts.current.set(composerKey, composerDraft);
+    setSelectedProjectId(project.id);
+    setWorkProjectId(project.id);
+    const related = (snapshotRef.current?.tasks ?? [])
+      .filter(
+        (item) =>
+          !item.archivedAt &&
+          !item.deletedAt &&
+          (item.projectId === project.id ||
+            item.events.some(
+              (event) =>
+                event.type === "project.initialized" &&
+                event.data?.projectId === project.id,
+            )),
+      )
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    if (!intent && related[0]) selectTask(related[0].id);
+    else {
+      setSelectedTaskId(null);
+      void dispatch({ type: "window.select", taskId: null });
+      const key = `project:${project.id}:new`;
+      const stored = composerDrafts.current.get(key);
+      setComposerDraft(
+        stored
+          ? stored
+          : {
+              ...EMPTY_DRAFT,
+              kind: "project",
+              text:
+                intent === "understand"
+                  ? "阅读项目正式资料，梳理目标、当前状态、已完成与未验证的工作、阻塞和下一步。给出可追溯依据，并保存项目状态说明。"
+                  : "",
+            },
+      );
+      setPage("work");
+      setSeedRevision((value) => value + 1);
+    }
+    setContextTab("project");
+    setFocusRequest((current) => ({
+      panel: "main",
+      sequence: current.sequence + 1,
+    }));
+    setWorkActions(false);
+    closeTransientSidebar();
+  };
   const showDetail = (sourceTask: Task, message: Task["messages"][number]) => {
     if (selectedTaskId !== sourceTask.id || page !== "work")
       selectTask(sourceTask.id);
     setMessageDetail({
       taskId: sourceTask.id,
       id: message.id,
-      title: `${memberName(message.member)} · 完整答复`,
+      title: `${memberName(message.member, sourceTask.teamMode)} · 完整答复`,
       content: message.content,
     });
-    void dispatch({ type: "window.rightMode", mode: "artifact" });
+    setContextTab("artifact");
+    setFocusRequest((current) => ({
+      panel: "artifact",
+      sequence: current.sequence + 1,
+    }));
   };
   const showArtifact = (sourceTask: Task, artifactId: string) => {
     if (!sourceTask.artifacts.some((artifact) => artifact.id === artifactId)) {
@@ -1857,54 +1799,182 @@ export function App() {
       selectTask(sourceTask.id);
     setMessageDetail(null);
     setArtifactFocus({ taskId: sourceTask.id, artifactId });
-    void dispatch({ type: "window.rightMode", mode: "artifact" });
+    setContextTab("artifact");
+    setFocusRequest((current) => ({
+      panel: "artifact",
+      sequence: current.sequence + 1,
+    }));
   };
   const createTask = async (
     goal: string,
     kind: TaskKind,
     member: MemberId,
     profileId?: string,
+    skillPolicy?: SkillPolicy,
     run = true,
+    project?: ProjectInfo,
   ) => {
-    const existingIds = new Set(snapshot?.tasks.map((item) => item.id) ?? []);
+    const submittedNavigation = navigationRevision.current;
+    const requestId = crypto.randomUUID();
+    const existingIds = new Set(
+      snapshotRef.current?.tasks.map((item) => item.id) ?? [],
+    );
+    const submittedDraft = project ? composerDraft : undefined;
+    const taskGoal = project ? projectDiscussionGoal(project, goal) : goal;
+    const preparedSources: { title: string; text: string }[] = [];
+    if (project) {
+      for (const doc of projectContextDocuments(project)) {
+        const read = await dispatch({
+          type: "project.read",
+          projectId: project.id,
+          worktreePath: doc.worktreePath,
+          path: doc.path,
+        });
+        const browser = read?.projectBrowser,
+          preview = browser?.preview;
+        if (
+          !browser ||
+          browser.projectId !== project.id ||
+          browser.worktreePath !== doc.worktreePath ||
+          preview?.path !== doc.path ||
+          !preview.content?.trim()
+        ) {
+          setError(
+            `未能读取项目资料「${doc.path}」：${browser?.error ?? preview?.reason ?? "没有取得对应正文"}。工作尚未启动，输入已保留，可检查文件后重试。`,
+          );
+          return null;
+        }
+        preparedSources.push({
+          title: `${project.name} / ${doc.path}`,
+          text: `项目正式资料：${doc.absolutePath}\n读取时间：${new Date().toISOString()}${preview.truncated ? "；文件较长，以下仅为可预览部分" : ""}\n\n${preview.content}`,
+        });
+      }
+    }
     const result = await dispatch({
       type: "task.create",
-      goal,
+      requestId,
+      ...(project
+        ? {
+            projectId: project.id,
+            title: `${project.name} · ${goal.startsWith("阅读项目正式资料，梳理目标") ? "项目状态理解" : goal.slice(0, 35)}`,
+          }
+        : {}),
+      goal: taskGoal,
       kind,
       member,
+      skillPolicy: skillPolicy ?? DEFAULT_SKILL_POLICY,
       ...(profileId ? { profileId } : {}),
     });
-    const created = result?.tasks.find((item) => !existingIds.has(item.id));
+    const created =
+      result?.tasks.find((item) => item.requestId === requestId) ??
+      result?.tasks.find(
+        (item) =>
+          !existingIds.has(item.id) &&
+          item.goal === taskGoal &&
+          item.kind === kind &&
+          item.member === member,
+      );
     if (!created) return null;
-    selectTask(created.id, created);
-    if (run) await dispatch({ type: "task.run", taskId: created.id });
-    return created;
+    let prepared = created;
+    const stillPreparing = () => {
+      const current = snapshotRef.current?.tasks.find(
+        (item) => item.id === created.id,
+      );
+      return (
+        current &&
+        !current.archivedAt &&
+        !current.deletedAt &&
+        current.goalVersion === prepared.goalVersion &&
+        !["running", "waiting"].includes(current.status)
+      );
+    };
+    for (const source of preparedSources) {
+      if (!stillPreparing()) {
+        setError(
+          "这项工作在准备资料期间已发生变化，已停止自动加入和启动。请在原工作确认下一步。",
+        );
+        return prepared;
+      }
+      const priorVersion = prepared.goalVersion;
+      const priorMessages = JSON.stringify(
+        prepared.messages
+          .filter((message) => message.role === "user")
+          .map((message) => [message.id, message.content]),
+      );
+      const attached = await dispatch({
+        type: "source.addText",
+        taskId: created.id,
+        expectedGoalVersion: priorVersion,
+        ...source,
+      });
+      const next = attached?.tasks.find((item) => item.id === created.id);
+      if (!next) return prepared;
+      const nextMessages = JSON.stringify(
+        next.messages
+          .filter((message) => message.role === "user")
+          .map((message) => [message.id, message.content]),
+      );
+      if (
+        (next.goalVersion !== priorVersion &&
+          next.goalVersion !== priorVersion + 1) ||
+        nextMessages !== priorMessages ||
+        ["running", "waiting"].includes(next.status)
+      ) {
+        setError(
+          "项目资料准备期间收到了新的工作要求，已停止自动启动，请在该工作中继续。",
+        );
+        return next;
+      }
+      prepared = next;
+    }
+    if (navigationRevision.current === submittedNavigation)
+      selectTask(created.id, prepared);
+    if (project) {
+      const draftKey = `project:${project.id}:new`;
+      if (composerDrafts.current.get(draftKey) === submittedDraft)
+        composerDrafts.current.delete(draftKey);
+    }
+    if (run && (!project || stillPreparing()))
+      await dispatch({ type: "task.run", taskId: created.id });
+    return prepared;
   };
-  const ensureTask = async () =>
-    task ??
-    createTask(
+  const ensureTask = async () => {
+    const existing =
+      snapshotRef.current?.tasks.find((item) => item.id === sourceTaskId) ??
+      sourcePrepared.current;
+    if (existing) return existing;
+    const created = await createTask(
       sourceDraft?.text.trim() ||
         "理解并整理这次导入的资料，形成清楚、有依据的说明。",
       sourceDraft?.kind ?? "research",
       sourceDraft?.member ?? "coordinator",
       sourceDraft?.profileId || undefined,
+      sourceDraft?.skillPolicy,
       false,
+      sourceProject,
     );
-  const chooseDirection = (direction: (typeof DIRECTIONS)[number]) => {
-    setComposerDraft((current) => ({
-      ...current,
-      text: direction.seed,
-      kind: direction.kind,
-    }));
-    setSeedRevision((value) => value + 1);
+    if (sourceSession.current === sourceDialogId)
+      sourcePrepared.current = created;
+    return created;
   };
   const addSource = () => {
-    setSourceDraft(!selectedTaskId ? { ...composerDraft } : null);
-    if (page === "library") {
-      setSelectedTaskId(null);
-      void dispatch({ type: "window.select", taskId: null });
-    }
+    sourceSession.current += 1;
+    setSourceDialogId(sourceSession.current);
+    sourcePrepared.current = null;
+    setSourceTaskId(page === "work" ? selectedTaskId : null);
+    setSourceProject(page === "work" ? workProject : undefined);
+    setSourceDraft(
+      page === "home"
+        ? { ...homeDraft }
+        : !selectedTaskId
+          ? { ...composerDraft }
+          : null,
+    );
     setDialog("source");
+  };
+  const openTaskArtifact = (taskId: string, artifactId: string) => {
+    const owner = snapshotRef.current?.tasks.find((item) => item.id === taskId);
+    if (owner) showArtifact(owner, artifactId);
   };
   const statusMessage =
     connection === "unavailable"
@@ -1916,7 +1986,7 @@ export function App() {
           : null;
   return (
     <div
-      className={`app-shell integrated-shell ${triple ? "three-panel-layout" : "focused-layout"} ${sidebarOpen ? "sidebar-is-open" : ""} ${sidebarPinned ? "sidebar-is-pinned" : ""}`}
+      className={`app-shell integrated-shell ${page === "radar" ? "radar-mode" : ""} product-shell ${sidebarOpen ? "sidebar-is-open" : ""} ${sidebarPinned ? "sidebar-is-pinned" : ""}`}
     >
       <Sidebar
         snapshot={snapshot}
@@ -1940,56 +2010,97 @@ export function App() {
               aria-label={sidebarOpen ? "收起侧栏" : "展开侧栏"}
               onClick={() => setSidebarOpen(!sidebarOpen)}
             >
-              <Menu size={17} />
+              <Menu size={18} />
             </button>
-            <span className="breadcrumb">
-              {
-                {
-                  work: "工作空间",
-                  radar: "雷达",
-                  projects: "项目",
-                  library: "本地 Lib",
-                  models: "AI 模型",
-                  team: "Agent 团队",
-                  environment: "本机设置",
-                }[page]
-              }
-            </span>
-            <ChevronRight size={12} />
-            <strong>
-              {page === "work"
-                ? (task?.title ?? "新的开始")
-                : page === "radar"
-                  ? "每日情报与信息源"
-                  : isSettingsPage(page)
-                    ? (
-                        {
-                          models: "连接与能力",
-                          team: "角色与协作",
-                          environment: "目录与规则",
-                        } as const
-                      )[page as "models" | "team" | "environment"]
-                    : "我的工作"}
-            </strong>
-          </div>
-          <div className="topbar-actions">
-            {page === "work" ? (
-              <WorkspaceControls
-                desktop={snapshot?.desktop}
-                dispatch={dispatch}
-              />
+            {page === "radar" ? (
+              <div id="radar-page-header" />
             ) : (
-              <button className="text-button" onClick={() => navigate("work")}>
-                回到工作区
-                <ArrowUpRight size={13} />
-              </button>
+              <>
+                {page === "work" ||
+                ["attention", "deliveries", "routines"].includes(page) ? (
+                  <>
+                    <button
+                      className="breadcrumb"
+                      onClick={() => navigate("home")}
+                    >
+                      工作台
+                    </button>
+                    <ChevronRight size={13} />
+                  </>
+                ) : null}
+                <h1 className="location-title">
+                  {
+                    {
+                      home: "工作台",
+                      work: workProject?.name ?? task?.title ?? "新工作",
+                      projects: "项目",
+                      library: "资产",
+                      models: "设置",
+                      team: "设置",
+                      environment: "设置",
+                      service: "设置",
+                      attention: "待我处理",
+                      deliveries: "交付",
+                      routines: "例行工作",
+                      radar: "雷达",
+                    }[page]
+                  }
+                </h1>
+              </>
             )}
-            <span className="topbar-local">
-              <span className={`tiny-dot ${connected ? "green" : ""}`} />
-              {connected ? "本机工作台" : "未连接"}
-            </span>
           </div>
+          {page === "work" && task ? (
+            <div className="topbar-actions">
+              <Status task={task} />
+              <button
+                className="icon-button"
+                aria-label="工作操作"
+                aria-expanded={workActions}
+                onClick={() => setWorkActions(!workActions)}
+              >
+                <MoreHorizontal size={19} />
+              </button>
+            </div>
+          ) : null}
         </header>
+        {page === "work" && workProject ? (
+          <div className="project-work-context">
+            <button
+              className="text-button"
+              onClick={() => {
+                setProjectSection("software");
+                navigate("projects");
+              }}
+            >
+              <ChevronRight size={14} className="back-chevron" />
+              所有项目
+            </button>
+            <label htmlFor="project-work-choice">当前工作</label>
+            <select
+              id="project-work-choice"
+              value={task?.id ?? ""}
+              onChange={(event) =>
+                event.target.value
+                  ? selectTask(event.target.value)
+                  : openProject(workProject, "new")
+              }
+            >
+              <option value="">新的项目工作</option>
+              {projectTasks.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {STATUS_NAMES[item.status]} / {item.title}
+                </option>
+              ))}
+            </select>
+            <button
+              className="button secondary"
+              onClick={() => openProject(workProject, "new")}
+            >
+              <Plus size={14} />
+              新工作
+            </button>
+          </div>
+        ) : null}
         {statusMessage ? (
           <div
             className={`connection-banner ${connection === "loading" ? "loading" : ""}`}
@@ -2012,171 +2123,170 @@ export function App() {
             ) : null}
           </div>
         ) : null}
-        <WorkspacePanels
+        <div className="home-host" hidden={page !== "home"}>
+          <WorkbenchHome
+            snapshot={snapshot}
+            onTask={selectTask}
+            onPage={navigate}
+            onProject={(project) => openProject(project)}
+            onMedia={openMediaWork}
+          >
+            <Composer
+              snapshot={snapshot}
+              connected={connected}
+              dispatch={dispatch}
+              draft={homeDraft}
+              setDraft={setHomeDraft}
+              seedRevision={page === "home" ? seedRevision : 0}
+              onAdd={addSource}
+              onConfigure={() => navigate("models")}
+              onCreate={async (...args) => {
+                const created = await createTask(...args);
+                if (created)
+                  setHomeDraft((current) =>
+                    current === homeDraft ? { ...EMPTY_DRAFT } : current,
+                  );
+              }}
+            />
+          </WorkbenchHome>
+        </div>
+        <WorkSurface
           desktop={snapshot?.desktop}
           dispatch={dispatch}
           hidden={page !== "work"}
           focusRequest={focusRequest}
+          context={contextTab}
+          onContext={setContextTab}
+          sourceCount={task?.sources.length ?? 0}
+          project={
+            workProject ? (
+              <Projects
+                overviewOnly
+                hideHeading
+                snapshot={snapshot}
+                dispatch={dispatch}
+                onInitialize={() => setDialog("project")}
+                onTask={selectTask}
+                selectedProjectId={workProject.id}
+                onSelectProject={(project) => openProject(project)}
+                onArtifact={openTaskArtifact}
+                onDiscussProject={openProject}
+                onShowFiles={() => {
+                  setContextTab("files");
+                  setFocusRequest((current) => ({
+                    panel: "artifact",
+                    sequence: current.sequence + 1,
+                  }));
+                }}
+              />
+            ) : undefined
+          }
+          files={
+            workProject ? (
+              <ProjectExplorer
+                projectOnly
+                snapshot={snapshot}
+                dispatch={dispatch}
+                selectedProjectId={workProject.id}
+                onSelectProject={(project) => openProject(project)}
+                onDiscussProject={(project) => openProject(project, "new")}
+              />
+            ) : undefined
+          }
           decision={
-            <section
-              className={`decision-pane ${task ? "has-task" : "is-new"}`}
-            >
-              {task &&
-              (task.status !== "completed" ||
-                linkedProjectId ||
-                task.kind === "project") ? (
-                <div
-                  className="decision-task-actions"
-                  role="group"
-                  aria-label="当前工作操作"
-                >
-                  <TaskControl
-                    key={`control:${task.id}`}
-                    task={task}
-                    dispatch={dispatch}
-                  />
-                  {linkedProjectId ? (
-                    <button
-                      className="text-button"
-                      disabled={!linkedProject}
-                      onClick={() => {
-                        setSelectedProjectId(String(linkedProjectId));
-                        setPage("projects");
-                      }}
-                    >
-                      <FolderOpen size={14} />
-                      查看项目
-                    </button>
-                  ) : task.kind === "project" ? (
-                    <button
-                      className="text-button"
-                      aria-label="将当前讨论创建为新项目"
-                      onClick={() => setDialog("project")}
-                    >
-                      <FilePlus2 size={14} />
-                      创建项目…
-                    </button>
-                  ) : null}
+            <section className="decision-pane has-task">
+              {task && task.status !== "completed" ? (
+                <div className="work-state-actions">
+                  <TaskControl task={task} dispatch={dispatch} />
                 </div>
               ) : null}
               {task ? (
                 <Conversation
                   key={`conversation:${task.id}`}
+                  active={page === "work"}
                   task={task}
                   dispatch={dispatch}
                   onDetail={(message) => showDetail(task, message)}
                   onArtifact={(id) => showArtifact(task, id)}
                 />
               ) : (
-                <div className="welcome-scroll">
-                  <div className="welcome">
-                    <div className="welcome-kicker">
-                      <span className="welcome-mark">
-                        <Sparkles size={17} strokeWidth={1.5} />
-                      </span>
-                      为好奇留一点空间
-                    </div>
-                    <h1>
-                      把一个想法，
-                      <br />
-                      变成可以继续的工作<span>。</span>
-                    </h1>
-                    <p className="welcome-description">
-                      一起研究、理解和创造。
-                      <br />
-                      有用的判断与成果，都会留下来。
-                    </p>
-                    <div className="direction-list">
-                      {DIRECTIONS.map((direction) => (
-                        <button
-                          className="direction"
-                          key={direction.kind}
-                          onClick={() => chooseDirection(direction)}
-                        >
-                          <span className={`direction-icon ${direction.kind}`}>
-                            <direction.icon size={19} strokeWidth={1.55} />
-                          </span>
-                          <span>
-                            <strong>{direction.label}</strong>
-                            <small>{direction.description}</small>
-                          </span>
-                          <ArrowUpRight size={16} />
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+                <div className="work-empty">
+                  <h2>{workProject ? "从当前项目继续推进" : "开始一项工作"}</h2>
+                  <p>
+                    {workProject
+                      ? projectContextDocuments(workProject).length
+                        ? `提出要解决的问题。发送时带入 ${projectContextDocuments(workProject).length} 份已登记的项目正式资料。`
+                        : "尚无可自动读取的项目正式资料。可以先查看文件，或添加资料后与团队讨论。"
+                      : "写下目标或导入资料，与团队一起完成。"}
+                  </p>
+                  {workProject ? (
+                    <button
+                      className="text-button"
+                      onClick={() => {
+                        setContextTab("files");
+                        setFocusRequest((current) => ({
+                          panel: "artifact",
+                          sequence: current.sequence + 1,
+                        }));
+                      }}
+                    >
+                      查看项目资料
+                      <ArrowRight size={14} />
+                    </button>
+                  ) : null}
                 </div>
               )}
               <Composer
-                key={`composer:${task?.id ?? `new-${newWorkRevision}`}`}
+                key={`composer:${task?.id ?? `${workProject?.id ?? "new"}-${newWorkRevision}`}`}
                 task={task}
                 snapshot={snapshot}
                 connected={connected}
                 dispatch={dispatch}
-                onCreate={async (text, kind, member, profileId) => {
-                  await createTask(text, kind, member, profileId);
+                onCreate={async (
+                  text,
+                  kind,
+                  member,
+                  profileId,
+                  skillPolicy,
+                ) => {
+                  await createTask(
+                    text,
+                    workProject ? "project" : kind,
+                    member,
+                    profileId,
+                    skillPolicy,
+                    true,
+                    workProject,
+                  );
                 }}
                 onAdd={addSource}
                 draft={composerDraft}
                 setDraft={setComposerDraft}
-                seedRevision={seedRevision}
+                seedRevision={page === "work" ? seedRevision : 0}
                 onConfigure={() => setPage("models")}
               />
             </section>
           }
-          evidence={
-            <div className="evidence-workspace">
-              <div className="evidence-toolbar">
-                <div className="panel-tabs">
-                  <button
-                    className={evidenceTab === "process" ? "active" : ""}
-                    onClick={() => setEvidenceTab("process")}
-                  >
-                    Agent 过程
-                  </button>
-                  <button
-                    className={evidenceTab === "sources" ? "active" : ""}
-                    onClick={() => setEvidenceTab("sources")}
-                  >
-                    资料 <span>{task?.sources.length ?? 0}</span>
-                  </button>
-                </div>
-                {evidenceTab === "sources" ? (
-                  <button className="text-button" onClick={addSource}>
-                    <Plus size={13} />
-                    添加资料
-                  </button>
-                ) : null}
-              </div>
-              {evidenceTab === "process" ? (
-                task ? (
-                  <ProcessView
-                    task={task}
-                    dispatch={dispatch}
-                    onArtifactOpen={(id) => showArtifact(task, id)}
-                  />
-                ) : (
-                  <div className="collection-empty pane-empty">
-                    <Layers2 size={30} strokeWidth={1.3} />
-                    <h2>看见团队怎样推进</h2>
-                    <p>
-                      从一项工作开始，成员分工、工具活动和公开工作摘要会在这里展开。
-                    </p>
-                  </div>
-                )
-              ) : (
-                <SourceList
-                  key={`sources:${task?.id ?? "new"}`}
-                  sources={task?.sources ?? []}
-                  dispatch={dispatch}
-                  onAdd={addSource}
-                  onLibrary={(entryId) => {
-                    setLibraryEntryId(entryId);
-                    setPage("library");
-                  }}
-                />
-              )}
-            </div>
+          process={
+            task ? (
+              <ProcessView
+                task={task}
+                dispatch={dispatch}
+                onArtifactOpen={(id) => showArtifact(task, id)}
+              />
+            ) : null
+          }
+          sources={
+            <SourceList
+              key={`sources:${task?.id ?? "new"}`}
+              sources={task?.sources ?? []}
+              dispatch={dispatch}
+              onAdd={addSource}
+              onLibrary={(entryId) => {
+                setLibraryEntryId(entryId);
+                navigate("library");
+              }}
+            />
           }
           artifact={
             task ? (
@@ -2201,6 +2311,8 @@ export function App() {
                 }
                 task={task}
                 dispatch={dispatch}
+                snapshot={snapshot ?? undefined}
+                onTask={selectTask}
               />
             ) : (
               <div className="collection-empty pane-empty">
@@ -2220,6 +2332,8 @@ export function App() {
             dispatch={dispatch}
             connected={connected}
             onTask={selectTask}
+            onMediaCreated={openMediaWork}
+            onMediaSetup={openMediaSetup}
           />
         ) : null}
         <div
@@ -2231,46 +2345,134 @@ export function App() {
             connected={connected}
             section={
               isSettingsPage(page)
-                ? (page as "models" | "team" | "environment")
+                ? (page as "models" | "team" | "environment" | "service")
                 : "models"
             }
+            onSectionChange={(section) => setPage(section)}
             onOpenModels={() => setPage("models")}
+            onTask={selectTask}
           />
         </div>
-        <ProjectWorkspace hidden={page !== "projects"}>
+        {page === "projects" ? (
+          <ProjectSupport
+            snapshot={snapshot}
+            section={projectSection}
+            onSection={setProjectSection}
+          />
+        ) : null}
+        <div
+          className="project-feature-page"
+          hidden={page !== "projects" || projectSection !== "software"}
+        >
           <Projects
             snapshot={snapshot}
             dispatch={dispatch}
             onInitialize={() => setDialog("project")}
             onTask={selectTask}
-            selectedProjectId={selectedProjectId}
-            onSelectProject={(project) => setSelectedProjectId(project.id)}
-            onDiscussProject={(project) => {
-              setSelectedProjectId(project.id);
-              requestAnimationFrame(() =>
-                document
-                  .querySelector<HTMLTextAreaElement>(
-                    ".project-decision textarea",
-                  )
-                  ?.focus(),
-              );
-            }}
+            selectedProjectId={null}
+            onSelectProject={(project) => openProject(project)}
+            onClearSelection={() => setSelectedProjectId(null)}
+            onArtifact={openTaskArtifact}
+            onDiscussProject={openProject}
           />
-          {page === "projects" ? (
-            <ProjectDecision
-              key={selectedProject?.id ?? "none"}
-              project={selectedProject}
+        </div>
+        {snapshot ? (
+          <>
+            <div
+              className="project-feature-page"
+              hidden={page !== "projects" || projectSection !== "media"}
+            >
+              <MediaProjects
+                active={page === "projects" && projectSection === "media"}
+                snapshot={snapshot}
+                dispatch={dispatch}
+                onTask={selectTask}
+                focus={mediaFocus}
+                onArtifact={openTaskArtifact}
+              />
+            </div>
+            <div
+              className="project-feature-page"
+              hidden={page !== "deliveries"}
+            >
+              <DeliveryOverview
+                snapshot={snapshot}
+                dispatch={dispatch}
+                onTask={selectTask}
+              />
+            </div>
+            <div className="project-feature-page" hidden={page !== "routines"}>
+              <RoutinesPanel
+                snapshot={snapshot}
+                dispatch={dispatch}
+                onTask={selectTask}
+              />
+            </div>
+          </>
+        ) : null}
+        {page === "attention" ? (
+          <div className="support-page">
+            <Attention
               snapshot={snapshot}
               dispatch={dispatch}
-              connected={connected}
-              drafts={composerDrafts.current}
-              onOpenTask={selectTask}
-              onDetail={showDetail}
-              onArtifact={showArtifact}
-              onConfigure={() => setPage("models")}
+              onTask={selectTask}
+              onSection={navigate}
+              onService={() => navigate("service")}
+              standalone
             />
-          ) : null}
-        </ProjectWorkspace>
+          </div>
+        ) : null}
+        {workActions && task && snapshot ? (
+          <Modal
+            title="工作操作"
+            description={task.title}
+            onClose={() => setWorkActions(false)}
+          >
+            <div className="work-action-options">
+              {linkedProjectId ? (
+                <button
+                  className="button secondary"
+                  disabled={!linkedProject}
+                  onClick={() => {
+                    setWorkActions(false);
+                    setSelectedProjectId(String(linkedProjectId));
+                    setProjectSection("software");
+                    navigate("projects");
+                  }}
+                >
+                  <FolderOpen size={15} />
+                  查看所属项目
+                </button>
+              ) : task.kind === "project" ? (
+                <button
+                  className="button secondary"
+                  onClick={() => {
+                    setWorkActions(false);
+                    setDialog("project");
+                  }}
+                >
+                  <FilePlus2 size={15} />
+                  将讨论创建为项目
+                </button>
+              ) : null}
+              <TaskRoutineAction
+                task={task}
+                snapshot={snapshot}
+                dispatch={dispatch}
+              />
+              <TaskRemoteAction
+                key={task.id}
+                task={task}
+                snapshot={snapshot}
+                dispatch={dispatch}
+                onTask={(id) => {
+                  setWorkActions(false);
+                  selectTask(id);
+                }}
+              />
+            </div>
+          </Modal>
+        ) : null}
         {page === "library" ? (
           <Library
             key={`${snapshot?.settings.aiRoot}:${libraryEntryId}`}
@@ -2278,6 +2480,8 @@ export function App() {
             snapshot={snapshot}
             dispatch={dispatch}
             onTask={selectTask}
+            onMediaCreated={openMediaWork}
+            onMediaSetup={openMediaSetup}
             onAdd={addSource}
             selectedTaskId={selectedTaskId}
           />
@@ -2301,14 +2505,17 @@ export function App() {
       ) : null}
       {dialog === "source" ? (
         <SourceDialog
+          key={sourceDialogId}
           connected={connected}
           dispatch={dispatch}
           ensureTask={ensureTask}
-          onClose={closeDialog}
+          onClose={() => {
+            if (sourceSession.current === sourceDialogId) closeDialog();
+          }}
         />
       ) : dialog === "project" ? (
         <ProjectDialog
-          task={task}
+          task={page === "work" ? task : undefined}
           connected={connected}
           dispatch={dispatch}
           onClose={closeDialog}

@@ -200,8 +200,14 @@ function input(
   element.dispatchEvent(new window.Event("input", { bubbles: true }));
 }
 function tab(document: Document, name: string) {
-  return Array.from(document.querySelectorAll(".page-tabs button")).find(
-    (button) => button.textContent === name,
+  const label =
+    name === "常驻成员"
+      ? "团队成员"
+      : name === "本机环境"
+        ? "本机与规则"
+        : name;
+  return Array.from(document.querySelectorAll(".settings-groups button")).find(
+    (button) => button.textContent === label,
   );
 }
 function field(
@@ -215,6 +221,46 @@ function field(
       ?.querySelector("input,select,textarea") ?? null
   );
 }
+
+test("settings keeps one current surface and one member editor while account navigation preserves configuration drafts", async () => {
+  await withSettings(async ({ document, window, commands, act }) => {
+    const visible = (selector: string) =>
+      [...document.querySelectorAll(selector)].filter(
+        (element) => !element.closest("[hidden]"),
+      );
+    assert.equal(visible(".profile-form").length, 1);
+    assert.equal(visible(".service-settings").length, 0);
+    assert.equal(visible(".default-model-settings").length, 0);
+    await act(async () => click(window, tab(document, "团队成员")));
+    assert.equal(visible(".member-settings-card").length, 1);
+    await act(async () =>
+      click(
+        window,
+        [...document.querySelectorAll(".settings-member-picker button")].find(
+          (button) => button.textContent?.includes("研究员"),
+        ),
+      ),
+    );
+    const prompt = document.querySelector('[aria-label="研究员的提示词"]')!;
+    assert.equal(prompt.closest("[hidden]"), null);
+    await act(async () => input(window, prompt, "保留成员草稿"));
+    await act(async () => click(window, tab(document, "账户与服务")));
+    assert.equal(visible(".service-settings").length, 1);
+    assert.equal(visible(".profile-form").length, 0);
+    assert.equal(visible(".member-settings-card").length, 0);
+    await act(async () => click(window, tab(document, "团队成员")));
+    const restored = document.querySelector(
+      '[aria-label="研究员的提示词"]',
+    ) as HTMLTextAreaElement;
+    assert.equal(restored.value || restored.defaultValue, "保留成员草稿");
+    assert.equal(visible(".member-settings-card").length, 1);
+    assert.equal(
+      commands.length,
+      0,
+      "navigating settings does not save drafts or make model requests",
+    );
+  });
+});
 
 test("member inputs retain empty and trailing text, reset only the prompt, and save edited fields over the latest snapshot", async () => {
   await withSettings(
@@ -488,7 +534,12 @@ test("dedicated settings pages keep model, team and environment drafts separate 
   await withSettings(
     async ({ document, window, commands, current, navigate, act }) => {
       assert.equal(document.querySelector(".page-tabs"), null);
-      assert.equal(document.querySelector("h1")!.textContent, "多 Agent 团队");
+      assert.equal(document.querySelector("h1")!.textContent, "设置");
+      assert.equal(
+        document.querySelector('.settings-groups [aria-current="page"]')!
+          .textContent,
+        "团队成员",
+      );
       assert.ok(
         document
           .querySelector(".profile-form")!
@@ -512,7 +563,11 @@ test("dedicated settings pages keep model, team and environment drafts separate 
       await act(async () =>
         click(window, document.querySelector(".team-model-reference button")),
       );
-      assert.equal(document.querySelector("h1")!.textContent, "AI 模型");
+      assert.equal(
+        document.querySelector('.settings-groups [aria-current="page"]')!
+          .textContent,
+        "模型连接",
+      );
       assert.equal(
         document
           .querySelector(".profile-form")!
@@ -539,7 +594,11 @@ test("dedicated settings pages keep model, team and environment drafts separate 
         ),
       );
       await act(async () => navigate("environment"));
-      assert.equal(document.querySelector("h1")!.textContent, "本机环境");
+      assert.equal(
+        document.querySelector('.settings-groups [aria-current="page"]')!
+          .textContent,
+        "本机与规则",
+      );
       await act(async () =>
         input(window, field(document, "AI 根目录"), "/draft/AI"),
       );
@@ -719,7 +778,11 @@ test("member model status follows assigned profile and opens that exact connecti
       assert.match(status.textContent!, /DeepSeek/);
       assert.match(status.textContent!, /未配置密钥/);
       await act(async () => click(window, status.querySelector("button")));
-      assert.equal(document.querySelector("h1")!.textContent, "AI 模型");
+      assert.equal(
+        document.querySelector('.settings-groups [aria-current="page"]')!
+          .textContent,
+        "模型连接",
+      );
       assert.match(
         document.querySelector(".profile-item.active")!.textContent!,
         /DeepSeek/,

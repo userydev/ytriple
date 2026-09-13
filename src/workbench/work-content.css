@@ -1,0 +1,518 @@
+/* The active content is the surface; controls and evidence do not add outer cards. */
+.work-process,
+.artifact-workspace,
+.source-list {
+  min-width: 0;
+}
+.artifact-workspace {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.work-process {
+  padding: 18px 24px 24px;
+  container-type: inline-size;
+}
+.process-story-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.process-story-header h2 {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0 0 5px;
+}
+.process-story-header p {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.process-story-header .process-save {
+  flex: none;
+  min-height: 32px;
+  font-size: 12px;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+.process-story-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
+  margin-bottom: 12px;
+  font-size: 11px;
+}
+.process-story-controls select {
+  min-width: 0;
+  max-width: 170px;
+  padding: 5px 18px 5px 0;
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+  color: var(--muted);
+}
+.process-story-controls .text-button {
+  margin-left: auto;
+  font-size: 11px;
+}
+.process-current-goal {
+  margin-bottom: 16px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.process-current-goal summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  list-style: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.process-current-goal summary span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.process-current-goal p {
+  margin: 10px 0;
+  line-height: 1.8;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.process-current-goal[open] summary span {
+  visibility: hidden;
+}
+.process-goal-marker {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  margin: 24px 0 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.process-goal-chapter:first-child .process-goal-marker {
+  margin-top: 0;
+}
+.process-story-entry {
+  margin: 0 0 26px;
+}
+.process-leading-judgment {
+  margin: 0 0 22px;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--line);
+}
+.process-lead-label,
+.process-analysis-scope {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.65;
+}
+.process-story-history,
+.process-context-history {
+  margin: 20px 0;
+  font-size: 11px;
+}
+.process-story-history > summary,
+.process-context-history > summary {
+  color: var(--muted);
+  cursor: pointer;
+  margin-bottom: 16px;
+}
+.process-story-entry h3 {
+  margin: 9px 0 10px;
+  font-size: 16px;
+  line-height: 1.55;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  overflow-wrap: anywhere;
+}
+.process-story-byline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.process-story-byline strong {
+  font-weight: 500;
+  color: var(--ink);
+  font-size: 11px;
+}
+.process-story-entry .markdown,
+.process-retrospective .markdown {
+  font-size: 13px;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+.process-story-entry .markdown > :first-child {
+  margin-top: 0;
+}
+.process-story-entry .markdown > :last-child {
+  margin-bottom: 0;
+}
+.process-story-entry.entry-revision {
+  border-left: 2px solid #b4c7af;
+  padding-left: 14px;
+}
+.process-story-entry.entry-result[data-provenance="revision_record"] {
+  font-size: 12px;
+  color: var(--muted);
+}
+.process-story-entry.entry-result[data-provenance="revision_record"] h3 {
+  font-size: 14px;
+}
+.process-reference-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 14px;
+  margin-top: 9px;
+}
+.process-reference-links .text-button {
+  font-size: 10px;
+  text-align: left;
+  max-width: 100%;
+}
+.process-reference-links .text-button[aria-expanded="true"] {
+  color: var(--ink);
+}
+.process-reference-inspector {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-left: 2px solid var(--line);
+  background: var(--paper);
+  font-size: 12px;
+  line-height: 1.8;
+}
+.process-reference-inspector > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.process-reference-inspector > header strong {
+  overflow-wrap: anywhere;
+}
+.process-reference-inspector p {
+  margin: 8px 0;
+}
+.process-reference-inspector .text-button {
+  margin-top: 8px;
+}
+.process-reference-fingerprint {
+  font-size: 10px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.process-reference-coverage {
+  font-size: 11px;
+}
+.process-source-text {
+  margin: 10px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.process-retrospective {
+  padding: 15px 0 18px;
+  margin: 0 0 20px;
+  border-bottom: 1px solid var(--line);
+}
+.process-retrospective > header h2 {
+  font-size: 17px;
+  margin: 0 0 5px;
+}
+.process-retrospective > header p {
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.process-retrospective h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 20px 0 10px;
+}
+.process-retrospective article {
+  margin-bottom: 18px;
+}
+.process-coverage-note,
+.process-record-coverage {
+  font-size: 10px;
+  line-height: 1.7;
+  color: var(--muted);
+  margin: 10px 0;
+}
+.process-story-support {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.work-process .analysis-full-detail {
+  margin: 10px 0 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+}
+.work-process .analysis-full-detail > summary {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+}
+.work-process .analysis-detail-block {
+  margin-top: 12px;
+}
+.work-process .analysis-detail-block > strong {
+  font-size: 12px;
+}
+.work-process-evidence-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 14px 0;
+}
+.work-process-evidence-actions .text-button {
+  font-size: 11px;
+}
+.work-process-members,
+.work-method-evidence {
+  margin: 12px 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.work-process-members > summary,
+.work-method-evidence > summary {
+  cursor: pointer;
+}
+.work-process .work-member-line {
+  padding: 10px 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.work-member-line > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.work-member-line p {
+  width: 100%;
+  margin: 0;
+  line-height: 1.65;
+}
+.work-process .timeline-byline {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.work-process .timeline-byline strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+.work-process .process-source-card {
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: none;
+}
+.work-process .process-source-card > summary {
+  padding: 12px 0;
+}
+.work-process .process-source-body {
+  padding: 4px 0 12px;
+}
+.work-process .process-execution,
+.work-process .process-sources {
+  padding: 0;
+}
+.work-content-muted {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.work-content-empty {
+  margin: 24px 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.75;
+}
+@container (max-width: 380px) {
+  .process-story-header {
+    flex-wrap: wrap;
+  }
+  .process-story-header .process-save {
+    margin-left: auto;
+  }
+  .process-story-controls {
+    gap: 4px 8px;
+  }
+}
+.artifact-workspace .artifact-choice-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 24px 0;
+  font-size: 11px;
+  color: var(--muted, #6f7068);
+}
+.artifact-choice-row label {
+  min-width: 0;
+  flex: 1;
+}
+.artifact-choice-row select {
+  width: 100%;
+  max-width: 520px;
+  min-width: 0;
+  padding: 7px 26px 7px 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink, #292924);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line, #e1e0dc);
+  border-radius: 0;
+}
+.artifact-choice-row > span {
+  flex: none;
+}
+.artifact-workspace .artifact-reader {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.artifact-workspace .artifact-view {
+  position: relative;
+  padding: 18px 24px 30px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.artifact-view .delivery-entry {
+  position: static;
+}
+.artifact-view .delivery-entry > .delivery-panel {
+  right: 16px;
+  top: 58px;
+  box-sizing: border-box;
+  width: calc(100% - 32px);
+  max-width: 570px;
+}
+.artifact-view .grouped-artifact-actions {
+  margin: 0 0 20px;
+  padding: 0;
+  border: 0;
+  gap: 8px;
+  align-items: center;
+}
+.artifact-view .artifact-edit-actions,
+.artifact-view .artifact-secondary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+}
+.artifact-view .artifact-edit-actions .button.secondary {
+  background: transparent;
+  border-color: transparent;
+  padding-left: 0;
+}
+.work-process .skill-usage {
+  margin: 12px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+.work-process .skill-usage article {
+  padding: 8px 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+.artifact-document-heading {
+  margin: 0 0 12px;
+}
+.artifact-document-heading h3 {
+  margin: 7px 0 16px;
+  font-size: 23px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+.artifact-view .markdown > h1:first-child {
+  margin-top: 0;
+}
+.source-list {
+  padding: 8px 24px 24px;
+}
+.source-list .source-item {
+  padding: 14px 0;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--line, #e1e0dc);
+  border-radius: 0;
+  background: none;
+}
+.source-list .source-title {
+  padding: 0;
+  gap: 10px;
+  font-size: 14px;
+  line-height: 1.55;
+  text-align: left;
+}
+.source-list .source-title > span {
+  flex: 1;
+}
+.source-list .source-expanded {
+  margin-top: 12px;
+  padding: 0;
+  border: 0;
+}
+.source-list .source-meta {
+  margin: 0 0 8px;
+}
+.source-list .source-excerpt {
+  font-size: 13px;
+  line-height: 1.85;
+  max-height: none;
+}
+.source-list .coverage {
+  font-size: 11px;
+  margin: 0 0 10px;
+}
+@media (max-width: 640px) {
+  .work-process,
+  .artifact-workspace .artifact-view {
+    padding: 16px;
+  }
+  .artifact-workspace .artifact-choice-row {
+    padding: 12px 16px 0;
+  }
+  .source-list {
+    padding: 6px 16px 16px;
+  }
+}

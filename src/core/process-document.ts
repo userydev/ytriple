@@ -1,11 +1,14 @@
-import type { MemberId, Task, TaskEvent } from "../shared/types.js";
+import type { MemberId, Task } from "../shared/types.js";
 import {
-  ANALYSIS_SECTIONS,
-  buildPublicExchanges,
+  buildProcessStory,
+  type ProcessObservation,
+  type ProcessReference,
+  type ProcessStoryOptions,
+} from "../shared/process-story.js";
+import {
   buildProcessSources,
-  publicReportDetails,
+  currentProgressEvents,
   publicSearchQueries,
-  publicAnalysisSection,
   SOURCE_STATUS_NAMES,
 } from "../shared/progress.js";
 
@@ -13,325 +16,287 @@ const labels: Record<MemberId, string> = {
   coordinator: "统筹",
   cto: "CTO",
   researcher: "研究员",
+  editor: "内容编辑",
 };
-const stages: Record<string, string> = {
+const kindNames = {
   framing: "问题理解",
-  method: "方法",
-  plan: "计划",
-  evidence: "依据",
-  finding: "发现",
-  alternatives: "方案取舍",
+  method: "核查方法",
+  evidence: "依据与发现",
+  comparison: "方案与取舍",
   decision: "判断",
+  revision: "修正",
+  result: "结果",
+  question: "待解决",
 };
-const statuses: Record<Task["status"], string> = {
-  idle: "尚未开始",
-  running: "进行中",
-  waiting: "等待补充",
-  paused: "已暂停",
-  failed: "需要处理",
-  completed: "已完成",
+const origins = {
+  public_report: "当时的公开分析",
+  public_reply: "实际公开答复",
+  user_request: "用户原始要求",
+  revision_record: "已保存的变化记录",
 };
-const tools: Record<string, string> = {
-  list_materials: "查看资料目录",
-  read_source: "阅读资料",
-  read_artifact: "阅读成果",
-  write_artifact: "保存成果",
-  report_progress: "汇报进展",
-  request_clarification: "提出需要补充的信息",
-};
-const publicTypes = new Set([
-  "progress_reported",
-  "clarification_requested",
-  "agent_started",
-  "agent_resumed",
-  "agent_completed",
-  "agent_paused",
-  "agent_failed",
-  "agent_waiting",
-  "tool_started",
-  "tool_resumed",
-  "tool_completed",
-  "tool_paused",
-  "tool_failed",
-  "delegation_started",
-  "delegation_resumed",
-  "delegation_completed",
-  "delegation_paused",
-  "delegation_failed",
-  "artifact_written",
-  "run_started",
-  "run_resumed",
-  "run_completed",
-  "run_paused",
-  "run_failed",
-  "run_waiting",
-]);
-function plain(value: string, limit = 1200): string {
+function plain(value: string, limit = 120_000): string {
   return value
     .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g, "")
     .trim()
     .slice(0, limit)
-    .replace(/[\\`*_{}\[\]<>#|]/g, "\\$&")
-    .replace(/\r?\n/g, " ");
+    .replace(/[\\`*_{}\[\]<>#|]/g, "\\$&");
 }
-const memberLabel = (member: unknown) =>
-  typeof member === "string" && member in labels
-    ? labels[member as MemberId]
-    : "团队";
-const eventType = (event: TaskEvent) => event.type.replaceAll(".", "_");
-function distinct(items: string[], limit = 30): string[] {
-  return [...new Set(items)].slice(-limit);
+const quoted = (value: string) =>
+  value.split(/\r?\n/).map((line) => `> ${plain(line)}`);
+const key = (ref: ProcessReference) =>
+  `${ref.kind}:${ref.id}:${ref.version ?? ""}:${ref.hash ?? ""}:${ref.readStart ?? ""}:${ref.readEnd ?? ""}`;
+const compact = (value: string, limit: number) => {
+  const characters = Array.from(value.replace(/\s+/g, " ").trim());
+  return characters.length > limit
+    ? `${characters.slice(0, limit - 1).join("")}…`
+    : characters.join("");
+};
+function readableGoal(goal: string): string {
+  if (goal.startsWith("围绕本机项目")) {
+    const boundary = /\r?\n(?:用户要推进的工作|我的问题)：/.exec(goal);
+    const legacy = goal.indexOf("我的问题：");
+    if (legacy >= 0 && (!boundary || legacy < boundary.index))
+      return goal.slice(legacy + "我的问题：".length).trim() || goal;
+    if (boundary)
+      return goal.slice(boundary.index + boundary[0].length).trim() || goal;
+  }
+  return goal.trim();
 }
-function reportLines(event: TaskEvent): string[] {
-  const { detail, method, questions } = publicReportDetails(event);
-  const lines = [
-    `- **${memberLabel(event.member)} · ${event.data?.hosted === true ? "Google 公开摘要" : (stages[String(event.data?.stage)] ?? "进展")}**：${plain(event.summary)}`,
-  ];
-  if (method) lines.push("", `  **核查方法**：${plain(method, 2000)}`);
-  if (detail && detail !== event.summary)
-    lines.push(
-      "",
-      "  **展开说明**：",
-      "",
-      ...detail.split(/\r?\n/).map((line) => `  > ${plain(line, 6000)}`),
-    );
-  if (questions.length)
-    lines.push(
-      "",
-      `  **仍待解决**：${questions.map((question) => plain(question, 300)).join("；")}`,
-    );
-  return lines;
+function reviewExcerpt(item: ProcessObservation): string {
+  // Keep both actual positions visible when the review compares judgments.
+  if (item.id === "judgments-recorded") {
+    const later = item.text.indexOf("\n后来记录的判断：");
+    const end = item.text.lastIndexOf("\n这两项表述可对照；");
+    if (later > 0)
+      return `${compact(item.text.slice(0, later), 100)}\n${compact(item.text.slice(later, end > later ? end : undefined), 100)}`;
+  }
+  return compact(item.text, 200);
 }
 
-/** Summarize only named public fields; SDK state, raw payloads and tool bodies never enter the document. */
+/** Use the same evidence-backed story as the UI. This is a deterministic review
+ * of public statements, not another model's reconstruction of hidden thoughts. */
 export function buildProcessDocument(
   task: Task,
   member?: MemberId,
-  options: { invocationId?: string } = {},
+  options: ProcessStoryOptions = {},
 ): { title: string; content: string } {
-  const events = task.events.filter(
-    (event) =>
-      event.goalVersion === task.goalVersion &&
-      (!member || event.member === member) &&
-      (!options.invocationId ||
-        event.data?.invocationId === options.invocationId) &&
-      publicTypes.has(eventType(event)),
-  );
+  const story = buildProcessStory(task, {
+    ...options,
+    member: member ?? options.member,
+  });
   const scope = member ? labels[member] : "团队";
-  const title = `${task.title.slice(0, 100)} · ${scope}过程摘要`;
+  const title = `${compact(task.title, 32) || "工作"} · ${scope}过程总结`;
+  const refs: ProcessReference[] = [];
+  const cite = (references: ProcessReference[]) =>
+    [
+      ...new Set(
+        references.map((ref) => {
+          let index = refs.findIndex((existing) => key(existing) === key(ref));
+          if (index < 0) {
+            index = refs.length;
+            refs.push(ref);
+          }
+          return `〔依据 ${index + 1}〕`;
+        }),
+      ),
+    ].join(" ");
+  const range =
+    options.scope === "goal"
+      ? `当前目标 v${task.goalVersion}`
+      : options.scope === "run"
+        ? `当前目标 v${task.goalVersion} 的本次处理`
+        : "全部保留历程";
   const lines = [
-    `# ${plain(title, 160)}`,
+    `# ${plain(title, 180)}`,
     "",
-    `目标版本：${task.goalVersion} · 范围：${scope} · 任务状态：${statuses[task.status]}`,
+    `范围：${range} · 成员：${scope}`,
     "",
-    "## 当前目标",
+    "## 当前要解决的问题",
     "",
-    plain(task.goal, 6000),
+    ...quoted(readableGoal(task.goal)),
+    "",
+    story.coverage.notice,
     "",
   ];
-  if (!events.length) {
-    lines.push("## 记录情况", "", "当前目标版本尚无可整理的公开工作记录。", "");
+  if (
+    !story.entries.length &&
+    !Object.values(story.review).some((items) => items.length)
+  ) {
+    lines.push(
+      "当前范围尚无可整理的公开分析或答复。工具记录不能代替当时的判断依据。",
+      "",
+    );
     return { title, content: lines.join("\n") };
   }
-  const reports = events.filter(
-    (event) => eventType(event) === "progress_reported",
-  );
-  lines.push("## 工作摘要", "");
-  if (reports.length) {
-    for (const section of ANALYSIS_SECTIONS) {
-      const entries = reports.filter(
-        (event) => publicAnalysisSection(event) === section.id,
-      );
-      if (entries.length)
+  const prioritize = (items: ProcessObservation[], prefixes: string[]) =>
+    [...items].sort((a, b) => {
+      const rank = (item: ProcessObservation) => {
+        const index = prefixes.findIndex((prefix) =>
+          item.id.startsWith(prefix),
+        );
+        return index < 0 ? prefixes.length : index;
+      };
+      return rank(a) - rank(b);
+    });
+  const reviewGroups = [
+    [
+      "问题与修正要求",
+      prioritize(story.review.issues, ["requested:", "acknowledged:"]),
+    ],
+    [
+      "判断变化与可复核做法",
+      prioritize(story.review.effective, [
+        "stated:",
+        "judgments-recorded",
+        "method:",
+      ]),
+    ],
+    ["待解决与未验证点", story.review.unverified],
+  ] as const;
+  const supplemental: ProcessObservation[] = [];
+  if (reviewGroups.some(([, items]) => items.length)) {
+    lines.push(
+      "## 复盘归纳",
+      "",
+      "以下摘录具体问题、做法与待核查事项；完整公开原文保留在后文历程及依据中。",
+      "",
+    );
+    for (const [label, items] of reviewGroups) {
+      if (!items.length) continue;
+      lines.push(`### ${label}`, "");
+      for (const [index, item] of items.entries()) {
+        cite(item.references);
+        const citation = cite(item.references.slice(0, 3));
+        const excerpt = reviewExcerpt(item);
+        if (index < 2)
+          lines.push(
+            ...quoted(excerpt),
+            "",
+            `${citation}${item.references.length > 3 ? " 等；完整依据见索引。" : ""}`,
+            "",
+          );
+        // These observations quote an existing story entry; preserve that full
+        // original once in the chronology instead of copying it into the review.
+        const originalInStory =
+          item.id === "judgments-recorded" ||
+          story.entries.some(
+            (entry) =>
+              item.id.endsWith(`:${entry.id}`) ||
+              entry.content.includes(item.text),
+          );
+        if ((index >= 2 || excerpt !== item.text) && !originalInStory)
+          supplemental.push(item);
+      }
+      if (items.length > 2)
         lines.push(
-          `### ${section.title}`,
-          "",
-          ...entries.slice(-30).flatMap(reportLines),
+          `另有 ${items.length - 2} 条相关记录，见后文历程与依据。`,
           "",
         );
     }
-    const uncategorized = reports.filter(
-      (event) => !publicAnalysisSection(event),
-    );
-    if (uncategorized.length)
-      lines.push(
-        "### 其他公开进展",
-        "",
-        ...distinct(
-          uncategorized.map(
-            (event) =>
-              `- **${memberLabel(event.member)}**：${plain(event.summary)}`,
-          ),
-        ),
-        "",
-      );
-  } else {
-    lines.push(
-      "尚未记录成员的计划、发现或判断摘要；以下按实际执行记录整理。",
-      "",
-    );
   }
-  const exchanges = buildPublicExchanges(events, task.status);
-  if (exchanges.length) {
+  lines.push("## 分析与解决历程", "");
+  if (!story.entries.length)
     lines.push(
-      "## 成员对话",
-      "",
-      "以下为实际委派与回复，较长内容可能是运行时保留的节选。",
+      "当前范围未保留可回看的公开分析；以上执行问题不能代替判断依据。",
       "",
     );
-    for (const exchange of exchanges.slice(-20)) {
+  let goalVersion: number | undefined;
+  for (const entry of story.entries) {
+    if (goalVersion !== entry.goalVersion) {
+      goalVersion = entry.goalVersion;
+      lines.push(`### 目标记录 v${goalVersion}`, "");
+    }
+    lines.push(
+      `#### ${plain(entry.title, 140)}`,
+      "",
+      `${kindNames[entry.kind]} · ${entry.interaction === "request" ? "成员委派的问题" : origins[entry.provenance]}${entry.member ? ` · ${labels[entry.member]}` : ""}${entry.createdAt ? ` · ${plain(entry.createdAt, 80)}` : ""}`,
+      "",
+      ...quoted(entry.content),
+      "",
+      cite(entry.references),
+      "",
+    );
+    if (entry.truncated)
+      lines.push("原始记录为节选，未保留的内容不作推断。", "");
+  }
+  if (supplemental.length) {
+    lines.push("## 复盘依据补充", "");
+    for (const item of supplemental)
+      lines.push(...quoted(item.text), "", cite(item.references), "");
+  }
+  if (refs.length) {
+    lines.push("## 依据索引", "");
+    for (const [index, ref] of refs.entries()) {
+      const description =
+        ref.kind === "source"
+          ? "资料"
+          : ref.kind === "artifact"
+            ? "成果"
+            : ref.kind === "message"
+              ? "对话"
+              : "公开事件";
       lines.push(
-        `### ${memberLabel(exchange.sender)} → ${exchange.specialist ? "专项成员" : memberLabel(exchange.receiver)}`,
+        `### 依据 ${index + 1}`,
         "",
+        `${description}：${plain(ref.label, 500)}${ref.goalVersion ? ` · 目标 v${ref.goalVersion}` : ""}${ref.version ? ` · 成果 v${ref.version}` : ""}`,
       );
-      if (exchange.request)
-        lines.push(`- **委派**：${plain(exchange.request, 4000)}`);
-      if (exchange.response)
-        lines.push(`- **回复**：${plain(exchange.response, 12000)}`);
-      else
+      if (ref.kind === "artifact" && !ref.version)
+        lines.push("该次引用没有保留版本号，不能用当前版本冒充。");
+      if (ref.readStart !== undefined && ref.readEnd !== undefined)
         lines.push(
-          `- ${exchange.status === "running" ? "尚在等待回复。" : "此记录没有保留回复正文。"}`,
+          `真实读取范围：第 ${ref.readStart + 1} 至 ${ref.readEnd} 字符。`,
         );
+      if (ref.coverage) lines.push(plain(ref.coverage, 1200));
+      if (ref.hash && /^[a-f0-9]{64}$/i.test(ref.hash))
+        lines.push(`内容标识：${ref.hash}`);
       lines.push("");
     }
   }
-  const processSources = buildProcessSources(task, events);
+  const currentRun =
+    options.scope === "run"
+      ? new Set(currentProgressEvents(task).map((event) => event.id))
+      : undefined;
+  const events = task.events.filter(
+    (event) =>
+      (!options.scope ||
+        options.scope === "all" ||
+        event.goalVersion === task.goalVersion) &&
+      (!currentRun || currentRun.has(event.id)) &&
+      (!member || event.member === member) &&
+      (!options.invocationId ||
+        event.data?.invocationId === options.invocationId),
+  );
+  const methods = events.filter((event) => event.type === "skill_loaded");
+  if (methods.length)
+    lines.push(
+      "## 已提供的方法版本",
+      "",
+      ...methods.map(
+        (event) =>
+          `- ${plain(String(event.data?.name ?? event.data?.skillId ?? "方法"), 180)} · 版本 ${plain(String(event.data?.version ?? "未记录"), 80)}。`,
+      ),
+      "",
+      "这里只记录方法正文已提供，是否有用以分析、结果及反馈为准。",
+      "",
+    );
   const queries = publicSearchQueries(events);
   if (queries.length)
     lines.push(
       "## 实际检索词",
       "",
-      ...queries.slice(-40).map((query) => `- ${plain(query, 1000)}`),
+      ...queries.map((query) => `- ${plain(query, 1000)}`),
       "",
     );
-  if (processSources.length) {
-    lines.push(
-      "## 核查资料与网站",
-      "",
-      "搜索结果和引用来源不等于已访问；读取状态依据实际工具或服务商记录。",
-      "",
-    );
-    for (const source of processSources.slice(-100)) {
-      const label = plain(source.title, 200);
-      lines.push(
-        `- **${source.url ? `[${label}](${source.url.replace(/[()<>]/g, (char) => "%" + char.charCodeAt(0).toString(16))})` : label}** · ${SOURCE_STATUS_NAMES[source.status]} · ${source.origin === "google" ? "Google 返回" : "任务资料"}`,
-      );
-      if (source.snippet) lines.push(`  ${plain(source.snippet, 1600)}`);
-    }
-    lines.push("");
-  }
-  const questions = distinct(
-    events
-      .filter((event) => eventType(event) === "clarification_requested")
-      .map(
-        (event) => `- ${memberLabel(event.member)}：${plain(event.summary)}`,
-      ),
-    12,
-  );
-  if (questions.length) lines.push("## 需要补充的信息", "", ...questions, "");
-  const actions: string[] = [];
-  const sourceIds = new Set<string>();
-  const readSourceIds = new Set<string>();
-  const artifactIds = new Set<string>();
-  const writtenIds = new Set<string>();
-  for (const event of events) {
-    const type = eventType(event),
-      data = event.data ?? {},
-      who = memberLabel(event.member);
-    if (type === "progress_reported") {
-      if (Array.isArray(data.sourceIds))
-        for (const id of data.sourceIds)
-          if (typeof id === "string") sourceIds.add(id);
-      if (Array.isArray(data.artifactIds))
-        for (const id of data.artifactIds)
-          if (typeof id === "string") artifactIds.add(id);
-    }
-    if (typeof data.sourceId === "string") {
-      sourceIds.add(data.sourceId);
-      if (type === "tool_completed" && data.tool === "read_source")
-        readSourceIds.add(data.sourceId);
-    }
-    if (typeof data.artifactId === "string") artifactIds.add(data.artifactId);
-    if (type === "artifact_written" && typeof data.artifactId === "string")
-      writtenIds.add(data.artifactId);
-    if (/^agent_(completed|paused|failed|waiting)$/.test(type)) {
-      const action = type.endsWith("_completed")
-        ? "完成本次处理"
-        : type.endsWith("_paused")
-          ? "暂停并保留进度"
-          : type.endsWith("_waiting")
-            ? "等待补充信息"
-            : "本次处理未完成";
-      actions.push(`- ${who}${action}。`);
-    }
-    if (/^delegation_(started|completed|paused|failed)$/.test(type)) {
-      const receiver =
-        data.specialist === true ? "专项成员" : memberLabel(data.receiver);
-      const action = type.endsWith("_started")
-        ? `将具体工作交给${receiver}`
-        : type.endsWith("_completed")
-          ? `收到${receiver}的协作结果`
-          : type.endsWith("_paused")
-            ? `暂停与${receiver}的协作`
-            : `与${receiver}的协作未完成`;
-      actions.push(`- ${who}${action}。`);
-    }
-    if (
-      /^tool_(completed|paused|failed)$/.test(type) &&
-      typeof data.tool === "string" &&
-      tools[data.tool]
-    ) {
-      const action = tools[data.tool];
-      const result = type.endsWith("_completed")
-        ? `已${action}`
-        : type.endsWith("_paused")
-          ? `暂停${action}`
-          : `未完成${action}`;
-      const source =
-        typeof data.sourceId === "string"
-          ? task.sources.find((entry) => entry.id === data.sourceId)
-          : undefined;
-      const artifact =
-        typeof data.artifactId === "string"
-          ? task.artifacts.find((entry) => entry.id === data.artifactId)
-          : undefined;
-      actions.push(
-        `- ${who}${result}${source || artifact ? `《${plain((source ?? artifact)!.title, 180)}》` : ""}。`,
-      );
-    }
-  }
-  if (actions.length)
-    lines.push("## 已记录的工作", "", ...distinct(actions, 40), "");
-  const sources = task.sources.filter((source) => sourceIds.has(source.id));
+  const sources = buildProcessSources(task, events);
   if (sources.length)
     lines.push(
-      "## 资料依据",
+      "## 所引资料的覆盖",
       "",
-      ...sources
-        .slice(0, 30)
-        .map(
-          (source) =>
-            `- **${plain(source.title, 180)}**：${readSourceIds.has(source.id) ? "已读取正文片段" : "公开摘要中提及，未记录读取完成"}。${plain(source.coverage, 500)}`,
-        ),
+      ...sources.map(
+        (source) =>
+          `- ${plain(source.title, 180)}${source.url ? `（${source.url}）` : ""}：${SOURCE_STATUS_NAMES[source.status]}。${plain(source.snippet ?? "", 1200)}`,
+      ),
       "",
     );
-  const artifacts = task.artifacts.filter((artifact) =>
-    artifactIds.has(artifact.id),
-  );
-  if (artifacts.length)
-    lines.push(
-      "## 相关成果",
-      "",
-      ...artifacts
-        .slice(0, 30)
-        .map(
-          (artifact) =>
-            `- **${plain(artifact.title, 180)}**：${writtenIds.has(artifact.id) ? "本轮保存过的成果" : "本轮引用的成果"}，当前为第 ${artifact.version} 版。`,
-        ),
-      "",
-    );
-  if (options.invocationId)
-    lines.push("本摘要限于选定成员本次处理的公开记录。", "");
-  lines.push("摘要依据本目标版本的公开工作记录整理，可继续编辑和补充。", "");
   return { title, content: lines.join("\n") };
 }

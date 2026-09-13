@@ -1,33 +1,43 @@
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
-  ArrowRight,
   ArrowUpRight,
   Check,
   ChevronDown,
   CircleAlert,
   FileText,
-  Layers2,
   LoaderCircle,
-  MessageSquare,
   Pause,
   Search,
-  Wrench,
+  X,
 } from "lucide-react";
 import {
-  ANALYSIS_SECTIONS,
   buildAgentProgress,
-  buildPublicExchanges,
   buildProcessSources,
   currentProgressEvents,
-  publicAnalysisSection,
   publicReportDetails,
   publicSearchQueries,
+  safePublicURL,
   SOURCE_STATUS_NAMES,
   type ProgressStatus,
 } from "../shared/progress";
+import {
+  buildProcessStory,
+  type ProcessReference,
+  type ProcessStoryEntry,
+} from "../shared/process-story";
 import type { MemberId, Task, TaskEvent } from "../shared/types";
 import { formatTime, Markdown, memberName, type Dispatch } from "./common";
+import { projectRequestText } from "../shared/project-context";
+import { SkillUsage } from "./Skills";
 
+type Scope = "all" | "goal" | "run";
+type Inspection = { ownerId: string; reference: ProcessReference } | null;
+type ProcessProps = {
+  task: Task;
+  dispatch: Dispatch;
+  compact?: boolean;
+  onArtifactOpen?: (id: string) => void;
+};
 const statusNames: Record<ProgressStatus, string> = {
   running: "正在工作",
   completed: "已完成",
@@ -36,6 +46,57 @@ const statusNames: Record<ProgressStatus, string> = {
   failed: "需要处理",
   stale: "待核实",
 };
+const provenanceNames: Record<ProcessStoryEntry["provenance"], string> = {
+  public_report: "公开分析",
+  public_reply: "公开回复",
+  user_request: "用户要求",
+  revision_record: "修订记录",
+};
+interface ReadingState {
+  member: MemberId | "all";
+  scope: Scope;
+  inspection: Inspection;
+  sourcesOpen: boolean;
+  recordsOpen: boolean;
+  reviewOpen: boolean;
+  allRecords: boolean;
+  details: Set<string>;
+  scrollTop: number;
+}
+const readingStates = new Map<string, ReadingState>();
+function readingState(taskId: string): ReadingState {
+  const existing = readingStates.get(taskId);
+  if (existing) return existing;
+  const initial: ReadingState = {
+    member: "all",
+    scope: "all",
+    inspection: null,
+    sourcesOpen: false,
+    recordsOpen: false,
+    reviewOpen: false,
+    allRecords: false,
+    details: new Set(),
+    scrollTop: 0,
+  };
+  readingStates.set(taskId, initial);
+  return initial;
+}
+const saveStates = new Map<string, { pending: boolean; error: string }>();
+const saveListeners = new Set<() => void>();
+const emptySave = { pending: false, error: "" };
+function saveState(taskId: string) {
+  return saveStates.get(taskId) ?? emptySave;
+}
+function updateSave(taskId: string, value: typeof emptySave) {
+  saveStates.set(taskId, value);
+  for (const listener of saveListeners) listener();
+}
+function subscribeSave(listener: () => void) {
+  saveListeners.add(listener);
+  return () => {
+    saveListeners.delete(listener);
+  };
+}
 function StateIcon({ status }: { status: ProgressStatus }) {
   return status === "running" ? (
     <LoaderCircle size={12} className="spin" />
@@ -50,7 +111,7 @@ function StateIcon({ status }: { status: ProgressStatus }) {
   );
 }
 function isPublicEvent(event: TaskEvent) {
-  return /^(run_|agent_|delegation_|tool_|progress[_.]reported|artifact_written|clarification_requested|goal_|source_)/.test(
+  return /^(run_|agent_|delegation_|tool_|skill_|progress[_.]reported|artifact_written|clarification_requested|goal_|source_|public_response)/.test(
     event.type,
   );
 }
@@ -58,18 +119,22 @@ function AnalysisDetails({
   report,
   dispatch,
   onArtifactOpen,
+  omitDetail = false,
 }: {
   report: TaskEvent;
   dispatch: Dispatch;
   onArtifactOpen: (id: string) => void;
+  omitDetail?: boolean;
 }) {
   const { detail, method, questions } = publicReportDetails(report);
-  if (!detail && !method && !questions.length) return null;
+  if ((!detail || omitDetail) && !method && !questions.length) return null;
   return (
-    <details className="analysis-full-detail">
+    <details
+      className="analysis-full-detail"
+      data-reading-key={`analysis:${report.id}`}
+    >
       <summary>
-        展开分析与方法
-        <ChevronDown size={12} />
+        公开解释与核查方法 <ChevronDown size={12} />
       </summary>
       {method ? (
         <div className="analysis-detail-block">
@@ -79,11 +144,8 @@ function AnalysisDetails({
           </Markdown>
         </div>
       ) : null}
-      {detail ? (
+      {detail && !omitDetail ? (
         <div className="analysis-detail-block">
-          <strong>
-            {report.data?.hosted === true ? "Google 公开分析摘要" : "展开说明"}
-          </strong>
           <Markdown dispatch={dispatch} onArtifactLink={onArtifactOpen}>
             {detail}
           </Markdown>
@@ -91,7 +153,7 @@ function AnalysisDetails({
       ) : null}
       {questions.length ? (
         <div className="analysis-detail-block">
-          <strong>仍待解决</strong>
+          <strong>当时仍待解决</strong>
           <ul>
             {questions.map((question, index) => (
               <li key={index}>{question}</li>
@@ -102,433 +164,764 @@ function AnalysisDetails({
     </details>
   );
 }
-export function ProcessView({
+function ReferenceInspector({
+  reference,
   task,
   dispatch,
-  compact = false,
   onArtifactOpen,
+  onClose,
 }: {
+  reference: ProcessReference;
   task: Task;
   dispatch: Dispatch;
-  compact?: boolean;
-  onArtifactOpen?: (id: string) => void;
+  onArtifactOpen: (id: string) => void;
+  onClose: () => void;
 }) {
-  const [layer, setLayer] = useState<
-    "analysis" | "sources" | "conversation" | "execution"
-  >("analysis");
-  const [member, setMember] = useState<MemberId | "all">("all");
-  const [scope, setScope] = useState<"goal" | "run">("goal");
-  const [saving, setSaving] = useState<MemberId | "team" | null>(null);
-  const [allRecords, setAllRecords] = useState(false);
-  const [allExpanded, setAllExpanded] = useState(false);
-  const [sourceFilter, setSourceFilter] = useState<
-    "all" | "read" | "unavailable"
-  >("all");
-  const container = useRef<HTMLElement>(null);
-  useEffect(() => {
-    const section = container.current;
-    const updateExpanded = () => {
-      const details = Array.from(section?.querySelectorAll("details") ?? []);
-      setAllExpanded(details.length > 0 && details.every((item) => item.open));
-    };
-    updateExpanded();
-    section?.addEventListener("toggle", updateExpanded, true);
-    return () => section?.removeEventListener("toggle", updateExpanded, true);
-  }, [layer, member, scope, sourceFilter, allRecords, task.id]);
-  const expand = (open: boolean) =>
-    container.current?.querySelectorAll("details").forEach((details) => {
-      details.open = open;
+  const source =
+    reference.kind === "source"
+      ? task.sources.find((item) => item.id === reference.id)
+      : undefined;
+  const artifact =
+    reference.kind === "artifact"
+      ? task.artifacts.find((item) => item.id === reference.id)
+      : undefined;
+  const version = artifact?.versions.find(
+    (item) =>
+      item.version === reference.version &&
+      (!reference.hash || item.hash === reference.hash),
+  );
+  const currentArtifact =
+    artifact &&
+    reference.version === artifact.version &&
+    (!reference.hash || artifact.hash === reference.hash);
+  const event =
+    reference.kind === "event"
+      ? task.events.find((item) => item.id === reference.id)
+      : undefined;
+  const message =
+    reference.kind === "message"
+      ? task.messages.find((item) => item.id === reference.id)
+      : undefined;
+  const sourceURL =
+    source?.type === "url" ? safePublicURL(source.location) : undefined;
+  const sourceMismatch =
+    source?.remote &&
+    reference.hash &&
+    source.remote.contentHash !== reference.hash;
+  const sourceText =
+    source && !sourceMismatch
+      ? source.text.slice(reference.readStart ?? 0, reference.readEnd ?? 7000)
+      : "";
+  return (
+    <aside className="process-reference-inspector" aria-label="过程依据详情">
+      <header>
+        <strong>{reference.label}</strong>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="关闭过程依据"
+          onClick={onClose}
+        >
+          <X size={14} />
+        </button>
+      </header>
+      <p className="work-content-muted">
+        {reference.goalVersion
+          ? `目标第 ${reference.goalVersion} 版`
+          : "本次工作依据"}
+        {reference.version ? ` · 成果 v${reference.version}` : ""}
+        {reference.revisionId ? ` · 来源版本 ${reference.revisionId}` : ""}
+      </p>
+      {reference.hash ? (
+        <p className="process-reference-fingerprint">
+          内容指纹 <code>{reference.hash}</code>
+        </p>
+      ) : null}
+      {reference.coverage ? (
+        <p className="process-reference-coverage">{reference.coverage}</p>
+      ) : null}
+      {reference.readStart !== undefined && reference.readEnd !== undefined ? (
+        <p className="process-reference-coverage">
+          记录的读取范围：第 {reference.readStart + 1}–{reference.readEnd}{" "}
+          字符。
+        </p>
+      ) : null}
+      {source ? (
+        <>
+          <p className="work-content-muted">
+            任务保留资料范围：{source.coverage}
+          </p>
+          {sourceText ? (
+            <div className="process-source-text">{sourceText}</div>
+          ) : (
+            <p className="work-content-muted">
+              {sourceMismatch
+                ? "当前资料与引用指纹不一致，未用当前正文替代历史版本。"
+                : "没有可显示的正文。"}
+            </p>
+          )}
+          <p className="work-content-muted">
+            这里展示任务保存的材料；实际读取以所记录的范围为准。
+          </p>
+          {sourceURL ? (
+            <button
+              className="text-button"
+              onClick={() =>
+                void dispatch({ type: "url.open", url: sourceURL })
+              }
+            >
+              打开来源 <ArrowUpRight size={12} />
+            </button>
+          ) : null}
+        </>
+      ) : null}
+      {artifact ? (
+        currentArtifact ? (
+          <>
+            <p>
+              {artifact.title} · v{artifact.version}
+            </p>
+            <button
+              className="text-button"
+              onClick={() => onArtifactOpen(artifact.id)}
+            >
+              阅读这一版成果 <ArrowUpRight size={12} />
+            </button>
+          </>
+        ) : version ? (
+          <>
+            <p>{version.summary || "已保存的成果版本"}</p>
+            <button
+              className="text-button"
+              onClick={() =>
+                void dispatch({ type: "path.reveal", path: version.path })
+              }
+            >
+              定位成果 v{version.version} 文件 <ArrowUpRight size={12} />
+            </button>
+          </>
+        ) : (
+          <p className="work-content-muted">
+            {reference.version
+              ? "引用的历史版本未保留在当前成果中。"
+              : "这条引用没有记录当时版本。"}
+            当前最新为 v{artifact.version}，未替代该引用。
+          </p>
+        )
+      ) : null}
+      {event ? (
+        <>
+          <p>{event.summary}</p>
+          <AnalysisDetails
+            report={event}
+            dispatch={dispatch}
+            onArtifactOpen={onArtifactOpen}
+          />
+          {event.type === "delegation_completed" &&
+          typeof event.data?.request === "string" ? (
+            <details>
+              <summary>实际委派内容</summary>
+              <Markdown dispatch={dispatch} onArtifactLink={onArtifactOpen}>
+                {event.data.request}
+              </Markdown>
+            </details>
+          ) : null}
+        </>
+      ) : null}
+      {message ? (
+        <Markdown dispatch={dispatch} onArtifactLink={onArtifactOpen}>
+          {message.content}
+        </Markdown>
+      ) : null}
+      {!source && !artifact && !event && !message ? (
+        <p className="work-content-muted">
+          这项依据已不在当前工作中，保留引用信息供核对。
+        </p>
+      ) : null}
+    </aside>
+  );
+}
+function References({
+  ownerId,
+  references,
+  inspection,
+  setInspection,
+  task,
+  dispatch,
+  onArtifactOpen,
+}: {
+  ownerId: string;
+  references: ProcessReference[];
+  inspection: Inspection;
+  setInspection: (value: Inspection) => void;
+  task: Task;
+  dispatch: Dispatch;
+  onArtifactOpen: (id: string) => void;
+}) {
+  const selected = (reference: ProcessReference) =>
+    inspection?.ownerId === ownerId &&
+    inspection.reference.kind === reference.kind &&
+    inspection.reference.id === reference.id &&
+    inspection.reference.version === reference.version;
+  return references.length ? (
+    <div className="process-story-references">
+      <div className="process-reference-links">
+        {references.map((reference, index) => (
+          <button
+            className="text-button"
+            key={`${reference.kind}:${reference.id}:${reference.version ?? ""}:${index}`}
+            aria-expanded={selected(reference)}
+            onClick={() =>
+              setInspection(selected(reference) ? null : { ownerId, reference })
+            }
+          >
+            <FileText size={11} />
+            {reference.kind === "event" ? "当时的公开记录" : reference.label}
+            {reference.version ? ` · v${reference.version}` : ""}
+          </button>
+        ))}
+      </div>
+      {inspection?.ownerId === ownerId ? (
+        <ReferenceInspector
+          reference={inspection.reference}
+          task={task}
+          dispatch={dispatch}
+          onArtifactOpen={onArtifactOpen}
+          onClose={() => setInspection(null)}
+        />
+      ) : null}
+    </div>
+  ) : null;
+}
+function StoryEntry({
+  entry,
+  task,
+  dispatch,
+  onArtifactOpen,
+  inspection,
+  setInspection,
+}: {
+  entry: ProcessStoryEntry;
+  task: Task;
+  dispatch: Dispatch;
+  onArtifactOpen: (id: string) => void;
+  inspection: Inspection;
+  setInspection: (value: Inspection) => void;
+}) {
+  const report =
+    entry.provenance === "public_report"
+      ? task.events.find((event) =>
+          entry.references.some(
+            (reference) =>
+              reference.kind === "event" && reference.id === event.id,
+          ),
+        )
+      : undefined;
+  // Shared story headings come from the public content. Remove that exact first
+  // heading from the body so the same sentence is not presented twice.
+  const firstHeading = entry.content.match(/^#{1,6}\s+(.+)(?:\r?\n|$)/);
+  const firstLine = entry.content.split(/\r?\n/, 1)[0];
+  const body =
+    firstHeading && firstHeading[1] === entry.title
+      ? entry.content.slice(firstHeading[0].length).trim()
+      : firstLine === entry.title && entry.content !== firstLine
+        ? entry.content.slice(firstLine.length).trim()
+        : entry.content;
+  const titleIsBody = !firstHeading && entry.title === entry.content;
+  return (
+    <article
+      className={`process-story-entry entry-${entry.kind}`}
+      id={`process-entry-${entry.id}`}
+      data-provenance={entry.provenance}
+    >
+      <div className="process-story-byline">
+        <strong>
+          {entry.member
+            ? memberName(entry.member, task.teamMode)
+            : entry.provenance === "user_request"
+              ? "Y"
+              : "工作记录"}
+        </strong>
+        <span>
+          {entry.interaction === "request"
+            ? "委派问题"
+            : provenanceNames[entry.provenance]}
+        </span>
+        <time>{formatTime(entry.createdAt)}</time>
+      </div>
+      {!titleIsBody ? <h3>{entry.title}</h3> : null}
+      {body ? (
+        <Markdown dispatch={dispatch} onArtifactLink={onArtifactOpen}>
+          {body}
+        </Markdown>
+      ) : null}
+      {entry.truncated ? (
+        <p className="process-record-coverage">原记录为公开回复节选。</p>
+      ) : null}
+      {report ? (
+        <AnalysisDetails
+          report={report}
+          dispatch={dispatch}
+          onArtifactOpen={onArtifactOpen}
+          omitDetail={Boolean(
+            publicReportDetails(report).detail &&
+            entry.content.includes(publicReportDetails(report).detail),
+          )}
+        />
+      ) : null}
+      <References
+        ownerId={entry.id}
+        references={entry.references}
+        inspection={inspection}
+        setInspection={setInspection}
+        task={task}
+        dispatch={dispatch}
+        onArtifactOpen={onArtifactOpen}
+      />
+    </article>
+  );
+}
+function ProcessStoryView({
+  task,
+  dispatch,
+  compact,
+  onArtifactOpen,
+}: ProcessProps) {
+  const remembered = readingState(task.id);
+  const section = useRef<HTMLElement>(null);
+  const [member, setMember] = useState<MemberId | "all">(
+    () => remembered.member,
+  );
+  const [scope, setScope] = useState<Scope>(() => remembered.scope);
+  const [inspection, setInspection] = useState<Inspection>(
+    () => remembered.inspection,
+  );
+  const [sourcesOpen, setSourcesOpen] = useState(() => remembered.sourcesOpen);
+  const [recordsOpen, setRecordsOpen] = useState(() => remembered.recordsOpen);
+  const [reviewOpen, setReviewOpen] = useState(() => remembered.reviewOpen);
+  const [allRecords, setAllRecords] = useState(() => remembered.allRecords);
+  useLayoutEffect(() => {
+    Object.assign(readingState(task.id), {
+      member,
+      scope,
+      inspection,
+      sourcesOpen,
+      recordsOpen,
+      reviewOpen,
+      allRecords,
     });
-  const saveSummary = async (member?: MemberId) => {
-    if (saving) return;
-    setSaving(member ?? "team");
-    try {
-      const result = await dispatch({
-        type: "process.save",
-        taskId: task.id,
-        ...(member ? { member } : {}),
-      });
-      if (result) await dispatch({ type: "window.focus", window: "artifact" });
-    } finally {
-      setSaving(null);
+  }, [
+    task.id,
+    member,
+    scope,
+    inspection,
+    sourcesOpen,
+    recordsOpen,
+    reviewOpen,
+    allRecords,
+  ]);
+  useLayoutEffect(() => {
+    const node = section.current;
+    const scroller = node?.closest<HTMLElement>(".work-content-body") ?? node;
+    if (!node || !scroller) return;
+    scroller.scrollTop = readingState(task.id).scrollTop;
+    const saveScroll = () => {
+      readingState(task.id).scrollTop = scroller.scrollTop;
+    };
+    const saveDetails = (event: Event) => {
+      const detail = event.target as HTMLDetailsElement;
+      const key = detail.dataset.readingKey;
+      if (!key) return;
+      const state = readingState(task.id);
+      if (detail.open) state.details.add(key);
+      else state.details.delete(key);
+    };
+    scroller.addEventListener("scroll", saveScroll, { passive: true });
+    node.addEventListener("toggle", saveDetails, true);
+    return () => {
+      saveScroll();
+      scroller.removeEventListener("scroll", saveScroll);
+      node.removeEventListener("toggle", saveDetails, true);
+    };
+  }, [task.id]);
+  useLayoutEffect(() => {
+    const opened = readingState(task.id).details;
+    for (const detail of section.current?.querySelectorAll<HTMLDetailsElement>(
+      "details[data-reading-key]",
+    ) ?? []) {
+      const next = opened.has(detail.dataset.readingKey!);
+      if (Boolean(detail.open) !== next) detail.open = next;
     }
-  };
+  });
+  const saving = useSyncExternalStore(subscribeSave, () => saveState(task.id));
+  const story = buildProcessStory(task, {
+    scope,
+    ...(member === "all" ? {} : { member }),
+  });
+  const allStory =
+    member === "all" ? story : buildProcessStory(task, { scope });
+  const participants = [
+    ...new Set(
+      allStory.entries.flatMap((entry) => (entry.member ? [entry.member] : [])),
+    ),
+  ];
+  const analysisEntries = story.entries.filter(
+    (entry) =>
+      entry.provenance === "public_report" ||
+      entry.provenance === "public_reply",
+  );
+  const analysisGoal = analysisEntries.some(
+    (entry) => entry.goalVersion === task.goalVersion,
+  )
+    ? task.goalVersion
+    : analysisEntries.at(-1)?.goalVersion;
+  const currentAnalysis = analysisEntries.filter(
+    (entry) => entry.goalVersion === analysisGoal,
+  );
+  const decision = [...currentAnalysis]
+    .reverse()
+    .find((entry) => entry.kind === "decision");
+  const correction = [...currentAnalysis]
+    .reverse()
+    .find((entry) => entry.kind === "revision");
+  const lead =
+    correction &&
+    (!decision ||
+      currentAnalysis.indexOf(correction) > currentAnalysis.indexOf(decision))
+      ? correction
+      : decision;
+  const history = analysisEntries.filter(
+    (entry) => entry.goalVersion !== analysisGoal,
+  );
+  const context = story.entries.filter(
+    (entry) =>
+      entry.provenance !== "public_report" &&
+      entry.provenance !== "public_reply",
+  );
+  const lanes = buildAgentProgress(task);
+  const status = (
+    {
+      idle: "paused",
+      running: "running",
+      completed: "completed",
+      waiting: "waiting",
+      paused: "paused",
+      failed: "failed",
+    } as const
+  )[task.status];
+  const events = (
+    scope === "run"
+      ? currentProgressEvents(task)
+      : scope === "goal"
+        ? task.events.filter((event) => event.goalVersion === task.goalVersion)
+        : task.events
+  ).filter(isPublicEvent);
+  const visibleEvents = events.filter(
+    (event) => member === "all" || event.member === member,
+  );
+  const sources = buildProcessSources(task, visibleEvents);
+  const queries = publicSearchQueries(visibleEvents);
+  const records = allRecords ? visibleEvents : visibleEvents.slice(-80);
+  const reviewCount =
+    story.review.effective.length +
+    story.review.issues.length +
+    story.review.unverified.length;
   const openArtifact = (id: string) => {
     if (!task.artifacts.some((artifact) => artifact.id === id)) return;
     if (onArtifactOpen) onArtifactOpen(id);
     else void dispatch({ type: "window.focus", window: "artifact" });
   };
-  const lanes = buildAgentProgress(task);
-  const goalEvents = task.events.filter(
-    (event) => event.goalVersion === task.goalVersion && isPublicEvent(event),
-  );
-  const currentEvents =
-    scope === "goal"
-      ? goalEvents
-      : currentProgressEvents(task).filter(isPublicEvent);
-  const visibleEvents = currentEvents.filter(
-    (event) => member === "all" || event.member === member,
-  );
-  const analysis = visibleEvents.filter((event) =>
-    publicAnalysisSection(event),
-  );
-  const exchanges = buildPublicExchanges(currentEvents, task.status).filter(
-    (exchange) =>
-      member === "all" ||
-      exchange.sender === member ||
-      exchange.receiver === member,
-  );
-  const records = allRecords ? visibleEvents : visibleEvents.slice(-80);
-  const sources = buildProcessSources(task, visibleEvents);
-  const queries = publicSearchQueries(visibleEvents);
+  const saveSummary = async () => {
+    if (saveState(task.id).pending) return;
+    updateSave(task.id, { pending: true, error: "" });
+    try {
+      const result = await dispatch({
+        type: "process.save",
+        taskId: task.id,
+        scope,
+        ...(member === "all" ? {} : { member }),
+      });
+      if (!result) throw new Error("过程总结未保存，请重试。已有内容仍保留。");
+      updateSave(task.id, { pending: false, error: "" });
+    } catch (error) {
+      updateSave(task.id, {
+        pending: false,
+        error:
+          error instanceof Error ? error.message : "过程总结未保存，请重试。",
+      });
+    }
+  };
   return (
     <section
-      className={`process-view layered-process ${compact ? "compact" : ""}`}
+      ref={section}
+      className={`process-view work-process ${compact ? "compact" : ""}`}
       aria-label="Agent 协作过程"
-      ref={container}
     >
-      <div className="process-heading">
-        <strong title={task.title}>团队过程</strong>
-        <span className={`process-state state-${task.status}`}>
-          <Layers2 size={13} />
-          目标 v{task.goalVersion}
-        </span>
-      </div>
-      <div className="process-overview" aria-label="本次成员状态">
-        {lanes.map((lane) => (
-          <article
-            key={lane.id}
-            className={`process-member agent-lane member-${lane.member} agent-${lane.status}`}
-          >
-            <button
-              className="process-member-select"
-              aria-pressed={member === lane.member}
-              onClick={() =>
-                setMember(member === lane.member ? "all" : lane.member)
-              }
-            >
-              {lane.member === "researcher" || lane.specialist ? (
-                <Search size={15} />
-              ) : lane.member === "cto" ? (
-                <Wrench size={15} />
-              ) : (
-                <Layers2 size={15} />
-              )}
-              <strong>
-                {lane.specialist ? "专项研究" : memberName(lane.member)}
-              </strong>
-              <span>
-                <StateIcon status={lane.status} />
-                {statusNames[lane.status]}
-              </span>
-            </button>
-            <p className="agent-summary">{lane.latestSummary}</p>
-            {lane.parentInvocationId ? (
-              <small className="process-origin">
-                由
-                {memberName(
-                  lanes.find((parent) => parent.id === lane.parentInvocationId)
-                    ?.member ?? "coordinator",
-                )}
-                委派
-              </small>
-            ) : null}
-          </article>
-        ))}
-      </div>
-      <div className="process-content-toolbar">
-        <div className="process-layer-tabs" role="group" aria-label="过程层级">
-          <button
-            aria-pressed={layer === "analysis"}
-            onClick={() => setLayer("analysis")}
-          >
-            思路摘要 <span>{analysis.length}</span>
-          </button>
-          <button
-            aria-pressed={layer === "sources"}
-            onClick={() => setLayer("sources")}
-          >
-            资料与网站 <span>{sources.length}</span>
-          </button>
-          <button
-            aria-pressed={layer === "conversation"}
-            onClick={() => setLayer("conversation")}
-          >
-            成员对话 <span>{exchanges.length}</span>
-          </button>
-          <button
-            aria-pressed={layer === "execution"}
-            onClick={() => setLayer("execution")}
-          >
-            执行记录
-          </button>
+      <header className="process-story-header">
+        <div>
+          <h2>分析与判断</h2>
+          <p>
+            {memberName(task.member, task.teamMode)}负责{" "}
+            <span className={`process-state state-${task.status}`}>
+              <StateIcon status={status} />
+              {task.status === "idle" ? "尚未开始" : statusNames[status]}
+            </span>
+          </p>
         </div>
-        <div
-          className="process-document-actions process-save-bar"
-          role="group"
-          aria-label="过程整理"
+        <button
+          className="button secondary process-save"
+          disabled={saving.pending || (!story.entries.length && !reviewCount)}
+          onClick={() => void saveSummary()}
         >
+          <FileText size={14} />
+          {saving.pending ? "正在整理…" : "总结并保存"}
+        </button>
+      </header>
+      {saving.error ? (
+        <p className="inline-notice warning" role="alert">
+          {saving.error}
+        </p>
+      ) : null}
+      <div className="process-story-controls">
+        <label>
+          <span className="sr-only">过程范围</span>
+          <select
+            aria-label="过程范围"
+            value={scope}
+            onChange={(event) => {
+              setScope(event.currentTarget.value as Scope);
+              setAllRecords(false);
+              setInspection(null);
+            }}
+          >
+            <option value="all">全部目标与修正</option>
+            <option value="goal">当前目标</option>
+            <option value="run">本次处理</option>
+          </select>
+        </label>
+        {participants.length > 1 ? (
           <label>
-            <span className="sr-only">过程范围</span>
+            <span className="sr-only">关注成员观点</span>
             <select
-              value={scope}
+              aria-label="关注成员观点"
+              value={member}
               onChange={(event) => {
-                setScope(event.target.value as "goal" | "run");
-                setAllRecords(false);
+                setMember(event.currentTarget.value as MemberId | "all");
+                setInspection(null);
               }}
             >
-              <option value="goal">当前目标全部过程</option>
-              <option value="run">本次处理</option>
-            </select>
-          </label>
-          <label>
-            <span className="sr-only">筛选成员</span>
-            <select
-              value={member}
-              onChange={(event) =>
-                setMember(event.target.value as MemberId | "all")
-              }
-            >
-              <option value="all">全部成员</option>
-              {(["coordinator", "cto", "researcher"] as const).map((id) => (
+              <option value="all">团队整体</option>
+              {participants.map((id) => (
                 <option key={id} value={id}>
-                  {memberName(id)}
+                  {memberName(id, task.teamMode)}
                 </option>
               ))}
             </select>
           </label>
-          <button
-            className="text-button"
-            aria-label={
-              member === "all"
-                ? "整理团队过程为文档"
-                : `整理${memberName(member)}过程为文档`
-            }
-            title="保存当前目标的全部过程"
-            disabled={saving !== null || !goalEvents.length}
-            onClick={() =>
-              void saveSummary(member === "all" ? undefined : member)
-            }
-          >
-            {saving ? (
-              <LoaderCircle size={13} className="spin" />
-            ) : (
-              <FileText size={13} />
-            )}
-            {saving ? "整理中…" : "保存过程文档"}
-          </button>
-        </div>
-        <div
-          className="process-reading-controls"
-          role="group"
-          aria-label="过程阅读方式"
+        ) : null}
+        <button
+          className="text-button"
+          aria-expanded={reviewOpen}
+          onClick={() => {
+            setReviewOpen(!reviewOpen);
+            setInspection(null);
+          }}
         >
-          <span>摘要浏览，按需展开</span>
-          <button
-            className="text-button"
-            onClick={() => {
-              expand(!allExpanded);
-              setAllExpanded(!allExpanded);
-            }}
-          >
-            {allExpanded ? "全部收起" : "全部展开"}
-          </button>
-        </div>
+          {reviewOpen ? "收起复盘" : "回看得失"}
+          {reviewCount ? ` · ${reviewCount}` : ""}
+        </button>
       </div>
-      {layer === "analysis" ? (
-        <div className="process-analysis" aria-label="公开分析摘要">
-          <p className="process-layer-note">
-            从问题、方法到依据和判断。简述留在这里，完整解释可展开查看。
+      <details className="process-current-goal" data-reading-key="goal">
+        <summary>
+          当前目标 · 第 {task.goalVersion} 版{" "}
+          <span>
+            {task.projectId ? projectRequestText(task.goal) : task.goal}
+          </span>
+        </summary>
+        <p>{task.goal}</p>
+      </details>
+      {reviewOpen ? (
+        <section className="process-retrospective" aria-label="过程复盘">
+          <header>
+            <h2>回看这次工作</h2>
+            <p>以下归纳来自公开内容与实际记录，可逐项核对。</p>
+          </header>
+          {(
+            [
+              ["effective", "可复核的做法"],
+              ["issues", "问题与修正"],
+              ["unverified", "仍待验证"],
+            ] as const
+          ).map(([key, title]) =>
+            story.review[key].length ? (
+              <section key={key}>
+                <h3>{title}</h3>
+                {story.review[key].map((item) => (
+                  <article key={item.id}>
+                    <Markdown dispatch={dispatch} onArtifactLink={openArtifact}>
+                      {item.text}
+                    </Markdown>
+                    <References
+                      ownerId={`review:${item.id}`}
+                      references={item.references}
+                      inspection={inspection}
+                      setInspection={setInspection}
+                      task={task}
+                      dispatch={dispatch}
+                      onArtifactOpen={openArtifact}
+                    />
+                  </article>
+                ))}
+              </section>
+            ) : null,
+          )}
+          {!reviewCount ? (
+            <p className="work-content-empty">
+              当前公开记录还不足以归纳哪些做法有效、哪些需要改进。
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+      <div className="process-story" aria-label="公开分析脉络">
+        {analysisGoal && analysisGoal !== task.goalVersion ? (
+          <p className="process-analysis-scope">
+            最近留下的分析 · 目标第 {analysisGoal}{" "}
+            版。当前目标尚无新的公开分析。
           </p>
-          {sources.length || queries.length ? (
-            <button
-              className="process-source-overview"
-              onClick={() => setLayer("sources")}
-            >
-              <Search size={14} />
-              <span>
-                <strong>{sources.length} 项资料与网站</strong>
-                <small>
-                  {sources.filter((source) => source.status === "read").length}{" "}
-                  项有读取记录
-                  {queries.length ? ` · ${queries.length} 个实际检索词` : ""}
-                </small>
-              </span>
-              <ArrowUpRight size={13} />
-            </button>
-          ) : null}
-          {!analysis.length ? (
-            <div className="process-empty-summary">
-              <strong>还没有公开分析摘要</strong>
-              <p>
-                {currentEvents.some((event) => event.data?.hosted === true)
-                  ? "这段记录尚未收到服务商的公开分析摘要。已返回的检索与来源可在「资料与网站」查看。"
-                  : "成员后续会在有实质发现或判断时补充说明；已有执行记录不会被改写为分析。"}
-              </p>
-            </div>
-          ) : null}
-          {ANALYSIS_SECTIONS.map((section) => {
-            const reports = analysis.filter(
-              (event) => publicAnalysisSection(event) === section.id,
-            );
-            if (!reports.length) return null;
-            return (
-              <details
-                className="analysis-section"
-                key={section.id}
-                open={reports.length > 0}
-              >
-                <summary>
-                  <span>
-                    <strong>{section.title}</strong>
-                    <small>{section.description}</small>
-                  </span>
-                  <span className="analysis-count">
-                    {reports.length}
-                    <ChevronDown size={13} />
-                  </span>
-                </summary>
-                {reports.length ? (
-                  reports.map((report) => (
-                    <article className="analysis-report" key={report.id}>
-                      <div className="timeline-byline">
-                        <strong>
-                          {report.member ? memberName(report.member) : "工作台"}
-                        </strong>
-                        <time>{formatTime(report.createdAt)}</time>
-                        {report.data?.hosted === true ? (
-                          <span>Google 公开摘要</span>
-                        ) : null}
-                      </div>
-                      <Markdown
-                        dispatch={dispatch}
-                        onArtifactLink={openArtifact}
-                      >
-                        {report.summary}
-                      </Markdown>
-                      <AnalysisDetails
-                        report={report}
+        ) : null}
+        {lead ? (
+          <section
+            className="process-leading-judgment"
+            aria-label="最近判断与修正"
+          >
+            <p className="process-lead-label">
+              {lead.kind === "revision" ? "关键修正" : "当前判断"}
+            </p>
+            <StoryEntry
+              entry={lead}
+              task={task}
+              dispatch={dispatch}
+              onArtifactOpen={openArtifact}
+              inspection={inspection}
+              setInspection={setInspection}
+            />
+          </section>
+        ) : null}
+        <div className="process-current-analysis" aria-label="成员分析与贡献">
+          {currentAnalysis
+            .filter((entry) => entry.id !== lead?.id)
+            .map((entry) => (
+              <StoryEntry
+                key={entry.id}
+                entry={entry}
+                task={task}
+                dispatch={dispatch}
+                onArtifactOpen={openArtifact}
+                inspection={inspection}
+                setInspection={setInspection}
+              />
+            ))}
+        </div>
+        {!analysisEntries.length ? (
+          <p className="work-content-empty">
+            {task.status === "idle"
+              ? "开始工作后，在这里阅读团队对目标的理解、判断依据和修正过程。"
+              : "这一范围尚未留下可展示的公开分析或回复。已有操作可在排障记录中核对，不能据此补写当时的判断。"}
+          </p>
+        ) : null}
+        {history.length ? (
+          <details className="process-story-history" data-reading-key="history">
+            <summary>较早目标的分析 · {history.length}</summary>
+            {[...new Set(history.map((entry) => entry.goalVersion))].map(
+              (goalVersion) => (
+                <section key={goalVersion}>
+                  <h2 className="process-goal-marker">
+                    目标第 {goalVersion} 版
+                  </h2>
+                  {history
+                    .filter((entry) => entry.goalVersion === goalVersion)
+                    .map((entry) => (
+                      <StoryEntry
+                        key={entry.id}
+                        entry={entry}
+                        task={task}
                         dispatch={dispatch}
                         onArtifactOpen={openArtifact}
+                        inspection={inspection}
+                        setInspection={setInspection}
                       />
-                      <div className="analysis-references">
-                        {Array.isArray(report.data?.sourceIds)
-                          ? report.data.sourceIds.flatMap((id) => {
-                              const source = task.sources.find(
-                                (source) => source.id === id,
-                              );
-                              return source
-                                ? [
-                                    <details key={source.id}>
-                                      <summary>
-                                        <FileText size={11} />
-                                        {source.title}
-                                      </summary>
-                                      <p>{source.text.slice(0, 900)}</p>
-                                      <small>{source.coverage}</small>
-                                      {source.type === "url" ? (
-                                        <button
-                                          className="text-button"
-                                          onClick={() =>
-                                            void dispatch({
-                                              type: "url.open",
-                                              url: source.location,
-                                            })
-                                          }
-                                        >
-                                          查看来源
-                                          <ArrowUpRight size={12} />
-                                        </button>
-                                      ) : null}
-                                    </details>,
-                                  ]
-                                : [];
-                            })
-                          : null}
-                        {Array.isArray(report.data?.artifactIds)
-                          ? report.data.artifactIds.flatMap((id) => {
-                              const artifact = task.artifacts.find(
-                                (artifact) => artifact.id === id,
-                              );
-                              return artifact
-                                ? [
-                                    <button
-                                      className="text-button"
-                                      key={artifact.id}
-                                      onClick={() => openArtifact(artifact.id)}
-                                    >
-                                      <FileText size={11} />
-                                      {artifact.title}
-                                      <ArrowUpRight size={12} />
-                                    </button>,
-                                  ]
-                                : [];
-                            })
-                          : null}
-                      </div>
-                    </article>
-                  ))
-                ) : (
-                  <p className="analysis-empty">尚无这一类说明</p>
-                )}
-              </details>
-            );
-          })}
-        </div>
-      ) : layer === "sources" ? (
-        <div className="process-sources" aria-label="核查资料与网站">
-          <p className="process-layer-note">
-            读取、搜索与引用分别标识；搜索结果和引用链接不代表已访问全文。
-          </p>
-          {queries.length ? (
-            <details className="process-search-queries">
-              <summary>
-                <Search size={13} />
-                实际检索词 · {queries.length}
-                <ChevronDown size={12} />
-              </summary>
-              <ol>
-                {queries.map((query) => (
-                  <li key={query}>{query}</li>
-                ))}
-              </ol>
-            </details>
-          ) : null}
-          <div
-            className="process-source-filters"
-            role="group"
-            aria-label="资料状态筛选"
+                    ))}
+                </section>
+              ),
+            )}
+          </details>
+        ) : null}
+        {context.length ? (
+          <details
+            className="process-context-history"
+            data-reading-key="context"
           >
-            {(
-              [
-                ["all", "全部"],
-                ["read", "已读取"],
-                ["unavailable", "未能读取"],
-              ] as const
-            ).map(([value, label]) => (
-              <button
-                key={value}
-                aria-pressed={sourceFilter === value}
-                onClick={() => setSourceFilter(value)}
-              >
-                {label}{" "}
-                {
-                  sources.filter(
-                    (source) => value === "all" || source.status === value,
-                  ).length
-                }
-              </button>
+            <summary>原始要求与资料、成果版本 · {context.length}</summary>
+            {context.map((entry) => (
+              <StoryEntry
+                key={entry.id}
+                entry={entry}
+                task={task}
+                dispatch={dispatch}
+                onArtifactOpen={openArtifact}
+                inspection={inspection}
+                setInspection={setInspection}
+              />
             ))}
-          </div>
-          {sources
-            .filter(
-              (source) =>
-                sourceFilter === "all" || source.status === sourceFilter,
-            )
-            .map((source) => (
-              <details className="process-source-card" key={source.id}>
+          </details>
+        ) : null}
+      </div>
+      <footer className="process-story-support">
+        <p className="process-coverage-note">{story.coverage.notice}</p>
+        <div className="work-process-evidence-actions">
+          {sources.length || queries.length ? (
+            <button
+              className="text-button"
+              aria-expanded={sourcesOpen}
+              onClick={() => setSourcesOpen(!sourcesOpen)}
+            >
+              <Search size={13} />
+              {sourcesOpen ? "收起依据" : "查看依据"} · {sources.length} 项资料
+            </button>
+          ) : null}
+          <button
+            className="text-button"
+            aria-expanded={recordsOpen}
+            onClick={() => setRecordsOpen(!recordsOpen)}
+          >
+            {recordsOpen ? "收起排障记录" : "排障记录"} · {visibleEvents.length}
+          </button>
+        </div>
+        {sourcesOpen ? (
+          <div className="process-sources" aria-label="核查资料与网站">
+            <p className="work-content-muted">
+              搜索结果和引用链接不代表已访问全文。
+            </p>
+            {queries.length ? (
+              <details
+                className="process-search-queries"
+                data-reading-key="queries"
+              >
+                <summary>实际检索词 · {queries.length}</summary>
+                <ol>
+                  {queries.map((query) => (
+                    <li key={query}>{query}</li>
+                  ))}
+                </ol>
+              </details>
+            ) : null}
+            {sources.map((source) => (
+              <details
+                className="process-source-card"
+                key={source.id}
+                data-reading-key={`source:${source.id}`}
+              >
                 <summary>
-                  <FileText size={14} />
                   <span>
                     <strong>{source.title}</strong>
                     <small>
@@ -543,19 +936,13 @@ export function ProcessView({
                   <ChevronDown size={12} />
                 </summary>
                 <div className="process-source-body">
-                  <p className="process-source-origin">
+                  <p className="work-content-muted">
                     {source.origin === "google" ? "Google 返回" : "任务资料"}
                     {source.members.length
-                      ? ` · ${source.members.map(memberName).join("、")}`
+                      ? ` · ${source.members.map((id) => memberName(id, task.teamMode)).join("、")}`
                       : ""}
                   </p>
-                  {source.snippet ? (
-                    <p className="process-source-snippet">{source.snippet}</p>
-                  ) : (
-                    <p className="analysis-empty">
-                      此记录没有返回可展示的正文节选。
-                    </p>
-                  )}
+                  <p>{source.snippet || "此记录没有返回可展示的正文节选。"}</p>
                   {source.url ? (
                     <button
                       className="text-button"
@@ -563,122 +950,79 @@ export function ProcessView({
                         void dispatch({ type: "url.open", url: source.url })
                       }
                     >
-                      打开来源
-                      <ArrowUpRight size={12} />
+                      打开来源 <ArrowUpRight size={12} />
                     </button>
                   ) : null}
                 </div>
               </details>
             ))}
-          {!sources.length ? (
-            <div className="process-empty-summary">
-              <strong>尚无可核查的来源记录</strong>
-              <p>
-                成员实际阅读任务资料、返回搜索结果或核查网站后，依据会整理到这里。
-              </p>
-            </div>
-          ) : !sources.some(
-              (source) =>
-                sourceFilter === "all" || source.status === sourceFilter,
-            ) ? (
-            <p className="analysis-empty">当前没有这一状态的资料。</p>
-          ) : null}
-        </div>
-      ) : layer === "conversation" ? (
-        <div className="process-conversations" aria-label="实际成员对话">
-          <p className="process-layer-note">
-            实际委派与回复；较长消息可能为运行时保留的节选。
-          </p>
-          {exchanges.length ? (
-            exchanges.map((exchange) => (
-              <details
-                className="process-exchange"
-                key={exchange.id}
-                open={exchange.status === "running" || exchanges.length < 3}
-              >
-                <summary>
-                  <MessageSquare size={14} />
-                  <strong>{memberName(exchange.sender)}</strong>
-                  <ArrowRight size={12} />
-                  <strong>
-                    {exchange.specialist
-                      ? "专项研究"
-                      : memberName(exchange.receiver)}
-                  </strong>
-                  <span className="exchange-status">
-                    <StateIcon status={exchange.status} />
-                    {statusNames[exchange.status]}
-                  </span>
-                </summary>
-                <div className="exchange-message">
-                  <span>委派内容 · {formatTime(exchange.createdAt)}</span>
-                  {exchange.request ? (
-                    <Markdown dispatch={dispatch} onArtifactLink={openArtifact}>
-                      {exchange.request}
-                    </Markdown>
-                  ) : (
-                    <p>此记录没有保留委派正文。</p>
-                  )}
-                </div>
-                <div className="exchange-message exchange-response">
-                  <span>
-                    {exchange.specialist
-                      ? "专项研究"
-                      : memberName(exchange.receiver)}
-                    回复
-                  </span>
-                  {exchange.response ? (
-                    <Markdown dispatch={dispatch} onArtifactLink={openArtifact}>
-                      {exchange.response}
-                    </Markdown>
-                  ) : (
-                    <p>
-                      {exchange.status === "running"
-                        ? "等待成员回复。"
-                        : "此记录没有保留完整回复。"}
-                    </p>
-                  )}
-                </div>
-              </details>
-            ))
-          ) : (
-            <div className="process-empty-summary">
-              <strong>尚无成员间对话</strong>
-              <p>需要协作时，成员的委派、追问和真实回复会出现在这里。</p>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="process-execution" aria-label="执行记录">
-          <p className="process-layer-note">
-            工具、运行状态和文件操作，按实际发生的时间记录。
-          </p>
-          <ol className="process-timeline">
-            {records.toReversed().map((event) => (
-              <li key={event.id}>
-                <span className="timeline-point" />
-                <div>
-                  <div className="timeline-byline">
-                    <strong>
-                      {event.member ? memberName(event.member) : "工作台"}
-                    </strong>
-                    <time>{formatTime(event.createdAt)}</time>
-                  </div>
-                  <p>{event.summary}</p>
-                </div>
-              </li>
+          </div>
+        ) : null}
+        {visibleEvents.some((event) => event.type === "skill_loaded") ? (
+          <details className="work-method-evidence" data-reading-key="methods">
+            <summary>实际使用的方法</summary>
+            <SkillUsage events={visibleEvents} />
+          </details>
+        ) : null}
+        <details className="work-process-members" data-reading-key="members">
+          <summary>成员运行状态 · {lanes.length}</summary>
+          <div aria-label="本次成员状态">
+            {lanes.map((lane) => (
+              <div className="process-member work-member-line" key={lane.id}>
+                <strong>
+                  {memberName(lane.member, task.teamMode)}
+                  {lane.specialist ? "的专项成员" : ""}
+                </strong>
+                <span>
+                  <StateIcon status={lane.status} />
+                  {statusNames[lane.status]}
+                </span>
+                <p>{lane.latestSummary}</p>
+              </div>
             ))}
-          </ol>
-          {!records.length ? (
-            <p className="analysis-empty">工作开始后显示实际记录。</p>
-          ) : null}
-          {!allRecords && visibleEvents.length > records.length ? (
-            <button className="text-button" onClick={() => setAllRecords(true)}>
-              显示本轮全部 {visibleEvents.length} 条记录
-            </button>
-          ) : null}
-        </div>
-      )}
+          </div>
+        </details>
+        {recordsOpen ? (
+          <div className="process-execution" aria-label="排障记录">
+            <p className="work-content-muted">
+              以下是执行状态，公开分析与成员观点在上方阅读。
+            </p>
+            <ol className="process-timeline">
+              {records.toReversed().map((event) => (
+                <li key={event.id}>
+                  <span className="timeline-point" />
+                  <div>
+                    <div className="timeline-byline">
+                      <strong>
+                        {event.member
+                          ? memberName(event.member, task.teamMode)
+                          : "工作台"}
+                      </strong>
+                      <time>{formatTime(event.createdAt)}</time>
+                      <span>目标 v{event.goalVersion}</span>
+                    </div>
+                    <p>{event.summary}</p>
+                  </div>
+                </li>
+              ))}
+            </ol>
+            {!records.length ? (
+              <p className="work-content-muted">工作开始后显示实际执行记录。</p>
+            ) : null}
+            {!allRecords && visibleEvents.length > records.length ? (
+              <button
+                className="text-button"
+                onClick={() => setAllRecords(true)}
+              >
+                显示全部 {visibleEvents.length} 条记录
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+      </footer>
     </section>
   );
+}
+export function ProcessView(props: ProcessProps) {
+  return <ProcessStoryView key={props.task.id} {...props} />;
 }

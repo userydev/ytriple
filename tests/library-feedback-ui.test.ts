@@ -338,7 +338,7 @@ test("Lib saving locks the remounted editor and clears the submitted draft", asy
         "# 新正文\n二十分钟检查",
       ),
     );
-    await act(async () => click("保存到 Lib"));
+    await act(async () => click("保存资产"));
     assert.equal(request?.type, "library.save");
     await act(async () => root.render(createElement("p", null, "其他页面")));
     await render();

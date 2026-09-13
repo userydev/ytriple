@@ -1,5 +1,9 @@
 export type SourcePolicyAction =
-  "source.create" | "source.refresh" | "source.read" | "content.read";
+  | "source.create"
+  | "source.refresh"
+  | "source.read"
+  | "content.read"
+  | "content.correct";
 
 export type SourcePolicyInput = {
   tenantId: string;

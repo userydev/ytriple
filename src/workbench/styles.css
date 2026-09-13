@@ -1133,7 +1133,7 @@ button {
 .markdown {
   font-size: 13px;
   line-height: 1.95;
-  color: #455b40;
+  color: var(--ink);
   overflow-wrap: anywhere;
 }
 .markdown > :first-child {
@@ -1169,7 +1169,7 @@ button {
 }
 .markdown strong {
   font-weight: 600;
-  color: #354f32;
+  color: var(--ink);
 }
 .markdown a {
   color: #41794e;

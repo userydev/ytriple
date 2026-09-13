@@ -1928,6 +1928,7 @@ export class Store {
       ...settings,
       memberSettings: normalizeTeamSettings(settings.memberSettings),
       projectMonitoring: settings.projectMonitoring !== false,
+      backgroundRoutines: settings.backgroundRoutines === true,
     };
   }
   profiles(): ModelProfile[] {

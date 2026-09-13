@@ -429,7 +429,8 @@ test("Radar opens server information for reading and retains earlier team topics
   const openedTasks: string[] = [];
   const { act, createElement } = await import("react");
   const { createRoot } = await import("react-dom/client");
-  const { Radar } = await import("../src/workbench/Radar.js");
+  const { RadarArchive: Radar } =
+    await import("../src/workbench/RadarArchive.js");
   const dispatch = async (command: Command): Promise<Snapshot> => {
     commands.push(command);
     if (command.type === "radar.createTask")
@@ -723,7 +724,8 @@ test("recommended source reports real observation failure and schedule", async (
     });
   const { act, createElement } = await import("react");
   const { createRoot } = await import("react-dom/client");
-  const { Radar } = await import("../src/workbench/Radar.js");
+  const { RadarArchive: Radar } =
+    await import("../src/workbench/RadarArchive.js");
   const root = createRoot(document.getElementById("root")!);
   const button = (label: string, within: ParentNode = document) =>
     Array.from(within.querySelectorAll("button")).find((item) =>
@@ -807,7 +809,8 @@ test("Radar empty state never invents recommended content", async () => {
     });
   const { act, createElement } = await import("react");
   const { createRoot } = await import("react-dom/client");
-  const { Radar } = await import("../src/workbench/Radar.js");
+  const { RadarArchive: Radar } =
+    await import("../src/workbench/RadarArchive.js");
   const root = createRoot(document.getElementById("root")!);
   const button = (label: string, within: ParentNode = document) =>
     Array.from(within.querySelectorAll("button")).find((item) =>
@@ -849,6 +852,24 @@ test("Radar empty state never invents recommended content", async () => {
 test("the app exposes Radar as a primary navigation destination", async () => {
   const snapshot = snapshotFixture();
   const currentSnapshot = structuredClone(snapshot);
+  const interpretation = (
+    await import("./fixtures/editorial.js")
+  ).editorialRevision();
+  currentSnapshot.radar!.editorialIdentity = "app-editorial-test";
+  currentSnapshot.radar!.editorial = {
+    status: { state: "ready" },
+    issues: [
+      {
+        id: interpretation.issueId,
+        focus: "AI",
+        createdAt: interpretation.createdAt,
+        updatedAt: interpretation.createdAt,
+        latest: interpretation,
+        history: [interpretation],
+        corrections: [],
+      },
+    ],
+  };
   const invoked: Command[] = [];
   const { window, document } = parseHTML(
     "<!doctype html><html><head></head><body><div id='root'></div></body></html>",
@@ -903,33 +924,38 @@ test("the app exposes Radar as a primary navigation destination", async () => {
         .startsWith("雷达"),
       true,
     );
-    assert.equal(document.querySelector(".radar-page h1")?.textContent, "雷达");
+    assert.equal(
+      document.querySelector(".editorial-header h1")?.textContent,
+      "雷达",
+    );
     assert.match(
-      document.querySelector(".topbar-location")?.textContent ?? "",
-      /每日情报与信息源/,
+      document.querySelector("#radar-page-header")?.textContent ?? "",
+      /雷达.*解读.*来源材料/,
     );
 
-    const topicsTab = Array.from(document.querySelectorAll("button")).find(
-      (button) => button.textContent?.includes("团队处理记录"),
+    const read = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.includes("阅读解读"),
     );
-    assert.ok(topicsTab);
+    assert.ok(read);
+    assert.match(
+      document.querySelector(".editorial-stories")?.textContent ?? "",
+      /成本比较需要相同任务和质量标准/,
+    );
     await act(async () => {
-      topicsTab.dispatchEvent(new window.Event("click", { bubbles: true }));
-    });
-    const handoff = Array.from(
-      document.querySelectorAll(".radar-inbox button"),
-    ).find((element) => element.textContent?.includes("交给团队整理这批"));
-    assert.ok(handoff);
-    await act(async () => {
-      handoff.dispatchEvent(new window.Event("click", { bubbles: true }));
+      read.dispatchEvent(new window.Event("click", { bubbles: true }));
       await new Promise<void>((resolve) => setImmediate(resolve));
     });
-    assert.deepEqual(
-      invoked.find((command) => command.type === "radar.digest"),
-      {
-        type: "radar.digest",
-        itemIds: ["digested-user", "raw-server"],
-      },
+    assert.ok(document.querySelector(".editorial-detail"));
+    assert.ok(
+      invoked.some((command) => command.type === "radar.editorialVersion"),
+    );
+    assert.equal(
+      invoked.some(
+        (command) =>
+          command.type === "radar.digest" ||
+          command.type === "radar.discussEditorial",
+      ),
+      false,
     );
     assert.equal(
       document
@@ -940,8 +966,8 @@ test("the app exposes Radar as a primary navigation destination", async () => {
     );
     assert.ok(document.querySelector(".radar-page"));
     assert.match(
-      document.querySelector(".topbar-location")?.textContent ?? "",
-      /每日情报与信息源/,
+      document.querySelector("#radar-page-header")?.textContent ?? "",
+      /雷达.*解读.*来源材料/,
     );
   } finally {
     await act(async () => root.unmount());

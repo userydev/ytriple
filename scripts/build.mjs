@@ -1,7 +1,11 @@
 import { build } from "esbuild";
 import { build as viteBuild } from "vite";
 await build({
-  entryPoints: { main: "src/desktop/main.ts", worker: "src/desktop/worker.ts" },
+  entryPoints: {
+    main: "src/desktop/main.ts",
+    worker: "src/desktop/worker.ts",
+    "work-service": "services/work-service/main.ts",
+  },
   bundle: true,
   platform: "node",
   format: "esm",

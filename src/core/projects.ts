@@ -736,6 +736,42 @@ async function observe(
   };
 }
 
+export async function inspectImportedProject(
+  directory: string,
+): Promise<ProjectInfo> {
+  const root = path.resolve(directory);
+  if (root === path.parse(root).root || root === os.homedir())
+    throw new Error("请选择具体项目目录，不能导入整台电脑或用户目录。");
+  chain(root);
+  const stat = await fs.lstat(root);
+  if (!stat.isDirectory() || stat.isSymbolicLink())
+    throw new Error("请选择实际项目目录。");
+  const context: Context = {
+    aiRoot: "",
+    codeRoot: root,
+    deadline: Date.now() + DEADLINE_MS,
+    errors: [],
+    truncated: false,
+    directories: 0,
+  };
+  const hasGit = Boolean(await inspectPath(root, path.join(root, ".git")));
+  return observe(context, {
+    id: `imported-${hash(root).slice(0, 24)}`,
+    name: path.basename(root),
+    series: "local",
+    root,
+    devPath: root,
+    registered: false,
+    imported: true,
+    documents: {
+      entry: path.join(root, "README.md"),
+      rules: path.join(root, "AGENTS.md"),
+    },
+    worktrees: hasGit ? [{ path: root }] : [],
+    warnings: [],
+  });
+}
+
 export class ProjectDiscovery {
   private value: ScanResult = {
     projects: [],

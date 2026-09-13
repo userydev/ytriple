@@ -21,6 +21,9 @@ import { immutableFollowDeliveriesMigration } from "./migrations/007-immutable-f
 import { feedItemsMigration } from "./migrations/008-feed-items.js";
 import { readingTopicsMigration } from "./migrations/009-reading-topics.js";
 import { publicationTimeMigration } from "./migrations/010-publication-time.js";
+import { editorialMigration } from "./migrations/011-editorial.js";
+import { editorialPresentationMigration } from "./migrations/012-editorial-presentation.js";
+import { editorialEditionMigration } from "./migrations/013-editorial-edition.js";
 
 const migrations = [
   initialMigration,
@@ -33,6 +36,9 @@ const migrations = [
   feedItemsMigration,
   readingTopicsMigration,
   publicationTimeMigration,
+  editorialMigration,
+  editorialPresentationMigration,
+  editorialEditionMigration,
 ] as const;
 
 export type AuthenticatedDevice = {

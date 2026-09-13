@@ -8,10 +8,14 @@ import {
   utilityProcess,
   protocol,
   screen,
+  Tray,
+  Menu,
+  nativeImage,
 } from "electron";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SourceConnection } from "../core/source-connection.js";
+import type { WorkConnection } from "../core/work-gateway.js";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promises as fs } from "node:fs";
 import type {
@@ -39,11 +43,7 @@ if (process.env.YTRIPLE_DATA_PATH)
   app.setPath("userData", path.resolve(process.env.YTRIPLE_DATA_PATH));
 if (!app.requestSingleInstanceLock()) app.exit(0);
 app.on("second-instance", () => {
-  const main = mainWindow;
-  if (main) {
-    main.show();
-    main.focus();
-  }
+  if (!closing) openWindow();
 });
 protocol.registerSchemesAsPrivileged([
   {
@@ -57,6 +57,62 @@ let sequence = 0;
 let closing = false;
 let closed = false;
 let mainWindow: BrowserWindow | undefined;
+let backgroundTray: Tray | undefined;
+let backgroundMenuKey = "";
+function backgroundItems() {
+  return (
+    latest?.routines?.items.filter(
+      (item) =>
+        item.location === "client" &&
+        ["active", "running", "waiting"].includes(item.state),
+    ) ?? []
+  );
+}
+function keepBackground() {
+  return (
+    latest?.settings.backgroundRoutines === true && backgroundItems().length > 0
+  );
+}
+function updateBackgroundMenu() {
+  if (!app.isReady()) return;
+  const count = backgroundItems().length;
+  const key = `${count}:${latest?.settings.backgroundRoutines === true}`;
+  if (key === backgroundMenuKey) return;
+  backgroundMenuKey = key;
+  if (!backgroundTray) {
+    const size = 20,
+      pixels = Buffer.alloc(size * size * 4);
+    for (let y = 3; y < 17; y++)
+      for (let x = 3; x < 17; x++) {
+        const marked =
+          y < 10
+            ? Math.abs(x - (y + 1)) < 1.5 || Math.abs(x - (19 - y)) < 1.5
+            : Math.abs(x - 10) < 1.5;
+        if (marked) pixels[(y * size + x) * 4 + 3] = 255;
+      }
+    const icon = nativeImage.createFromBitmap(pixels, {
+      width: size,
+      height: size,
+    });
+    icon.setTemplateImage(true);
+    backgroundTray = new Tray(icon);
+    backgroundTray.on("double-click", () => openWindow());
+  }
+  backgroundTray.setToolTip(`ytriple · ${count} 项本机例行`);
+  backgroundTray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "打开 ytriple", click: () => openWindow() },
+      {
+        label: keepBackground()
+          ? `${count} 项例行会在关闭窗口后继续`
+          : "关闭窗口时退出",
+        enabled: false,
+      },
+      { type: "separator" },
+      { label: "退出并暂停本机执行", click: () => app.quit() },
+    ]),
+  );
+}
 let layout: WindowLayout;
 let desktopRevision = 0;
 let movingWindow = false;
@@ -103,6 +159,15 @@ const pending = new Map<
 >();
 let vault: Record<string, string> = {};
 let sourceConnecting: Promise<Snapshot> | undefined;
+let accountActions: Promise<void> = Promise.resolve();
+function accountAction(action: () => Promise<Snapshot>): Promise<Snapshot> {
+  const pending = accountActions.catch(() => undefined).then(action);
+  accountActions = pending.then(
+    () => undefined,
+    () => undefined,
+  );
+  return pending;
+}
 const sourcePairingAttempts = new Map<string, string>();
 function request<T = Snapshot>(payload: Record<string, unknown>): Promise<T> {
   if (!engine)
@@ -147,6 +212,7 @@ function publish(snapshot: Snapshot): Snapshot {
     void persistLayout();
   }
   latest = decorate(snapshot);
+  updateBackgroundMenu();
   if (mainWindow && !mainWindow.isDestroyed())
     mainWindow.webContents.send("ytriple:snapshot", latest);
   return latest;
@@ -251,7 +317,7 @@ function openWindow(): BrowserWindow {
   win.on("move", remember);
   win.on("closed", () => {
     mainWindow = undefined;
-    if (!closing) app.quit();
+    if (!closing && !keepBackground()) app.quit();
   });
   win.once("ready-to-show", () => {
     win.show();
@@ -438,6 +504,70 @@ async function command(input: Command): Promise<Snapshot> {
       },
     });
   }
+  if (input.type === "project.import") {
+    const parent = BrowserWindow.getFocusedWindow() || mainWindow;
+    if (!parent) throw new Error("请先打开工作台。");
+    const selection = await dialog.showOpenDialog(parent, {
+      title: "选择已有软件项目（仅观察，不修改原目录）",
+      properties: ["openDirectory"],
+    });
+    if (selection.canceled) return latest!;
+    return request({
+      type: "command",
+      command: { type: "project.import.path", path: selection.filePaths[0] },
+    });
+  }
+  if (input.type === "skill.importLocal") {
+    const parent = BrowserWindow.getFocusedWindow() || mainWindow;
+    if (!parent) throw new Error("请先打开工作台。");
+    const selection = await dialog.showOpenDialog(parent, {
+      title: "选择可信方法包中的 SKILL.md",
+      properties: ["openFile"],
+      filters: [{ name: "方法说明", extensions: ["md"] }],
+    });
+    if (selection.canceled) return latest!;
+    return request({
+      type: "command",
+      command: {
+        type: "skill.importLocal.path",
+        requestId: input.requestId,
+        selectedPath: selection.filePaths[0],
+      },
+    });
+  }
+  if (
+    input.type === "portable.restore" ||
+    input.type === "portable.importBookmarksFile"
+  ) {
+    const parent = BrowserWindow.getFocusedWindow() || mainWindow;
+    if (!parent) throw new Error("请先打开工作台。");
+    const restoring = input.type === "portable.restore";
+    const selection = await dialog.showOpenDialog(parent, {
+      title: restoring
+        ? "选择 ytriple 备份（恢复到新目录）"
+        : "选择导出的书签或收藏文件",
+      properties: ["openFile"],
+      filters: [
+        {
+          name: restoring ? "ytriple 备份" : "收藏与书签",
+          extensions: restoring
+            ? ["json"]
+            : ["json", "html", "htm", "txt", "md"],
+        },
+      ],
+    });
+    if (selection.canceled) return latest!;
+    return request({
+      type: "command",
+      command: {
+        ...input,
+        type: restoring
+          ? "portable.restore.path"
+          : "portable.importBookmarks.path",
+        path: selection.filePaths[0],
+      },
+    });
+  }
   if (input.type === "radar.connect") {
     if (sourceConnecting) return sourceConnecting;
     sourceConnecting = (async () => {
@@ -461,6 +591,23 @@ async function command(input: Command): Promise<Snapshot> {
     } finally {
       sourceConnecting = undefined;
     }
+  }
+  if (input.type === "service.login") {
+    return accountAction(async () => {
+      const { type: _type, ...login } = input;
+      const connection = await request<WorkConnection>({
+        type: "work.login",
+        login,
+      });
+      await saveKey("__work_service__", JSON.stringify(connection));
+      return request({ type: "work.connect", workConnection: connection });
+    });
+  }
+  if (input.type === "service.logout") {
+    return accountAction(async () => {
+      await saveKey("__work_service__", "");
+      return request({ type: "work.logout" });
+    });
   }
   if (input.type === "profile.save") {
     if (input.apiKey !== undefined)
@@ -622,7 +769,11 @@ app.on("before-quit", (event) => {
   closing = true;
   clearTimeout(layoutTimer);
   void Promise.all([
-    engine ? request({ type: "close" }).catch(() => {}) : Promise.resolve(),
+    accountActions
+      .catch(() => {})
+      .then(() =>
+        engine ? request({ type: "close" }).catch(() => {}) : undefined,
+      ),
     writeLayout(),
   ]).finally(() => {
     closed = true;
@@ -630,4 +781,9 @@ app.on("before-quit", (event) => {
     app.quit();
   });
 });
-app.on("window-all-closed", () => app.quit());
+app.on("window-all-closed", () => {
+  if (!keepBackground()) app.quit();
+});
+app.on("activate", () => {
+  if (!closing) openWindow();
+});

@@ -1291,3 +1291,28 @@
     gap: 3px;
   }
 }
+.editorial-secondary-heading {
+  margin-bottom: 28px;
+}
+.editorial-secondary-heading h2,
+.editorial-sources-heading h2 {
+  margin-top: 18px;
+}
+.editorial-secondary-heading p {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.editorial-management-view {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 28px 0;
+}
+.editorial-empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 12px 22px;
+  margin-top: 24px;
+}

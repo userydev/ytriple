@@ -24,6 +24,10 @@ import {
   PROTOCOL_VERSION,
   ReadinessResponseSchema,
   ReadingResponseSchema,
+  EditorialResponseSchema,
+  EditorialRevisionResponseSchema,
+  EditorialCorrectionRequestSchema,
+  EditorialCorrectionResponseSchema,
   RecommendedSourcesResponseSchema,
   RefreshSourceRequestSchema,
   RevisionResponseSchema,
@@ -57,6 +61,12 @@ import {
   type AuthenticatedDevice,
   type StoredJob,
 } from "./store/database.js";
+
+import {
+  editorialFeed,
+  editorialVersion,
+  correctEditorial,
+} from "./editorial-store.js";
 
 const MAX_JSON_BYTES = 64 * 1024;
 const STREAM_PAGE_SIZE = 100;
@@ -471,9 +481,73 @@ export async function createSourceApi(
             recommendedSources: true,
             rssAtom: true,
             readingTopics: true,
+            editorial: true,
           },
           scopes: SOURCE_SCOPES,
         }),
+      );
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/v1/editorial") {
+      const device = await authenticate(request, "content:read");
+      await authorize(device, "content.read");
+      sendJSON(
+        response,
+        200,
+        EditorialResponseSchema.parse({
+          meta,
+          ...(await editorialFeed(database, device.tenantId)),
+        }),
+      );
+      return;
+    }
+    const editorialRevisionPath = url.pathname.match(
+      /^\/v1\/editorial\/([^/]+)\/revisions\/([^/]+)$/,
+    );
+    if (request.method === "GET" && editorialRevisionPath) {
+      const device = await authenticate(request, "content:read");
+      await authorize(device, "content.read");
+      const revision = await editorialVersion(
+        database,
+        device.tenantId,
+        pathUUID(editorialRevisionPath[1]!),
+        pathUUID(editorialRevisionPath[2]!),
+      );
+      sendJSON(
+        response,
+        200,
+        EditorialRevisionResponseSchema.parse({ meta, revision }),
+      );
+      return;
+    }
+    const correctionPath = url.pathname.match(
+      /^\/v1\/editorial\/([^/]+)\/corrections$/,
+    );
+    if (request.method === "POST" && correctionPath) {
+      const device = await authenticate(request, "sources:write");
+      await authorize(device, "content.correct");
+      const key = idempotencyKey(request);
+      const parsed = EditorialCorrectionRequestSchema.safeParse(
+        await readJSON(request),
+      );
+      if (!parsed.success)
+        throw new HttpError(
+          400,
+          "INVALID_REQUEST",
+          "请填写针对当前解读的纠正（3–3000 字）。",
+        );
+      const correction = await correctEditorial(
+        database,
+        device.tenantId,
+        pathUUID(correctionPath[1]!),
+        parsed.data,
+        key,
+      );
+      sendJSON(
+        response,
+        201,
+        EditorialCorrectionResponseSchema.parse({ meta, correction }),
       );
       return;
     }

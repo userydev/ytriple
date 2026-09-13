@@ -20,6 +20,7 @@ export const CAPABILITY_NAMES = [
   "recommendedSources",
   "rssAtom",
   "readingTopics",
+  "editorial",
 ] as const;
 
 export const JOB_STATUSES = [
@@ -84,6 +85,9 @@ export const SOURCE_API_PATHS = {
   follow: "/v1/follows/{followId}",
   followRefresh: "/v1/follows/{followId}/refresh",
   reading: "/v1/reading",
+  editorial: "/v1/editorial",
+  editorialRevision: "/v1/editorial/{issueId}/revisions/{revisionId}",
+  editorialCorrection: "/v1/editorial/{issueId}/corrections",
 } as const;
 
 export const IDEMPOTENCY_KEY_HEADER = "Idempotency-Key" as const;
@@ -216,6 +220,7 @@ export const CapabilityFlagsSchema = z.object({
   recommendedSources: z.boolean().optional(),
   rssAtom: z.boolean().optional(),
   readingTopics: z.boolean().optional(),
+  editorial: z.boolean().optional(),
 });
 
 export const CapabilitiesResponseSchema = z.object({
@@ -679,3 +684,190 @@ export type UpsertURLSourceResponse = z.infer<
 export type RefreshSourceRequest = z.infer<typeof RefreshSourceRequestSchema>;
 export type ChangesResponse = z.infer<typeof ChangesResponseSchema>;
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
+
+// Editorial delivery is additive: older clients may continue reading source items.
+export const EditorialFocusSchema = z.enum(["科技", "AI", "金融", "股票"]);
+export const EditorialMaterialSchema = z.object({
+  itemId: StableIdSchema,
+  revisionId: StableIdSchema,
+  contentHash: ContentHashSchema,
+  title: z.string().min(1).max(500),
+  url: HttpUrlSchema,
+  sourceName: z.string().min(1).max(200),
+  origin: z.enum(["user", "recommended", "server"]),
+  coverage: CoverageSchema,
+  missing: z.array(z.string().max(200)).max(100),
+  publishedAt: TimestampSchema.optional(),
+  observedAt: TimestampSchema,
+  excerpt: z.string().min(1).max(8000),
+});
+export const EditorialBodySchema = z.object({
+  title: z.string().min(1).max(160),
+  question: z.string().min(1).max(240),
+  takeaway: z.string().min(1).max(1200),
+  relationship: z.string().min(1).max(900),
+  sections: z
+    .array(
+      z.object({
+        heading: z.string().min(1).max(120),
+        body: z.string().min(1).max(2200),
+        kind: z.enum(["fact", "analysis"]),
+        sourceIds: z.array(StableIdSchema).min(1).max(12),
+      }),
+    )
+    .min(2)
+    .max(7),
+  uncertainties: z.array(z.string().min(1).max(700)).min(1).max(5),
+  watchFor: z.array(z.string().min(1).max(700)).min(1).max(5),
+  sourceAppraisals: z
+    .array(
+      z.object({
+        itemId: StableIdSchema,
+        role: z.enum(["primary", "report", "analysis", "unknown"]),
+        sharedOriginWith: StableIdSchema.nullable(),
+        note: z.string().min(1).max(600),
+      }),
+    )
+    .min(1)
+    .max(12),
+});
+export const EditorialCoverSchema = z.object({
+  data: z
+    .string()
+    .max(820_000)
+    .regex(/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/),
+  pageUrl: HttpUrlSchema,
+  imageUrl: HttpUrlSchema,
+  publisher: z.string().min(1).max(120),
+  description: z.string().max(300),
+  width: z.number().int().min(320).max(4096),
+  height: z.number().int().min(180).max(4096),
+});
+export type EditorialCover = z.infer<typeof EditorialCoverSchema>;
+
+export const EditorialPresentationSchema = z.object({
+  revisionId: UuidSchema,
+  headline: z.string().min(1).max(48),
+  summary: z.string().min(1).max(160),
+  visual: z.object({
+    kind: z.enum(["comparison", "sequence", "factors", "none"]),
+    title: z.string().min(1).max(44),
+    items: z
+      .array(
+        z.object({
+          label: z.string().min(1).max(22),
+          text: z.string().min(1).max(100),
+          symbol: z.enum([
+            "research",
+            "code",
+            "people",
+            "cost",
+            "energy",
+            "policy",
+            "product",
+            "check",
+            "change",
+            "data",
+          ]),
+          sectionIndex: z.number().int().min(0).max(6),
+          quote: z.string().min(8).max(240),
+        }),
+      )
+      .max(4),
+    conclusion: z.string().min(1).max(120),
+  }),
+  boundary: z.object({
+    text: z.string().min(1).max(120),
+    quote: z.string().min(8).max(240),
+  }),
+  watch: z.object({
+    text: z.string().min(1).max(120),
+    quote: z.string().min(8).max(240),
+  }),
+});
+export type EditorialPresentation = z.infer<typeof EditorialPresentationSchema>;
+
+export const EditorialEditionEntrySchema = z.object({
+  issueId: UuidSchema,
+  presentation: EditorialPresentationSchema,
+  reason: z.string().min(1).max(240),
+  cover: EditorialCoverSchema.optional(),
+});
+export const EditorialEditionSchema = z.object({
+  id: UuidSchema,
+  createdAt: TimestampSchema,
+  entries: z.array(EditorialEditionEntrySchema).max(5),
+  note: z.string().min(1).max(400),
+});
+export type EditorialEdition = z.infer<typeof EditorialEditionSchema>;
+
+export const EditorialRevisionSchema = EditorialBodySchema.extend({
+  id: UuidSchema,
+  issueId: UuidSchema,
+  version: z.number().int().positive(),
+  createdAt: TimestampSchema,
+  changeKind: z.enum(["new", "update", "correction"]),
+  changeSummary: z.string().min(1).max(1000),
+  model: z.string().min(1).max(120),
+  evidence: z.array(EditorialMaterialSchema).min(1).max(12),
+  presentation: EditorialPresentationSchema.optional(),
+  cover: EditorialCoverSchema.optional(),
+});
+export const EditorialVersionSchema = EditorialRevisionSchema.pick({
+  id: true,
+  issueId: true,
+  version: true,
+  createdAt: true,
+  changeKind: true,
+  changeSummary: true,
+});
+export const EditorialCorrectionRequestSchema = z.object({
+  revisionId: UuidSchema,
+  text: z.string().trim().min(3).max(3000),
+});
+export const EditorialCorrectionSchema =
+  EditorialCorrectionRequestSchema.extend({
+    id: UuidSchema,
+    issueId: UuidSchema,
+    createdAt: TimestampSchema,
+    status: z.enum(["pending", "accepted", "unsupported", "needs_evidence"]),
+    response: z.string().min(1).max(1200).optional(),
+    reviewedAt: TimestampSchema.optional(),
+  });
+export const EditorialIssueSchema = z.object({
+  id: UuidSchema,
+  focus: EditorialFocusSchema,
+  createdAt: TimestampSchema,
+  updatedAt: TimestampSchema,
+  latest: EditorialRevisionSchema,
+  history: z.array(EditorialVersionSchema).max(30),
+  corrections: z.array(EditorialCorrectionSchema).max(30),
+});
+export const EditorialResponseSchema = z.object({
+  meta: ResponseMetaSchema,
+  issues: z.array(EditorialIssueSchema).max(24),
+  edition: EditorialEditionSchema.optional(),
+  status: z.object({
+    state: z.enum(["waiting", "ready", "retrying"]),
+    lastAttemptAt: TimestampSchema.optional(),
+    message: z.string().max(500).optional(),
+  }),
+});
+export const EditorialRevisionResponseSchema = z.object({
+  meta: ResponseMetaSchema,
+  revision: EditorialRevisionSchema,
+});
+export const EditorialCorrectionResponseSchema = z.object({
+  meta: ResponseMetaSchema,
+  correction: EditorialCorrectionSchema,
+});
+export type EditorialFocus = z.infer<typeof EditorialFocusSchema>;
+export type EditorialMaterial = z.infer<typeof EditorialMaterialSchema>;
+export type EditorialBody = z.infer<typeof EditorialBodySchema>;
+export type EditorialRevision = z.infer<typeof EditorialRevisionSchema>;
+export type EditorialIssue = z.infer<typeof EditorialIssueSchema>;
+export type EditorialCorrection = z.infer<typeof EditorialCorrectionSchema>;
+export type EditorialCorrectionRequest = z.infer<
+  typeof EditorialCorrectionRequestSchema
+>;
+export type EditorialResponse = z.infer<typeof EditorialResponseSchema>;

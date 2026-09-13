@@ -1,4 +1,37 @@
 import path from "node:path";
+import { attentionSnapshot, handleAttentionCommand } from "./attention.js";
+import { attentionCommandSchema } from "../shared/attention.js";
+import { fetchAndNormalizePublicURL } from "../../services/source-service/src/connectors/public-url.js";
+import type { FeatureHost, FeatureTaskInput } from "./feature-host.js";
+import { validateSkillBindings } from "./skills.js";
+import {
+  handleMediaCommand,
+  mediaSnapshot,
+  mediaCommandSchema,
+} from "./media.js";
+import { handleDeliveryCommand, deliverySnapshot } from "./delivery.js";
+import { deliveryCommandSchema } from "../shared/delivery.js";
+import { RoutineEngine, routineSnapshot } from "./routines.js";
+import { routineCommandSchema } from "../shared/routines.js";
+import { WorkServiceClient } from "./work-service.js";
+import type { WorkGateway } from "./work-gateway.js";
+import { workServiceCommandSchema } from "../shared/work-service.js";
+import { handleSkillCommand } from "./skill-library.js";
+import { handlePortableCommand, portableSnapshot } from "./portable.js";
+import {
+  portableCommandSchema,
+  portableInternalCommandSchema,
+  type PortableInternalCommand,
+} from "../shared/portable.js";
+import {
+  skillCommandSchema,
+  type SkillInternalCommand,
+} from "../shared/skill-library.js";
+import type {
+  EditorialRevision,
+  EditorialResponse,
+} from "@ytriple/source-contract";
+import { editorialDocument } from "../shared/editorial.js";
 import { rmdir } from "node:fs/promises";
 import {
   normalizeMemberSettings,
@@ -6,7 +39,7 @@ import {
 } from "../shared/member-settings.js";
 import { buildProcessDocument } from "./process-document.js";
 import { ProjectFiles } from "./project-files.js";
-import { ProjectDiscovery } from "./projects.js";
+import { ProjectDiscovery, inspectImportedProject } from "./projects.js";
 import { createGoogleAgentModel } from "./google-agents.js";
 import { Agent, Runner } from "@openai/agents";
 import type {
@@ -56,11 +89,21 @@ import type {
   SourceGateway,
 } from "./source-gateway.js";
 import { TeamRuntime, type RuntimeCheckpoint } from "./runtime.js";
+import {
+  bindTaskSkills,
+  mergeTaskSkillPins,
+  setSkillEnabled,
+  skillCatalog,
+  validateSkillPolicy,
+} from "./skill-policy.js";
 import { probeProfile, type ModelFactory } from "./models.js";
 import { inspectSystem, bootstrapSystem, initializeProject } from "./system.js";
 
 export type InternalCommand =
   | Command
+  | SkillInternalCommand
+  | PortableInternalCommand
+  | { type: "project.import.path"; path: string }
   | { type: "profile.save"; profile: ModelProfile; keyChanged?: boolean }
   | { type: "source.import.paths"; taskId: string; paths: string[] }
   | {
@@ -77,10 +120,35 @@ type HostedProbeResult = {
   incomplete?: boolean;
 };
 export class WorkbenchService {
+  private readonly featureCreates = new Map<
+    string,
+    { fingerprint: string; promise: Promise<Snapshot> }
+  >();
+  private readonly featureWorks = new Map<
+    string,
+    { fingerprint: string; promise: Promise<Task> }
+  >();
+  private readonly featureCommands = new Set<Promise<Snapshot>>();
   readonly store: Store;
   readonly runtime: TeamRuntime;
+  private readonly routines: RoutineEngine;
+  private readonly workService: WorkServiceClient;
+  private workTimer?: ReturnType<typeof setTimeout>;
+  private routineTimer?: ReturnType<typeof setTimeout>;
+  private routineTick?: Promise<void>;
   private system?: Snapshot["system"];
   private readonly projectScanner = new ProjectDiscovery();
+  private importedProjects: Snapshot["projects"] = [];
+  private projects(): Snapshot["projects"] {
+    const discovered = this.projectScanner.snapshot.projects;
+    return [
+      ...discovered.filter(
+        (project) =>
+          !this.importedProjects.some((item) => item.root === project.root),
+      ),
+      ...this.importedProjects,
+    ];
+  }
   private readonly projectFiles = new ProjectFiles();
   private projectBrowser?: Snapshot["projectBrowser"];
   private browserSequence = 0;
@@ -126,6 +194,9 @@ export class WorkbenchService {
       radarRefreshIntervalMs?: number;
       radarDigestDelayMs?: number;
       autoDigestRadar?: boolean;
+      routinePollIntervalMs?: number;
+      workGateway?: WorkGateway;
+      publicURLFetcher?: typeof fetchAndNormalizePublicURL;
     } = {},
   ) {
     this.store = new Store(dataPath);
@@ -142,6 +213,7 @@ export class WorkbenchService {
           const id =
             task.profileId ||
             settings.memberProfiles[member] ||
+            (member === "editor" ? settings.memberProfiles.researcher : "") ||
             settings.defaultProfileId;
           const profile = this.store.profiles().find((p) => p.id === id);
           if (!profile) throw new Error("请先在设置中选择有效的模型连接。");
@@ -229,6 +301,129 @@ export class WorkbenchService {
         modelFactory: options.modelFactory,
       },
     );
+    this.routines = new RoutineEngine(this.featureHost());
+    this.workService = new WorkServiceClient(this.featureHost());
+  }
+  private featureHost(): FeatureHost {
+    return {
+      store: this.store,
+      createWork: (input) => this.createFeatureWork(input),
+      addSource: (id, source) => this.addSource(id, source),
+      readURL: (url) => this.readURL(url),
+      runWork: async (id) => {
+        this.start(id);
+        await this.runtime.run(id);
+        const task = this.store.task(id);
+        if (task.status === "failed")
+          throw new Error(task.error || "本轮处理失败。");
+        this.notify();
+      },
+      stopWork: (id) => this.runtime.stop(id),
+      isRunning: (id) => this.runtime.isRunning(id),
+    };
+  }
+  private async createFeatureWork(input: FeatureTaskInput): Promise<Task> {
+    const requestId = input.requestId ?? uid();
+    const fingerprint = hash(JSON.stringify(input));
+    const previous = this.featureWorks.get(requestId);
+    if (previous) {
+      if (previous.fingerprint !== fingerprint)
+        throw new Error("同一请求不能绑定不同的工作输入。");
+      return previous.promise;
+    }
+    const promise = (async () => {
+      const key = `feature.creation:${requestId}`;
+      const saved = this.store.config<string | null>(key, () => null);
+      if (saved && saved !== fingerprint)
+        throw new Error("这项工作已使用其他输入创建，请重新发起。");
+      const pins = input.skillPins
+        ? validateSkillBindings(input.skillPins)
+        : undefined;
+      this.store.setConfig(key, fingerprint);
+      await this.execute({
+        type: "task.create",
+        requestId,
+        goal: input.goal,
+        title: input.title,
+        kind: input.kind,
+        member: input.member,
+        projectId: input.projectId,
+        teamMode: input.teamMode,
+        isolatedContext: input.isolatedContext,
+        skillPolicy: input.skillPolicy,
+      });
+      const creation = this.store.config<{ id: string } | null>(
+        `task.creation:${requestId}`,
+        () => null,
+      );
+      if (!creation) throw new Error("未能保存工作创建记录。");
+      if (pins)
+        this.store.updateTask(creation.id, (task) => {
+          task.skillPins = pins;
+          task.skillBindings = bindTaskSkills(this.store, task);
+        });
+      for (const source of input.sources ?? [])
+        await this.addSource(creation.id, source);
+      this.notify();
+      return this.store.task(creation.id);
+    })();
+    this.featureWorks.set(requestId, { fingerprint, promise });
+    try {
+      return await promise;
+    } finally {
+      this.featureWorks.delete(requestId);
+    }
+  }
+  private async readURL(url: string): Promise<Source> {
+    if (this.options.sourceGateway)
+      return this.options.sourceGateway.addURL(url);
+    const page = await (
+      this.options.publicURLFetcher ?? fetchAndNormalizePublicURL
+    )(url, { syntheticDNSFallback: "cloudflare" });
+    if (this.closing) throw new Error("工作台正在关闭，未添加网页资料。");
+    return {
+      id: uid(),
+      title: page.title,
+      type: "url",
+      location: page.canonicalUrl,
+      text: page.content,
+      addedAt: page.observedAt,
+      coverage: "本机实际提取的公开网页文字；不含登录内容、视频画面或音频。",
+    };
+  }
+  private scheduleRoutines(delay: number): void {
+    if (this.routineTimer) clearTimeout(this.routineTimer);
+    if (this.closing) return;
+    this.routineTimer = setTimeout(
+      () => {
+        this.routineTimer = undefined;
+        const before = JSON.stringify(routineSnapshot(this.store));
+        this.routineTick = this.routines
+          .tick()
+          .then(() => {
+            if (
+              !this.closing &&
+              JSON.stringify(routineSnapshot(this.store)) !== before
+            )
+              this.notify();
+          })
+          .catch((error) => {
+            if (!this.closing) {
+              this.store.setConfig("routines.engineError", safeError(error));
+              this.notify();
+            }
+          })
+          .finally(() => {
+            this.routineTick = undefined;
+            if (!this.closing)
+              this.scheduleRoutines(
+                this.options.routinePollIntervalMs ?? 30_000,
+              );
+          });
+      },
+      Math.max(0, delay),
+    );
+    this.routineTimer.unref?.();
   }
   async initialize(): Promise<Snapshot> {
     await recoverArtifacts(this.store);
@@ -264,6 +459,35 @@ export class WorkbenchService {
     this.startSourceReceiver();
     this.scheduleRadarRefresh(0);
     this.scheduleRadarDigestion(this.options.radarDigestDelayMs ?? 800);
+    this.scheduleRoutines(0);
+    if (this.options.workGateway)
+      await this.connectWorkService(this.options.workGateway);
+    return this.snapshot();
+  }
+  private scheduleWorkRefresh(): void {
+    if (this.workTimer) clearTimeout(this.workTimer);
+    if (this.closing || !this.options.workGateway) return;
+    this.workTimer = setTimeout(() => {
+      void this.workService.refresh().finally(() => {
+        if (!this.closing) {
+          this.notify();
+          this.scheduleWorkRefresh();
+        }
+      });
+    }, 30_000);
+    this.workTimer.unref?.();
+  }
+  async connectWorkService(gateway: WorkGateway): Promise<Snapshot> {
+    this.options.workGateway = gateway;
+    await this.workService.connect(gateway);
+    this.scheduleWorkRefresh();
+    return this.snapshot();
+  }
+  async disconnectWorkService(notice?: string): Promise<Snapshot> {
+    if (this.workTimer) clearTimeout(this.workTimer);
+    await this.runtime.stopAll();
+    await this.workService.disconnect(notice);
+    this.options.workGateway = undefined;
     return this.snapshot();
   }
   async connectSourceService(
@@ -365,6 +589,10 @@ export class WorkbenchService {
         `radar.reading:${catalog.serverInstanceId}:${catalog.tenantId}`,
         catalog.readingTopics ?? [],
       );
+      this.store.setConfig(
+        `radar.editorial:${catalog.serverInstanceId}:${catalog.tenantId}`,
+        catalog.editorial ?? null,
+      );
       this.radarConnection = "online";
       this.radarError = undefined;
       this.notify();
@@ -376,6 +604,45 @@ export class WorkbenchService {
       throw error;
     }
   }
+  private async loadEditorialRevision(
+    issueId: string,
+    revisionId: string,
+  ): Promise<EditorialRevision> {
+    const identity = await this.requireRadarIdentity();
+    const key = `radar.editorialVersions:${identity.serverInstanceId}:${identity.tenantId}`;
+    const versions = this.store.config<Record<string, EditorialRevision>>(
+      key,
+      () => ({}),
+    );
+    if (versions[revisionId]?.issueId === issueId) return versions[revisionId];
+    const feed = this.store.config<Omit<EditorialResponse, "meta"> | null>(
+      `radar.editorial:${identity.serverInstanceId}:${identity.tenantId}`,
+      () => null,
+    );
+    let revision = feed?.issues.find(
+      (issue) => issue.id === issueId && issue.latest.id === revisionId,
+    )?.latest;
+    if (!revision) {
+      const gateway = this.options.sourceGateway;
+      if (!gateway?.editorialRevision)
+        throw new Error("此版本尚未保存到本机，请连接信息源服务后重试。");
+      const result = await gateway.editorialRevision(issueId, revisionId);
+      if (
+        this.closing ||
+        gateway !== this.options.sourceGateway ||
+        result.serverInstanceId !== identity.serverInstanceId ||
+        result.tenantId !== identity.tenantId
+      )
+        throw new Error("信息源连接已改变，请重新打开解读。");
+      revision = result.revision;
+    }
+    this.store.setConfig(key, {
+      ...this.store.config<Record<string, EditorialRevision>>(key, () => ({})),
+      [revisionId]: revision,
+    });
+    return revision;
+  }
+
   private scheduleRadarRefresh(delay: number): void {
     if (this.radarTimer) clearTimeout(this.radarTimer);
     const gateway = this.options.sourceGateway;
@@ -466,7 +733,7 @@ export class WorkbenchService {
           task.surface !== "background" && !task.archivedAt && !task.deletedAt,
       )
       .slice(0, 6);
-    const projects = this.projectScanner.snapshot.projects.slice(0, 12);
+    const projects = this.projects().slice(0, 12);
     if (activeTasks.length || projects.length) {
       const lines = [
         "# 本地工作上下文（仅登记信息）",
@@ -716,7 +983,40 @@ export class WorkbenchService {
     const settings = this.store.settings();
     this.scanning = this.projectScanner
       .refresh(settings.aiRoot, settings.codeRoot)
-      .then(() => {});
+      .then(async () => {
+        const roots = this.store.config<string[]>(
+          `projects.imported:${settings.aiRoot}`,
+          () => [],
+        );
+        const observations = await Promise.allSettled(
+          roots.map((directory) => inspectImportedProject(directory)),
+        );
+        if (this.store.settings().aiRoot !== settings.aiRoot) return;
+        this.importedProjects = observations.flatMap((result, index) =>
+          result.status === "fulfilled"
+            ? [result.value]
+            : [
+                {
+                  id: `imported-${hash(roots[index]!).slice(0, 24)}`,
+                  name: path.basename(roots[index]!),
+                  series: "local",
+                  root: roots[index]!,
+                  devPath: roots[index]!,
+                  registered: false,
+                  imported: true,
+                  documents: {},
+                  observation: {
+                    state: "missing" as const,
+                    checkedAt: now(),
+                    worktrees: [],
+                    documents: [],
+                    issues: ["导入目录已不可读取，请检查文件位置与权限。"],
+                    fingerprint: hash(String(result.reason)),
+                  },
+                },
+              ],
+        );
+      });
     try {
       await this.scanning;
     } finally {
@@ -854,13 +1154,39 @@ export class WorkbenchService {
       profiles,
       settings: this.store.settings(),
       system: this.system!,
-      projects: this.projectScanner.snapshot.projects,
+      projects: this.projects(),
       projectDiscovery: this.projectScanner.snapshot.discovery,
       projectBrowser: this.projectBrowser,
       library: listLibrary(this.store, this.store.settings().aiRoot),
+      skills: skillCatalog(this.store),
+      media: mediaSnapshot(this.store),
+      delivery: deliverySnapshot(this.store),
+      routines: routineSnapshot(this.store),
+      workService: this.workService.snapshot(),
+      portable: portableSnapshot(this.store),
+      attention: attentionSnapshot(
+        this.store,
+        Date.now(),
+        this.workService.snapshot(),
+      ),
       radar: {
         configured: Boolean(this.options.sourceGateway),
         serviceURL: this.options.sourceServiceURL,
+        editorialIdentity: identity
+          ? `${identity.serverInstanceId}:${identity.tenantId}`
+          : undefined,
+        editorial: identity
+          ? (this.store.config<Omit<EditorialResponse, "meta"> | null>(
+              `radar.editorial:${identity.serverInstanceId}:${identity.tenantId}`,
+              () => null,
+            ) ?? undefined)
+          : undefined,
+        editorialVersions: identity
+          ? this.store.config<Record<string, EditorialRevision>>(
+              `radar.editorialVersions:${identity.serverInstanceId}:${identity.tenantId}`,
+              () => ({}),
+            )
+          : undefined,
         readingTopics: identity
           ? this.store.config(
               `radar.reading:${identity.serverInstanceId}:${identity.tenantId}`,
@@ -890,7 +1216,13 @@ export class WorkbenchService {
     if (this.taskDeletions.has(id)) throw new Error("这项工作正在永久删除。");
     if (task.archivedAt) throw new Error("请先恢复这项工作，再继续处理。");
     if (this.runtime.isRunning(id)) return;
-    prepareLibraryRecall(this.store, id);
+    const skillBindings = bindTaskSkills(this.store, task);
+    const skillPins = mergeTaskSkillPins(task, skillBindings);
+    this.store.updateTask(id, (current) => {
+      current.skillPins = skillPins;
+      current.skillBindings = skillBindings;
+    });
+    if (!task.isolatedContext) prepareLibraryRecall(this.store, id);
     void this.runtime
       .run(id)
       .catch((error) => {
@@ -918,16 +1250,34 @@ export class WorkbenchService {
         }
       });
   }
-  private async addSource(id: string, source: Source): Promise<void> {
+  private async addSource(
+    id: string,
+    source: Source,
+    expectedGoalVersion?: number,
+  ): Promise<void> {
+    const assertExpectedGoal = () => {
+      if (
+        expectedGoalVersion !== undefined &&
+        this.store.task(id).goalVersion !== expectedGoalVersion
+      )
+        throw new Error(
+          "工作目标已变化，旧准备资料未加入，也不会启动新的目标。请在原工作确认后继续。",
+        );
+    };
+    assertExpectedGoal();
     const previous = this.sourceAdds.get(id) ?? Promise.resolve();
     const pending = previous
       .catch(() => {})
       .then(async () => {
+        // A preparation queued behind another import must check the current
+        // goal before stopping its runtime, as well as before the sync commit.
+        assertExpectedGoal();
         if (this.store.hasTaskSource(id, source)) {
           this.store.recordRemoteRevision(source);
           return;
         }
         await this.runtime.stop(id);
+        assertExpectedGoal();
         this.store.commitTaskSource(id, source);
       });
     this.sourceAdds.set(id, pending);
@@ -988,6 +1338,25 @@ export class WorkbenchService {
   }
   async execute(command: InternalCommand): Promise<Snapshot> {
     if (this.closing) throw new Error("工作台正在关闭。");
+    if (command.type === "task.create" && command.requestId) {
+      const previous = this.featureCreates.get(command.requestId);
+      const fingerprint = JSON.stringify(command);
+      if (previous) {
+        if (previous.fingerprint !== fingerprint)
+          throw new Error("同一请求不能创建不同内容的工作。");
+        return previous.promise;
+      }
+      const pending = this.executeTrackedCommand(command);
+      this.featureCreates.set(command.requestId, {
+        fingerprint,
+        promise: pending,
+      });
+      try {
+        return await pending;
+      } finally {
+        this.featureCreates.delete(command.requestId);
+      }
+    }
     const taskId =
       command.type === "library.feedback"
         ? undefined
@@ -1026,7 +1395,7 @@ export class WorkbenchService {
         throw new Error("这项工作正在永久删除，请等待删除完成。");
       this.store.task(taskId);
     }
-    const pending = Promise.resolve().then(() => this.executeCommand(command));
+    const pending = this.executeTrackedCommand(command);
     if (!taskId) return pending;
     const commands =
       this.taskCommands.get(taskId) ?? new Set<Promise<Snapshot>>();
@@ -1040,11 +1409,149 @@ export class WorkbenchService {
         this.taskCommands.delete(taskId);
     }
   }
+  private executeTrackedCommand(command: InternalCommand): Promise<Snapshot> {
+    const pending = Promise.resolve().then(() => this.executeCommand(command));
+    this.featureCommands.add(pending);
+    return pending.finally(() => this.featureCommands.delete(pending));
+  }
   private async executeCommand(command: InternalCommand): Promise<Snapshot> {
     if (this.closing) throw new Error("工作台正在关闭。");
     let browserReply: Snapshot["projectBrowser"];
     let replyScope: number | undefined;
+    if (command.type.startsWith("attention.")) {
+      await handleAttentionCommand(
+        this.featureHost(),
+        attentionCommandSchema.parse(command),
+        Date.now(),
+        this.workService.snapshot(),
+      );
+      const snapshot = await this.snapshot();
+      this.changed(snapshot);
+      return snapshot;
+    }
+    if (command.type.startsWith("portable.")) {
+      await handlePortableCommand(
+        this.featureHost(),
+        command.type.endsWith(".path")
+          ? portableInternalCommandSchema.parse(command)
+          : portableCommandSchema.parse(command),
+      );
+      const snapshot = await this.snapshot();
+      this.changed(snapshot);
+      return snapshot;
+    }
+    if (
+      command.type.startsWith("skill.") &&
+      command.type !== "skill.setEnabled"
+    ) {
+      await handleSkillCommand(
+        this.featureHost(),
+        command.type === "skill.importLocal.path"
+          ? command
+          : skillCommandSchema.parse(command),
+      );
+      const snapshot = await this.snapshot();
+      this.changed(snapshot);
+      return snapshot;
+    }
+    if (command.type.startsWith("service.")) {
+      if (command.type === "service.model.select") await this.runtime.stopAll();
+      await this.workService.execute(workServiceCommandSchema.parse(command));
+      const snapshot = await this.snapshot();
+      this.changed(snapshot);
+      return snapshot;
+    }
+    if (command.type.startsWith("routine.")) {
+      await this.routines.execute(routineCommandSchema.parse(command));
+      const snapshot = await this.snapshot();
+      this.changed(snapshot);
+      return snapshot;
+    }
+    if (command.type.startsWith("media.")) {
+      await handleMediaCommand(
+        this.featureHost(),
+        mediaCommandSchema.parse(command),
+      );
+      const snapshot = await this.snapshot();
+      this.changed(snapshot);
+      return snapshot;
+    }
+    if (command.type.startsWith("delivery.")) {
+      await handleDeliveryCommand(
+        this.featureHost(),
+        deliveryCommandSchema.parse(command),
+      );
+      const snapshot = await this.snapshot();
+      this.changed(snapshot);
+      return snapshot;
+    }
     switch (command.type) {
+      case "project.import":
+        throw new Error("请通过桌面选择已有项目目录。");
+      case "project.import.path": {
+        await this.scanning;
+        const project = await inspectImportedProject(command.path);
+        if (!this.projects().some((item) => item.root === project.root)) {
+          const key = `projects.imported:${this.store.settings().aiRoot}`;
+          const roots = this.store.config<string[]>(key, () => []);
+          if (roots.length >= 50)
+            throw new Error(
+              "导入目录已达50个，请使用统一Code目录的自动发现管理更多项目。",
+            );
+          this.store.setConfig(key, [...new Set([...roots, project.root])]);
+          this.importedProjects.push(project);
+        }
+        break;
+      }
+      case "skill.setEnabled":
+        setSkillEnabled(this.store, command.skillId, command.enabled);
+        break;
+      case "task.setSkills": {
+        const current = this.store.task(command.taskId);
+        if (current.archivedAt)
+          throw new Error("请先恢复这项工作，再更改 Skill。");
+        if (
+          this.runtime.isRunning(current.id) ||
+          ["running", "waiting"].includes(current.status)
+        )
+          throw new Error("请先暂停当前工作，再更改本次使用的方法。");
+        const policy = validateSkillPolicy(command.policy);
+        const bindings = bindTaskSkills(this.store, {
+          ...current,
+          skillPolicy: policy,
+        });
+        if (
+          JSON.stringify(
+            current.skillPolicy ?? { mode: "auto", skillIds: [] },
+          ) === JSON.stringify(policy)
+        )
+          break;
+        const pins = mergeTaskSkillPins(current, bindings);
+        this.store.updateTask(current.id, (task) => {
+          task.skillPolicy = policy;
+          task.skillPins = pins;
+          task.skillBindings = bindings;
+          task.goalVersion++;
+          task.status = "paused";
+          task.error = undefined;
+          task.events.push({
+            id: uid(),
+            createdAt: now(),
+            type: "skill.policy_changed",
+            goalVersion: task.goalVersion,
+            summary: "工作方法已更新，已有成果保留；继续处理时应用本次选择。",
+            data: {
+              mode: policy.mode,
+              skillIds: policy.skillIds,
+              continuedUserMessageId: task.messages.findLast(
+                (message) => message.role === "user",
+              )?.id,
+            },
+          });
+        });
+        this.store.saveCheckpoint(current.id, null);
+        break;
+      }
       case "snapshot":
         break;
       case "project.refresh":
@@ -1052,7 +1559,7 @@ export class WorkbenchService {
         break;
       case "project.browse":
       case "project.read": {
-        const project = this.projectScanner.snapshot.projects.find(
+        const project = this.projects().find(
           (item) => item.id === command.projectId,
         );
         if (!project) throw new Error("项目列表已变化，请刷新项目。");
@@ -1147,7 +1654,9 @@ export class WorkbenchService {
       }
       case "process.save": {
         const task = this.store.task(command.taskId);
-        const document = buildProcessDocument(task, command.member);
+        const document = buildProcessDocument(task, command.member, {
+          scope: command.scope ?? "all",
+        });
         await writeArtifact(this.store, task.id, {
           ...document,
           format: "md",
@@ -1157,11 +1666,42 @@ export class WorkbenchService {
         break;
       }
       case "task.create": {
+        const creationKey = command.requestId
+          ? `task.creation:${command.requestId}`
+          : undefined;
+        const creationFingerprint = JSON.stringify({
+          goal: command.goal,
+          title: command.title,
+          kind: command.kind,
+          member: command.member,
+          projectId: command.projectId,
+          teamMode: command.teamMode,
+          isolatedContext: command.isolatedContext,
+          skillPolicy: command.skillPolicy,
+        });
+        const previousCreation = creationKey
+          ? this.store.config<{ id: string; fingerprint: string } | null>(
+              creationKey,
+              () => null,
+            )
+          : null;
+        if (previousCreation) {
+          if (previousCreation.fingerprint !== creationFingerprint)
+            throw new Error("这次工作请求已使用不同内容创建，请使用新的请求。");
+          if (!this.store.hasTask(previousCreation.id))
+            throw new Error("这次请求对应的工作已删除，不能自动重建。");
+          break;
+        }
+        const skillPolicy = validateSkillPolicy(command.skillPolicy);
+        const skillBindings = bindTaskSkills(this.store, {
+          skillPolicy,
+          goal: command.goal,
+          member: command.member ?? "coordinator",
+          teamMode: command.teamMode,
+        } as Task);
         if (
           command.projectId &&
-          !this.projectScanner.snapshot.projects.some(
-            (project) => project.id === command.projectId,
-          )
+          !this.projects().some((project) => project.id === command.projectId)
         )
           throw new Error("项目列表已变化，请刷新并重新选择项目。");
         const goal = requireText(command.goal, 40000, "工作目标");
@@ -1181,33 +1721,51 @@ export class WorkbenchService {
         const workspace = await ensureOwnedDirectory(
           path.join(settings.workspaceRoot, id),
         );
-        this.store.saveTask({
-          id,
-          title: (command.title || goal).slice(0, 60),
-          goal,
-          goalVersion: 1,
-          kind: command.kind ?? "research",
-          member: command.member ?? "coordinator",
-          profileId: command.profileId,
-          projectId: command.projectId,
-          workspace,
-          status: "idle",
-          createdAt: now(),
-          updatedAt: now(),
-          messages: [
-            {
-              id: uid(),
-              role: "user",
-              member: command.member ?? "coordinator",
-              content: goal,
-              createdAt: now(),
-              goalVersion: 1,
-            },
-          ],
-          events: [],
-          sources: [],
-          artifacts: [],
-        });
+        this.store.db.exec("BEGIN IMMEDIATE");
+        try {
+          this.store.saveTask({
+            id,
+            requestId: command.requestId,
+            isolatedContext: command.isolatedContext,
+            teamMode: command.teamMode,
+            title: (command.title || goal).slice(0, 60),
+            skillPolicy,
+            skillPins: structuredClone(skillBindings),
+            skillBindings,
+            goal,
+            goalVersion: 1,
+            kind: command.kind ?? "research",
+            member: command.member ?? "coordinator",
+            profileId: command.profileId,
+            projectId: command.projectId,
+            workspace,
+            status: "idle",
+            createdAt: now(),
+            updatedAt: now(),
+            messages: [
+              {
+                id: uid(),
+                role: "user",
+                member: command.member ?? "coordinator",
+                content: goal,
+                createdAt: now(),
+                goalVersion: 1,
+              },
+            ],
+            events: [],
+            sources: [],
+            artifacts: [],
+          });
+          if (creationKey)
+            this.store.setConfig(creationKey, {
+              id,
+              fingerprint: creationFingerprint,
+            });
+          this.store.db.exec("COMMIT");
+        } catch (error) {
+          this.store.db.exec("ROLLBACK");
+          throw error;
+        }
         break;
       }
       case "task.send": {
@@ -1215,7 +1773,15 @@ export class WorkbenchService {
         if (existingTask.archivedAt)
           throw new Error("请先恢复这项工作，再发送消息。");
         const content = requireText(command.text, 40000, "消息");
+        bindTaskSkills(this.store, existingTask);
         await this.runtime.stop(command.taskId);
+        const stoppedTask = this.store.task(command.taskId);
+        if (this.closing) throw new Error("工作台正在关闭。");
+        if (this.taskDeletions.has(command.taskId))
+          throw new Error("这项工作正在永久删除。");
+        if (stoppedTask.archivedAt)
+          throw new Error("请先恢复这项工作，再发送消息。");
+        bindTaskSkills(this.store, stoppedTask);
         this.store.updateTask(command.taskId, (task) => {
           task.goalVersion++;
           if (command.reviseGoal) task.goal = content;
@@ -1251,20 +1817,63 @@ export class WorkbenchService {
             requireText(command.title, 200, "资料标题"),
             requireText(command.text, 2_000_000, "资料正文"),
           ),
+          command.expectedGoalVersion,
         );
         break;
       case "source.addURL":
-        if (!this.options.sourceGateway)
-          throw new Error("信息源服务未配置，无法读取网页链接。");
-        await this.addSource(
-          command.taskId,
-          await this.options.sourceGateway.addURL(command.url),
-        );
+        await this.addSource(command.taskId, await this.readURL(command.url));
         break;
       case "source.import.paths":
         for (const sourcePath of command.paths)
           await this.addSource(command.taskId, await importFile(sourcePath));
         break;
+      case "radar.reload":
+        await this.refreshRadarCatalog();
+        break;
+      case "radar.editorialVersion":
+        await this.loadEditorialRevision(command.issueId, command.revisionId);
+        break;
+      case "radar.correctEditorial": {
+        const identity = await this.requireRadarIdentity();
+        const gateway = this.options.sourceGateway;
+        if (!gateway?.correctEditorial)
+          throw new Error("当前信息源服务尚不支持纠正。");
+        const result = await gateway.correctEditorial(
+          command.issueId,
+          { revisionId: command.revisionId, text: command.text.trim() },
+          command.requestId,
+        );
+        if (
+          this.closing ||
+          gateway !== this.options.sourceGateway ||
+          result.serverInstanceId !== identity.serverInstanceId ||
+          result.tenantId !== identity.tenantId
+        )
+          throw new Error("信息源连接已改变，请重新打开解读。");
+        const key = `radar.editorial:${identity.serverInstanceId}:${identity.tenantId}`;
+        const feed = this.store.config<Omit<EditorialResponse, "meta"> | null>(
+          key,
+          () => null,
+        );
+        if (feed)
+          this.store.setConfig(key, {
+            ...feed,
+            issues: feed.issues.map((issue) =>
+              issue.id === command.issueId
+                ? {
+                    ...issue,
+                    corrections: [
+                      result.correction,
+                      ...issue.corrections.filter(
+                        (correction) => correction.id !== result.correction.id,
+                      ),
+                    ].slice(0, 30),
+                  }
+                : issue,
+            ),
+          });
+        break;
+      }
       case "radar.follow": {
         const gateway = this.options.sourceGateway;
         if (!gateway?.follow)
@@ -1403,8 +2012,32 @@ export class WorkbenchService {
         await this.createRadarDigestion(command.itemIds, retryOfRunId);
         break;
       }
+      case "radar.discussEditorial":
       case "radar.createTask": {
-        const sources = this.store.radarSources(command.itemIds);
+        if (
+          command.type === "radar.discussEditorial" &&
+          this.store.hasTask(command.requestId)
+        )
+          break;
+        const revision =
+          command.type === "radar.discussEditorial"
+            ? await this.loadEditorialRevision(
+                command.issueId,
+                command.revisionId,
+              )
+            : undefined;
+        const sources = revision
+          ? [
+              textSource(
+                `雷达解读 · ${revision.title} · v${revision.version}`,
+                editorialDocument(revision),
+                "text",
+                `雷达议题 ${revision.issueId} / 版本 ${revision.id}`,
+              ),
+            ]
+          : this.store.radarSources(
+              command.type === "radar.createTask" ? command.itemIds : [],
+            );
         const settings = this.store.settings();
         if (
           within(settings.aiRoot, settings.workspaceRoot) &&
@@ -1417,7 +2050,8 @@ export class WorkbenchService {
           if (this.system.state !== "ready")
             throw new Error("本机 AI 规则尚未就绪，请在设置中检查。");
         }
-        const id = uid();
+        const id =
+          command.type === "radar.discussEditorial" ? command.requestId : uid();
         const workspace = await ensureOwnedDirectory(
           path.join(settings.workspaceRoot, id),
         );
@@ -1458,8 +2092,9 @@ export class WorkbenchService {
           },
           sources,
         );
-        for (const itemId of new Set(command.itemIds))
-          this.store.setRadarItemRead(itemId, true);
+        if (command.type === "radar.createTask")
+          for (const itemId of new Set(command.itemIds))
+            this.store.setRadarItemRead(itemId, true);
         break;
       }
       case "artifact.save": {
@@ -1693,8 +2328,16 @@ export class WorkbenchService {
       case "settings.save": {
         const settings = validateSettings(command.settings);
         const previous = this.store.settings();
-        const { projectMonitoring: _a, ...before } = previous;
-        const { projectMonitoring: _b, ...after } = settings;
+        const {
+          projectMonitoring: _a,
+          backgroundRoutines: _c,
+          ...before
+        } = previous;
+        const {
+          projectMonitoring: _b,
+          backgroundRoutines: _d,
+          ...after
+        } = settings;
         if (JSON.stringify(before) !== JSON.stringify(after))
           await this.runtime.stopAll();
         this.store.setConfig("settings", settings);
@@ -1859,6 +2502,11 @@ export class WorkbenchService {
   }
   async close(): Promise<void> {
     this.closing = true;
+    if (this.workTimer) clearTimeout(this.workTimer);
+    await this.workService.close();
+    if (this.routineTimer) clearTimeout(this.routineTimer);
+    await this.routines.close();
+    await this.routineTick;
     if (this.projectTimer) clearTimeout(this.projectTimer);
     if (this.radarTimer) clearTimeout(this.radarTimer);
     if (this.radarDigestTimer) clearTimeout(this.radarDigestTimer);
@@ -1870,6 +2518,15 @@ export class WorkbenchService {
       this.radarCatalogRefresh?.catch(() => undefined),
       this.radarDigestionCreation,
       this.stopProbes(),
+      ...[...this.featureCommands].map((pending) =>
+        pending.catch(() => undefined),
+      ),
+      ...[...this.featureCreates.values()].map((entry) =>
+        entry.promise.catch(() => undefined),
+      ),
+      ...[...this.featureWorks.values()].map((entry) =>
+        entry.promise.catch(() => undefined),
+      ),
       ...[...this.taskDeletions.values()].map((pending) =>
         pending.catch(() => undefined),
       ),
@@ -1891,6 +2548,7 @@ function profileConnectionKey(profile: ModelProfile): string {
     profile.provider,
     profile.protocol,
     profile.execution ?? "model",
+    profile.streamingMode ?? "incremental",
     profile.baseURL.trim().replace(/\/$/, "") ||
       (profile.protocol === "google"
         ? "https://generativelanguage.googleapis.com/v1beta"
@@ -1911,6 +2569,7 @@ export function validateProfile(input: ModelProfile): ModelProfile {
     provider: input.provider,
     protocol: input.protocol,
     execution: input.execution ?? "model",
+    streamingMode: input.streamingMode,
     baseURL: typeof input.baseURL === "string" ? input.baseURL.trim() : "",
     modelId: typeof input.modelId === "string" ? input.modelId.trim() : "",
     apiKeyEnv:
@@ -1924,6 +2583,11 @@ export function validateProfile(input: ModelProfile): ModelProfile {
     !["google", "openai"].includes(p.protocol)
   )
     throw new Error("连接类型或 ID 无效。");
+  if (
+    p.streamingMode !== undefined &&
+    !["buffered", "incremental"].includes(p.streamingMode)
+  )
+    throw new Error("响应方式无效。");
   if (
     !["model", "google-agent"].includes(p.execution) ||
     (p.execution === "google-agent" &&
@@ -1970,10 +2634,13 @@ export function validateSettings(input: AppSettings): AppSettings {
     defaultProfileId: input.defaultProfileId,
     memberSettings: normalizeTeamSettings(input.memberSettings),
     projectMonitoring: input.projectMonitoring !== false,
+    libraryRecall: input.libraryRecall !== false,
+    backgroundRoutines: input.backgroundRoutines === true,
     memberProfiles: {
       coordinator: input.memberProfiles.coordinator,
       cto: input.memberProfiles.cto,
       researcher: input.memberProfiles.researcher,
+      editor: input.memberProfiles.editor ?? "",
     },
   };
 }

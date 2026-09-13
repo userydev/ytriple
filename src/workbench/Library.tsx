@@ -16,6 +16,13 @@ import type { LibraryEntry, Snapshot } from "../shared/types";
 import { formatDate, Markdown, type Dispatch } from "./common";
 import { useDocumentDraft } from "./drafts";
 import { LibraryFeedbackPanel } from "./LibraryFeedback";
+import { SkillCatalog } from "./Skills";
+import { PortablePanel } from "./Portable";
+import {
+  MediaFromMaterial,
+  libraryMediaMaterial,
+  type MediaMaterialNavigation,
+} from "./MediaFromMaterial";
 import {
   LIBRARY_ASSESSMENT_LABELS,
   libraryAssessment,
@@ -47,13 +54,15 @@ function LibraryDocument({
   dispatch,
   onTask,
   selectedTaskId,
+  onMediaCreated,
+  onMediaSetup,
 }: {
   entry: LibraryEntry;
   snapshot: Snapshot;
   dispatch: Dispatch;
   onTask: (id: string) => void;
   selectedTaskId: string | null;
-}) {
+} & MediaMaterialNavigation) {
   const key = `${snapshot.settings.aiRoot}:${entry.id}`;
   const { draft, setDraft, completeDraft, changedExternally } =
     useDocumentDraft(`library:${key}`, entry.content ?? "", entry.hash);
@@ -169,7 +178,7 @@ function LibraryDocument({
       <div className="artifact-heading">
         <div>
           <span className="eyebrow">
-            {entry.format.toUpperCase()} · Lib 版本 {entry.version}
+            {entry.format.toUpperCase()} · 资产版本 {entry.version}
           </span>
           <h3>{entry.title}</h3>
         </div>
@@ -213,7 +222,7 @@ function LibraryDocument({
                 onClick={() => void save()}
               >
                 <Save size={13} />
-                {pending ? "保存中" : "保存到 Lib"}
+                {pending ? "保存中" : "保存资产"}
               </button>
               <button
                 className="text-button"
@@ -258,6 +267,16 @@ function LibraryDocument({
           回到来源工作
           <ArrowUpRight size={13} />
         </button>
+        {!draft.editing && (
+          <MediaFromMaterial
+            snapshot={snapshot}
+            dispatch={dispatch}
+            material={libraryMediaMaterial(entry)}
+            disabled={pending}
+            onMediaCreated={onMediaCreated}
+            onMediaSetup={onMediaSetup}
+          />
+        )}
       </div>
       {entry.readError ? (
         <div className="inline-notice warning">{entry.readError}</div>
@@ -441,6 +460,8 @@ export function Library({
   onAdd,
   selectedTaskId,
   initialEntryId,
+  onMediaCreated,
+  onMediaSetup,
 }: {
   snapshot: Snapshot | null;
   dispatch: Dispatch;
@@ -448,9 +469,12 @@ export function Library({
   onAdd: () => void;
   selectedTaskId: string | null;
   initialEntryId?: string | null;
-}) {
+} & MediaMaterialNavigation) {
   const [search, setSearch] = useState("");
-  const [tab, setTab] = useState<"saved" | "sources">("saved");
+  const [tab, setTab] = useState<"saved" | "sources" | "skills">("saved");
+  const [management, setManagement] = useState<
+    "imports" | "backup" | "recall" | null
+  >(null);
   const [selected, setSelected] = useState<string | null>(
     initialEntryId ?? null,
   );
@@ -469,183 +493,281 @@ export function Library({
         `${source.title} ${source.text}`.toLowerCase().includes(query),
       ) ?? [];
   const entry = entries.find((item) => item.id === selected);
+  const skillCount = (snapshot?.skills ?? []).filter((skill) =>
+    `${skill.name} ${skill.description} ${skill.instructions}`
+      .toLowerCase()
+      .includes(query),
+  ).length;
   return (
-    <div className="collection-page library-page">
+    <div className="collection-page library-page asset-library-page">
       <div className="page-heading">
-        <span className="eyebrow">LOCAL LIBRARY</span>
         <div className="heading-with-action">
-          <h1>积累，可以接着用</h1>
-          <button className="button secondary" onClick={onAdd}>
+          <h1>资产</h1>
+          <button
+            className="button secondary"
+            onClick={() =>
+              setManagement((current) =>
+                current === "imports" ? null : "imports",
+              )
+            }
+            aria-expanded={management === "imports"}
+          >
             <Plus size={15} />
-            添加资料
+            导入资料
           </button>
         </div>
-        <p>
-          团队会为新问题查找相关积累。留下用途、条件与修正，让下一次工作有据可依。
-        </p>
-        {snapshot ? (
-          <label className="library-recall-toggle">
-            <input
-              type="checkbox"
-              checked={snapshot.settings.libraryRecall !== false}
-              disabled={recallPending}
-              onChange={async (event) => {
-                const libraryRecall = event.target.checked;
-                setRecallPending(true);
-                try {
-                  await dispatch({
-                    type: "settings.save",
-                    settings: { ...snapshot.settings, libraryRecall },
-                  });
-                } finally {
-                  setRecallPending(false);
-                }
-              }}
-            />
-            为工作查找当前 Lib 中的相关资料
-            <span>
-              只在任务运行时选入少量文字资产，正文由所选模型按需阅读。
-            </span>
-          </label>
-        ) : null}
+        <p>查找已有积累，接着使用。</p>
       </div>
-      <div className="library-tabbar panel-tabs">
+      <div className="asset-management-bar">
         <button
-          className={tab === "saved" ? "active" : ""}
-          onClick={() => setTab("saved")}
+          className="text-button"
+          onClick={() =>
+            setManagement((current) => (current === "backup" ? null : "backup"))
+          }
+          aria-expanded={management === "backup"}
         >
-          我的收藏 <span>{entries.length}</span>
+          备份与恢复
         </button>
         <button
-          className={tab === "sources" ? "active" : ""}
-          onClick={() => setTab("sources")}
+          className="text-button"
+          onClick={() =>
+            setManagement((current) => (current === "recall" ? null : "recall"))
+          }
+          aria-expanded={management === "recall"}
         >
-          工作资料
+          自动复用设置
         </button>
       </div>
-      <label className="library-search">
-        <Search size={16} />
-        <input
-          aria-label="搜索本地 Lib"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="搜索名称、标签或正文"
-        />
-        <span>{tab === "saved" ? filtered.length : sources.length} 项</span>
-      </label>
-      {tab === "saved" ? (
-        <>
-          {entry && snapshot ? (
+      {management && snapshot ? (
+        <section className="asset-management-surface" aria-label="资产管理">
+          <div className="asset-management-heading">
+            <h2>
+              {management === "imports"
+                ? "导入资料"
+                : management === "backup"
+                  ? "备份与恢复"
+                  : "自动复用"}
+            </h2>
+            <button
+              className="icon-button"
+              aria-label="关闭资产管理"
+              onClick={() => setManagement(null)}
+            >
+              <X size={16} />
+            </button>
+          </div>
+          {management === "recall" ? (
+            <label className="library-recall-toggle">
+              <input
+                type="checkbox"
+                checked={snapshot.settings.libraryRecall !== false}
+                disabled={recallPending}
+                onChange={async (event) => {
+                  const libraryRecall = event.target.checked;
+                  setRecallPending(true);
+                  try {
+                    await dispatch({
+                      type: "settings.save",
+                      settings: { ...snapshot.settings, libraryRecall },
+                    });
+                  } finally {
+                    setRecallPending(false);
+                  }
+                }}
+              />
+              为工作查找资产中的相关资料
+              <span>
+                只在任务运行时选入少量文字资产，正文由所选模型按需阅读。
+              </span>
+            </label>
+          ) : (
             <>
-              <button
-                className="text-button library-back"
-                onClick={() => setSelected(null)}
-              >
-                ← 返回收藏
-              </button>
-              <LibraryDocument
-                key={`lib:${entry.id}`}
-                entry={entry}
+              {management === "imports" ? (
+                <button className="text-button" onClick={onAdd}>
+                  添加单份资料到工作
+                </button>
+              ) : null}
+              <PortablePanel
                 snapshot={snapshot}
                 dispatch={dispatch}
+                mode={management}
                 onTask={onTask}
-                selectedTaskId={selectedTaskId}
+                onReveal={(path) =>
+                  void dispatch({ type: "path.reveal", path })
+                }
               />
             </>
-          ) : filtered.length ? (
-            <div className="saved-library-list">
-              {filtered.map((item) => (
-                <button
-                  className="saved-library-card"
-                  key={item.id}
-                  onClick={() => setSelected(item.id)}
-                >
-                  <div>
-                    <span className="library-format">
-                      {item.format.toUpperCase()}
-                    </span>
-                    <span>
-                      v{item.version} ·{" "}
-                      {LIBRARY_ASSESSMENT_LABELS[libraryAssessment(item)]}
-                    </span>
-                    <ArrowUpRight size={15} />
-                  </div>
-                  <h3>{item.title}</h3>
+          )}
+        </section>
+      ) : null}
+      {!management ? (
+        <>
+          <label className="library-search">
+            <Search size={16} />
+            <input
+              aria-label="搜索本地资产"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="搜索知识、说明书或方法"
+            />
+            <span>
+              {tab === "saved"
+                ? filtered.length
+                : tab === "skills"
+                  ? skillCount
+                  : sources.length}{" "}
+              项
+            </span>
+          </label>
+          <div className="library-tabbar panel-tabs">
+            <button
+              className={tab === "saved" ? "active" : ""}
+              onClick={() => setTab("saved")}
+            >
+              知识与说明书 <span>{entries.length}</span>
+            </button>
+            <button
+              className={tab === "sources" ? "active" : ""}
+              onClick={() => setTab("sources")}
+            >
+              工作资料
+            </button>
+            <button
+              className={tab === "skills" ? "active" : ""}
+              onClick={() => setTab("skills")}
+            >
+              Skills <span>{snapshot?.skills?.length ?? 0}</span>
+            </button>
+          </div>
+          {tab === "skills" ? (
+            snapshot ? (
+              <SkillCatalog
+                snapshot={snapshot}
+                dispatch={dispatch}
+                query={query}
+                onTask={onTask}
+              />
+            ) : null
+          ) : tab === "saved" ? (
+            <>
+              {entry && snapshot ? (
+                <>
+                  <button
+                    className="text-button library-back"
+                    onClick={() => setSelected(null)}
+                  >
+                    ← 返回收藏
+                  </button>
+                  <LibraryDocument
+                    key={`lib:${entry.id}`}
+                    entry={entry}
+                    snapshot={snapshot}
+                    dispatch={dispatch}
+                    onTask={onTask}
+                    selectedTaskId={selectedTaskId}
+                    onMediaCreated={onMediaCreated}
+                    onMediaSetup={onMediaSetup}
+                  />
+                </>
+              ) : filtered.length ? (
+                <div className="saved-library-list asset-library-rows">
+                  {filtered.map((item) => (
+                    <button
+                      className="saved-library-card"
+                      key={item.id}
+                      onClick={() => setSelected(item.id)}
+                    >
+                      <div>
+                        <span className="library-format">
+                          {item.format.toUpperCase()}
+                        </span>
+                        <span>
+                          v{item.version} ·{" "}
+                          {LIBRARY_ASSESSMENT_LABELS[libraryAssessment(item)]}
+                        </span>
+                        <ArrowUpRight size={15} />
+                      </div>
+                      <h3>{item.title}</h3>
+                      <p>
+                        {item.note ||
+                          (item.format === "md"
+                            ? item.content?.replace(/[#*`]/g, "").slice(0, 110)
+                            : "") ||
+                          `来自「${item.source.taskTitle}」`}
+                      </p>
+                      <footer>
+                        <span>{formatDate(item.updatedAt)}</span>
+                        <span>
+                          {item.tags.slice(0, 2).join(" · ") || "已保存在本机"}
+                        </span>
+                      </footer>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="collection-empty">
+                  <BookOpen size={37} strokeWidth={1.2} />
+                  <h2>
+                    {query ? "没有找到这份资产" : "留下可以再次使用的成果"}
+                  </h2>
                   <p>
-                    {item.note ||
-                      (item.format === "md"
-                        ? item.content?.replace(/[#*`]/g, "").slice(0, 110)
-                        : "") ||
-                      `来自「${item.source.taskTitle}」`}
+                    {query
+                      ? "换个名称或关键词试试。"
+                      : "在成果旁选择「收藏为资产」，之后可以在这里查找、修订和复用。"}
                   </p>
-                  <footer>
-                    <span>{formatDate(item.updatedAt)}</span>
-                    <span>
-                      {item.tags.slice(0, 2).join(" · ") || "已保存在本机"}
-                    </span>
-                  </footer>
-                </button>
-              ))}
-            </div>
+                </div>
+              )}
+            </>
           ) : (
-            <div className="collection-empty">
-              <BookOpen size={37} strokeWidth={1.2} />
-              <h2>
-                {query ? "没有找到这份收藏" : "把值得留下的成果，放进 Lib"}
-              </h2>
-              <p>
-                {query
-                  ? "换个名称或关键词试试。"
-                  : "在成果面板点击「收藏到 Lib」，就能在这里修改、归档和复用。"}
-              </p>
+            <div className="library-list">
+              {sources.length ? (
+                sources.map(({ task, source }) => (
+                  <article
+                    className="library-row"
+                    key={`${task.id}:${source.id}`}
+                  >
+                    <div className="library-row-heading">
+                      <FileText size={18} />
+                      <h3>{source.title}</h3>
+                      <time>{formatDate(source.addedAt)}</time>
+                    </div>
+                    <p>{source.text.slice(0, 160)}</p>
+                    <div className="library-row-foot">
+                      <span>{source.coverage}</span>
+                      <button
+                        className="text-button"
+                        onClick={() => onTask(task.id)}
+                      >
+                        回到「{task.title}」<ArrowUpRight size={13} />
+                      </button>
+                      {source.type === "url" ? (
+                        <button
+                          className="icon-button"
+                          aria-label="打开原始链接"
+                          onClick={() =>
+                            void dispatch({
+                              type: "url.open",
+                              url: source.location,
+                            })
+                          }
+                        >
+                          <Link2 size={14} />
+                        </button>
+                      ) : null}
+                    </div>
+                  </article>
+                ))
+              ) : (
+                <div className="collection-empty">
+                  <FileText size={30} />
+                  <h2>为工作加入一些背景</h2>
+                  <p>已导入的文章、笔记与文档会集中在这里。</p>
+                </div>
+              )}
             </div>
           )}
         </>
-      ) : (
-        <div className="library-list">
-          {sources.length ? (
-            sources.map(({ task, source }) => (
-              <article className="library-row" key={`${task.id}:${source.id}`}>
-                <div className="library-row-heading">
-                  <FileText size={18} />
-                  <h3>{source.title}</h3>
-                  <time>{formatDate(source.addedAt)}</time>
-                </div>
-                <p>{source.text.slice(0, 160)}</p>
-                <div className="library-row-foot">
-                  <span>{source.coverage}</span>
-                  <button
-                    className="text-button"
-                    onClick={() => onTask(task.id)}
-                  >
-                    回到「{task.title}」<ArrowUpRight size={13} />
-                  </button>
-                  {source.type === "url" ? (
-                    <button
-                      className="icon-button"
-                      aria-label="打开原始链接"
-                      onClick={() =>
-                        void dispatch({
-                          type: "url.open",
-                          url: source.location,
-                        })
-                      }
-                    >
-                      <Link2 size={14} />
-                    </button>
-                  ) : null}
-                </div>
-              </article>
-            ))
-          ) : (
-            <div className="collection-empty">
-              <FileText size={30} />
-              <h2>为工作加入一些背景</h2>
-              <p>已导入的文章、笔记与文档会集中在这里。</p>
-            </div>
-          )}
-        </div>
-      )}
+      ) : null}
     </div>
   );
 }

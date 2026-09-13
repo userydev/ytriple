@@ -88,6 +88,10 @@ test("switching tasks replaces the visible goal and conversation and keeps artif
   const { window, document } = parseHTML(
     "<!doctype html><html><head></head><body><div id='root'></div></body></html>",
   );
+  Object.defineProperty(document, "oninput", {
+    value: null,
+    configurable: true,
+  });
   Object.defineProperty(window, "innerWidth", {
     value: 1400,
     configurable: true,
@@ -106,7 +110,9 @@ test("switching tasks replaces the visible goal and conversation and keeps artif
     invoke: async (command: Command) => {
       commands.push(command);
       assert.ok(
-        command.type === "snapshot" || command.type === "window.select",
+        command.type === "snapshot" ||
+          command.type === "window.select" ||
+          (command.type === "window.expand" && command.window === null),
         "switching tasks may synchronize panels but must not start work",
       );
       return structuredClone(snapshot);
@@ -161,7 +167,7 @@ test("switching tasks replaces the visible goal and conversation and keeps artif
         "only one task overview may remain visible",
       );
       assert.equal(
-        pane.querySelector(".task-overview h1")?.textContent,
+        document.querySelector(".location-title")?.textContent,
         current.title,
       );
       assert.equal(
@@ -169,7 +175,7 @@ test("switching tasks replaces the visible goal and conversation and keeps artif
         current.goal,
       );
       assert.equal(
-        document.querySelector(".topbar-location strong")?.textContent,
+        document.querySelector(".topbar .location-title")?.textContent,
         current.title,
       );
       assert.equal(
@@ -192,10 +198,12 @@ test("switching tasks replaces the visible goal and conversation and keeps artif
           !pane.textContent?.includes(message.content),
           "the previous task messages must be removed",
         );
-      const context = document.querySelector(".pane-artifact")!;
+      const context = document.querySelector(".work-content")!;
       if (current.artifacts.length) {
         assert.equal(
-          context.querySelector(".artifact-heading h3")?.textContent,
+          context
+            .querySelector(".artifact-document-heading")
+            ?.getAttribute("title"),
           current.artifacts[0].title,
         );
         assert.ok(context.textContent?.includes("研究任务的独有成果正文。"));
@@ -273,6 +281,10 @@ async function withWorkbench(
   const { window, document } = parseHTML(
     "<!doctype html><html><body><div id='root'></div></body></html>",
   );
+  Object.defineProperty(document, "oninput", {
+    value: null,
+    configurable: true,
+  });
   Object.defineProperty(window, "innerWidth", {
     value: 560,
     configurable: true,
@@ -285,7 +297,14 @@ async function withWorkbench(
     value: () => undefined,
     configurable: true,
   });
-  const navigationStorage = new Map<string, string>();
+  Object.defineProperties(window.HTMLElement.prototype, {
+    setPointerCapture: { value: () => undefined, configurable: true },
+    hasPointerCapture: { value: () => false, configurable: true },
+    releasePointerCapture: { value: () => undefined, configurable: true },
+  });
+  const navigationStorage = new Map<string, string>([
+    ["ytriple.navigation.v2", JSON.stringify({ pinned: false })],
+  ]);
   Object.defineProperty(window, "localStorage", {
     value: {
       getItem: (key: string) => navigationStorage.get(key) ?? null,
@@ -301,6 +320,34 @@ async function withWorkbench(
   window.ytriple = {
     invoke: async (command) => {
       commands.push(command);
+      if (command.type === "portable.importBookmarks") {
+        const created = {
+          ...taskFixture("collection-created", true),
+          title: command.title,
+          goal: command.goal,
+          messages: [],
+          artifacts: [],
+        };
+        current = {
+          ...current,
+          tasks: [created, ...current.tasks],
+          portable: {
+            backups: [],
+            restores: [],
+            imports: [
+              {
+                id: command.requestId,
+                taskId: created.id,
+                added: 1,
+                duplicates: 0,
+                skipped: 0,
+                coverage: "用户提供正文",
+                createdAt: new Date().toISOString(),
+              },
+            ],
+          },
+        };
+      }
       if (command.type === "task.create") {
         const created = {
           ...taskFixture("project-created", true),
@@ -309,6 +356,7 @@ async function withWorkbench(
           title: command.title ?? command.goal,
           goal: command.goal,
           projectId: command.projectId,
+          requestId: command.requestId,
           messages: [],
           sources: [],
           artifacts: [],
@@ -333,6 +381,8 @@ async function withWorkbench(
         desktop.revision = (desktop.revision ?? 0) + 1;
         if (command.type === "window.resize")
           desktop.ratios = { main: command.main, evidence: command.evidence };
+        if (command.type === "window.rightMode")
+          desktop.rightMode = command.mode;
         if (command.type === "window.collapse") {
           desktop.collapsed[command.window] = command.collapsed;
           desktop.expanded = null;
@@ -397,6 +447,35 @@ async function withWorkbench(
   const root = createRoot(document.getElementById("root")!);
   try {
     await act(async () => root.render(createElement(App)));
+    assert.equal(
+      document.querySelector<HTMLElement>(".home-host")?.hidden,
+      false,
+      "startup shows the home page even with recent work",
+    );
+    assert.equal(
+      document.querySelector<HTMLElement>(".work-surface")?.hidden,
+      true,
+    );
+    assert.ok(
+      !commands.some(
+        (command) =>
+          command.type === "task.run" || command.type === "task.create",
+      ),
+    );
+    const continueTask = Array.from(
+      document.querySelectorAll(".home-work-row"),
+    ).find((button) =>
+      button.textContent?.includes(
+        snapshot.tasks.find((task) => task.id === snapshot.desktop?.taskId)
+          ?.title ?? "",
+      ),
+    );
+    if (continueTask)
+      await act(async () =>
+        continueTask.dispatchEvent(
+          new window.Event("click", { bubbles: true }),
+        ),
+      );
     await run({
       document: document as unknown as Document,
       window: window as unknown as Window & typeof globalThis,
@@ -418,154 +497,135 @@ async function withWorkbench(
   assert.equal(subscriptions, 1, "all panels share one App subscription");
 }
 
-test("one App contains three panels and selection synchronizes them without starting work", async () => {
+test("one App opens recent work from home into three coordinated surfaces with one content switch and no model call", async () => {
   const first = taskFixture("triple-first", true),
     second = taskFixture("triple-second", false);
   await withWorkbench(
     workbenchSnapshot([first, second]),
     async ({ document, window, commands, act, emit }) => {
-      assert.equal(document.querySelectorAll(".context-panel").length, 0);
-      assert.equal(document.querySelectorAll(".workspace-panel").length, 3);
-      assert.ok(document.querySelector(".pane-evidence"));
-      assert.ok(document.querySelector(".pane-artifact"));
-      assert.ok(document.querySelector(".sidebar-hidden"));
+      assert.equal(document.querySelectorAll(".work-surface").length, 1);
+      assert.equal(document.querySelectorAll(".workspace-panel").length, 0);
+      for (const panel of ["main", "evidence", "artifact"])
+        assert.equal(
+          document.querySelectorAll(`.work-surface [data-panel="${panel}"]`)
+            .length,
+          1,
+        );
       assert.equal(
-        document.querySelector(".task-overview h1")?.textContent,
+        document.querySelectorAll('[aria-label="工作内容切换"] button').length,
+        2,
+      );
+      assert.equal(
+        document.querySelector(".location-title")?.textContent,
         first.title,
       );
-      await act(async () =>
-        document
-          .querySelector('[aria-label="展开侧栏"]')!
-          .dispatchEvent(new window.Event("click", { bubbles: true })),
-      );
-      assert.ok(!document.querySelector(".sidebar-hidden"));
       const select = Array.from(document.querySelectorAll(".work-item")).find(
-        (element) => element.textContent?.includes(second.title),
+        (button) => button.textContent?.includes(second.title),
       )!;
       await act(async () =>
         select.dispatchEvent(new window.Event("click", { bubbles: true })),
       );
       assert.equal(
-        document.querySelector(".task-overview h1")?.textContent,
+        document.querySelector(".location-title")?.textContent,
         second.title,
       );
-      assert.ok(
-        document.querySelector(".sidebar-hidden"),
-        "selecting a task dismisses the navigation overlay",
-      );
-      const old = workbenchSnapshot([first, second], first.id);
-      await act(async () => emit(old));
+      await act(async () => emit(workbenchSnapshot([first, second], first.id)));
       assert.equal(
-        document.querySelector(".task-overview h1")?.textContent,
+        document.querySelector(".location-title")?.textContent,
         second.title,
-        "old updates must not undo a local task selection",
+        "old snapshots cannot undo local selection",
+      );
+      assert.equal(
+        document
+          .querySelector(".work-content .artifact-document-heading")
+          ?.getAttribute("title"),
+        second.artifacts[0].title,
       );
       assert.deepEqual(
         commands.filter((command) => command.type !== "snapshot"),
-        [{ type: "window.select", taskId: second.id }],
+        [
+          { type: "window.select", taskId: first.id },
+          { type: "window.expand", window: null },
+          { type: "window.select", taskId: second.id },
+          { type: "window.expand", window: null },
+        ],
       );
     },
   );
 });
 
-test("folding, maximizing and page navigation keep the same artifact editor mounted", async () => {
+test("switching content, focusing, and navigating pages preserve the artifact draft and external-conflict protection", async () => {
   const first = taskFixture("aux-first", false),
-    second = taskFixture("aux-second", true);
-  const original = workbenchSnapshot([first, second]);
+    second = taskFixture("aux-second", true),
+    original = workbenchSnapshot([first, second]);
   await withWorkbench(original, async ({ document, window, act, emit }) => {
-    assert.equal(
-      document.querySelector(".artifact-heading h3")?.textContent,
-      first.artifacts[0].title,
-    );
-    const edit = Array.from(document.querySelectorAll("button")).find(
-      (button) => button.textContent === "编辑",
-    )!;
+    const click = async (selector: string) => {
+      const target = document.querySelector(selector);
+      assert.ok(target, selector);
+      await act(async () =>
+        target.dispatchEvent(new window.Event("click", { bubbles: true })),
+      );
+    };
+    const edit = Array.from(
+      document.querySelectorAll(".work-content button"),
+    ).find((button) => button.textContent === "编辑")!;
     await act(async () =>
       edit.dispatchEvent(new window.Event("click", { bubbles: true })),
     );
     const editor =
       document.querySelector<HTMLTextAreaElement>(".artifact-editor")!;
-    // linkedom does not mirror textarea.defaultValue into value at mount.
-    assert.equal(
-      editor.value || editor.defaultValue,
-      first.artifacts[0].content,
-    );
-    const folded = structuredClone(original);
-    folded.desktop!.revision = 2;
-    folded.desktop!.collapsed.artifact = true;
-    await act(async () => emit(folded));
-    assert.ok(document.querySelector(".pane-artifact.panel-collapsed"));
-    assert.equal(
-      document.querySelector(".artifact-editor"),
-      editor,
-      "folding keeps the editor mounted",
-    );
-    const changed = structuredClone(folded);
-    changed.desktop!.revision = 3;
-    changed.desktop!.collapsed.artifact = false;
+    assert.ok(editor);
+    const analysis = document.querySelector(".work-analysis");
+    assert.ok(analysis);
+    await click('[aria-label="工作内容切换"] button:nth-child(2)');
+    assert.equal(document.querySelector(".artifact-editor"), editor);
+    assert.ok(editor.closest("[hidden]"));
+    assert.equal(document.querySelector(".work-analysis"), analysis);
+    await click('[aria-label="工作内容切换"] button:nth-child(1)');
+    assert.equal(editor.closest("[hidden]"), null);
+    await click('[aria-label="专注阅读"]');
+    assert.ok(document.querySelector(".work-surface.focus-artifact"));
+    assert.equal(document.querySelector(".artifact-editor"), editor);
+    await click('[aria-label="恢复并排工作"]');
+    await click('[aria-label="专注分析过程"]');
+    assert.ok(document.querySelector(".work-surface.focus-evidence"));
+    assert.equal(document.querySelector(".work-analysis"), analysis);
+    assert.equal(document.querySelector(".artifact-editor"), editor);
+    await click('[aria-label="恢复并排工作"]');
+    const changed = structuredClone(original);
     changed.tasks[0].artifacts[0].hash = "new-external-hash";
     changed.tasks[0].artifacts[0].content = "其他窗口的新内容";
     await act(async () => emit(changed));
     assert.equal(
-      document.querySelector<HTMLTextAreaElement>(".artifact-editor")?.value ||
-        document.querySelector<HTMLTextAreaElement>(".artifact-editor")
-          ?.defaultValue,
+      editor.value || editor.defaultValue,
       first.artifacts[0].content,
-      "external snapshots do not replace the active draft",
     );
     assert.ok(
-      Array.from(document.querySelectorAll("button")).find((button) =>
-        button.textContent?.includes("保存修改"),
-      )?.disabled,
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>(".work-content button"),
+      ).find((button) => button.textContent?.includes("保存修改"))?.disabled,
     );
-    const maximize = document.querySelector('[aria-label="最大化成果工作区"]')!;
-    await act(async () =>
-      maximize.dispatchEvent(new window.Event("click", { bubbles: true })),
-    );
-    assert.ok(document.querySelector(".pane-artifact.panel-expanded"));
+    await click(".primary-nav button:nth-child(4)");
+    assert.ok(document.querySelector<HTMLElement>(".work-surface")?.hidden);
     assert.equal(document.querySelector(".artifact-editor"), editor);
-    const library = document.querySelector(".primary-nav button:nth-child(4)")!;
-    await act(async () =>
-      library.dispatchEvent(new window.Event("click", { bubbles: true })),
-    );
-    assert.ok(document.querySelector(".workspace-hidden"));
-    assert.equal(
-      document.querySelector(".artifact-editor"),
-      editor,
-      "navigating to Lib keeps document editing state mounted",
-    );
-    const backToWork = Array.from(document.querySelectorAll("button")).find(
-      (button) => button.textContent?.includes("回到工作区"),
-    )!;
-    await act(async () =>
-      backToWork.dispatchEvent(new window.Event("click", { bubbles: true })),
-    );
-    assert.ok(!document.querySelector(".workspace-panels.workspace-hidden"));
-    const selectSecond = Array.from(
-      document.querySelectorAll(".work-item"),
-    ).find((button) => button.textContent?.includes(second.title))!;
-    await act(async () =>
-      selectSecond.dispatchEvent(new window.Event("click", { bubbles: true })),
-    );
-    assert.equal(document.querySelectorAll(".artifact-view").length, 0);
+    const selectTask = async (title: string) => {
+      const target = Array.from(document.querySelectorAll(".work-item")).find(
+        (button) => button.textContent?.includes(title),
+      )!;
+      await act(async () =>
+        target.dispatchEvent(new window.Event("click", { bubbles: true })),
+      );
+    };
+    await selectTask(first.title);
+    assert.equal(document.querySelector(".artifact-editor"), editor);
+    await selectTask(second.title);
+    assert.equal(document.querySelector(".artifact-editor"), null);
     await act(async () => emit(original));
+    assert.equal(document.querySelector(".artifact-editor"), null);
+    await selectTask(first.title);
     assert.equal(
-      document.querySelectorAll(".artifact-view").length,
-      0,
-      "a late snapshot cannot replace the user selection",
-    );
-    const selectFirst = Array.from(
-      document.querySelectorAll(".work-item"),
-    ).find((button) => button.textContent?.includes(first.title))!;
-    await act(async () =>
-      selectFirst.dispatchEvent(new window.Event("click", { bubbles: true })),
-    );
-    assert.equal(
-      document.querySelector<HTMLTextAreaElement>(".artifact-editor")?.value ||
-        document.querySelector<HTMLTextAreaElement>(".artifact-editor")
-          ?.defaultValue,
+      document.querySelector<HTMLTextAreaElement>(".artifact-editor")?.value,
       first.artifacts[0].content,
-      "switching back restores unsaved editing state",
     );
   });
 });
@@ -639,12 +699,13 @@ test("process view exposes real delegation and public summaries without raw reas
     },
   ];
   await withWorkbench(workbenchSnapshot([task]), async ({ document }) => {
-    assert.equal(document.querySelectorAll(".agent-lane").length, 2);
-    assert.ok(document.body.textContent?.includes("由统筹委派"));
+    assert.equal(document.querySelectorAll(".work-member-line").length, 2);
+    const process = document.querySelector(
+      '.work-analysis [aria-label="Agent 协作过程"]',
+    );
+    assert.ok(process?.textContent?.includes("统筹负责"));
     assert.ok(
-      document.body.textContent?.includes(
-        "两份资料的统计口径不同，需要分别比较。",
-      ),
+      process?.textContent?.includes("两份资料的统计口径不同，需要分别比较。"),
     );
     assert.ok(
       !document.body.textContent?.includes(
@@ -664,7 +725,7 @@ test("artifact collection captures the displayed version and offers real follow-
     workbenchSnapshot([task]),
     async ({ document, window, commands, act }) => {
       const collect = Array.from(document.querySelectorAll("button")).find(
-        (button) => button.textContent === "收藏到 Lib",
+        (button) => button.textContent === "收藏为资产",
       )!;
       await act(async () =>
         collect.dispatchEvent(new window.Event("click", { bubbles: true })),
@@ -725,7 +786,7 @@ test("local Lib keeps provenance, exposes editing, and reuses the chosen entry a
   await withWorkbench(snapshot, async ({ document, window, commands, act }) => {
     const nav = Array.from(
       document.querySelectorAll(".primary-nav button"),
-    ).find((button) => button.textContent?.includes("本地 Lib"))!;
+    ).find((button) => button.textContent?.includes("资产"))!;
     await act(async () =>
       nav.dispatchEvent(new window.Event("click", { bubbles: true })),
     );
@@ -768,7 +829,7 @@ test("local Lib keeps provenance, exposes editing, and reuses the chosen entry a
       "reusing material lets the user supply direction before model work starts",
     );
     assert.equal(
-      document.querySelector(".task-overview h1")?.textContent,
+      document.querySelector(".location-title")?.textContent,
       task.title,
     );
   });
@@ -794,18 +855,26 @@ test("initial restored work seeds the saved member and model without starting it
   ];
   await withWorkbench(snapshot, async ({ document, commands }) => {
     assert.equal(
-      document.querySelector<HTMLSelectElement>(".select-member select")?.value,
+      document.querySelector<HTMLSelectElement>(
+        ".work-discussion .select-member select",
+      )?.value,
       "cto",
     );
     assert.equal(
-      document.querySelector<HTMLSelectElement>(".select-model select")?.value,
+      document.querySelector<HTMLSelectElement>(
+        ".work-discussion .select-model select",
+      )?.value,
       "saved-profile",
     );
     assert.equal(
-      document.querySelector(".task-overview h1")?.textContent,
+      document.querySelector(".location-title")?.textContent,
       task.title,
     );
-    assert.deepEqual(commands, [{ type: "snapshot" }]);
+    assert.deepEqual(commands, [
+      { type: "snapshot" },
+      { type: "window.select", taskId: task.id },
+      { type: "window.expand", window: null },
+    ]);
   });
 });
 
@@ -839,79 +908,43 @@ function keyEvent(
   });
   return event;
 }
-test("both separators resize locally during pointer movement, persist on release, and support keyboard adjustment", async () => {
-  const task = taskFixture("split-resize-fixture", false);
-  const snapshot = workbenchSnapshot([task]);
+test("discussion-content divider resizes locally, persists on release, and supports keyboard bounds", async () => {
+  const snapshot = workbenchSnapshot([
+    taskFixture("split-resize-fixture", false),
+  ]);
   snapshot.desktop!.ratios = { main: 0.52, evidence: 0.5 };
   await withWorkbench(snapshot, async ({ document, window, commands, act }) => {
-    const workspace = document.querySelector<HTMLElement>(".workspace-panels")!;
-    const right = document.querySelector<HTMLElement>(".workspace-right")!;
-    const bounds = {
-      left: 0,
-      top: 0,
-      width: 1000,
-      height: 800,
-      right: 1000,
-      bottom: 800,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    };
+    const workspace = document.querySelector<HTMLElement>(".work-surface")!;
     Object.defineProperty(workspace, "getBoundingClientRect", {
-      value: () => bounds,
+      value: () => ({ left: 0, top: 0, width: 1000, height: 800 }),
     });
-    Object.defineProperty(right, "getBoundingClientRect", {
-      value: () => ({ ...bounds, left: 520, width: 480 }),
-    });
-    const horizontal = document.querySelector<HTMLElement>(".divider-main")!;
-    const vertical = document.querySelector<HTMLElement>(".divider-evidence")!;
+    const divider = document.querySelector<HTMLElement>(".work-divider")!;
     await act(async () =>
-      horizontal.dispatchEvent(pointerEvent(window, "pointerdown", 520, 200)),
+      divider.dispatchEvent(pointerEvent(window, "pointerdown", 520, 200)),
     );
     for (const x of [550, 610, 650])
       await act(async () =>
-        horizontal.dispatchEvent(pointerEvent(window, "pointermove", x, 200)),
+        divider.dispatchEvent(pointerEvent(window, "pointermove", x, 200)),
       );
-    assert.equal(horizontal.getAttribute("aria-valuenow"), "65");
-    assert.ok(workspace.style.gridTemplateColumns.includes("0.65fr"));
-    assert.equal(
-      commands.filter((command) => command.type === "window.resize").length,
-      0,
-      "pointer movements do not call IPC per frame",
+    assert.equal(divider.getAttribute("aria-valuenow"), "65");
+    assert.ok(
+      workspace.style.getPropertyValue("--discussion-ratio").includes("65"),
     );
+    assert.equal(commands.filter((c) => c.type === "window.resize").length, 0);
     await act(async () =>
-      horizontal.dispatchEvent(pointerEvent(window, "pointerup", 650, 200)),
+      divider.dispatchEvent(pointerEvent(window, "pointerup", 650, 200)),
     );
     assert.deepEqual(
-      commands.filter((command) => command.type === "window.resize"),
+      commands.filter((c) => c.type === "window.resize"),
       [{ type: "window.resize", main: 0.65, evidence: 0.5 }],
     );
-    assert.equal(document.querySelector(".resize-shield"), null);
-    await act(async () =>
-      vertical.dispatchEvent(pointerEvent(window, "pointerdown", 700, 400)),
-    );
-    await act(async () =>
-      vertical.dispatchEvent(pointerEvent(window, "pointermove", 700, 320)),
-    );
-    await act(async () =>
-      vertical.dispatchEvent(pointerEvent(window, "pointerup", 700, 320)),
-    );
-    assert.deepEqual(
-      commands.filter((command) => command.type === "window.resize").at(-1),
-      { type: "window.resize", main: 0.65, evidence: 0.4 },
-    );
-    await act(async () =>
-      horizontal.dispatchEvent(keyEvent(window, "ArrowLeft")),
-    );
-    assert.equal(horizontal.getAttribute("aria-valuenow"), "63");
-    await act(async () =>
-      vertical.dispatchEvent(keyEvent(window, "ArrowDown", true)),
-    );
-    assert.equal(vertical.getAttribute("aria-valuenow"), "50");
-    await act(async () => horizontal.dispatchEvent(keyEvent(window, "Home")));
-    assert.equal(horizontal.getAttribute("aria-valuenow"), "20");
-    await act(async () => horizontal.dispatchEvent(keyEvent(window, "End")));
-    assert.equal(horizontal.getAttribute("aria-valuenow"), "80");
+    assert.ok(!workspace.classList.contains("is-resizing"));
+    await act(async () => divider.dispatchEvent(keyEvent(window, "ArrowLeft")));
+    assert.equal(divider.getAttribute("aria-valuenow"), "62");
+    await act(async () => divider.dispatchEvent(keyEvent(window, "Home")));
+    assert.equal(divider.getAttribute("aria-valuenow"), "30");
+    await act(async () => divider.dispatchEvent(keyEvent(window, "End")));
+    assert.equal(divider.getAttribute("aria-valuenow"), "65");
   });
 });
 
@@ -921,11 +954,11 @@ test("lost pointer capture and app blur cancel the resize shield without committ
   ]);
   snapshot.desktop!.ratios = { main: 0.52, evidence: 0.5 };
   await withWorkbench(snapshot, async ({ document, window, commands, act }) => {
-    const workspace = document.querySelector<HTMLElement>(".workspace-panels")!;
+    const workspace = document.querySelector<HTMLElement>(".work-surface")!;
     Object.defineProperty(workspace, "getBoundingClientRect", {
       value: () => ({ left: 0, top: 0, width: 1000, height: 800 }),
     });
-    const divider = document.querySelector<HTMLElement>(".divider-main")!;
+    const divider = document.querySelector<HTMLElement>(".work-divider")!;
     for (const cancellation of ["lostpointercapture", "blur"]) {
       await act(async () =>
         divider.dispatchEvent(pointerEvent(window, "pointerdown", 520, 200)),
@@ -933,7 +966,7 @@ test("lost pointer capture and app blur cancel the resize shield without committ
       await act(async () =>
         divider.dispatchEvent(pointerEvent(window, "pointermove", 720, 200)),
       );
-      assert.ok(document.querySelector(".resize-shield"));
+      assert.ok(document.querySelector(".work-surface.is-resizing"));
       await act(async () =>
         cancellation === "blur"
           ? window.dispatchEvent(new window.Event("blur"))
@@ -941,7 +974,7 @@ test("lost pointer capture and app blur cancel the resize shield without committ
               pointerEvent(window, "lostpointercapture", 720, 200),
             ),
       );
-      assert.equal(document.querySelector(".resize-shield"), null);
+      assert.equal(document.querySelector(".work-surface.is-resizing"), null);
       assert.equal(divider.getAttribute("aria-valuenow"), "52");
       await act(async () =>
         divider.dispatchEvent(pointerEvent(window, "pointerup", 720, 200)),
@@ -960,11 +993,11 @@ test("releasing away from a divider clears the shield on pointerup or mouseup an
   ]);
   snapshot.desktop!.ratios = { main: 0.52, evidence: 0.5 };
   await withWorkbench(snapshot, async ({ document, window, commands, act }) => {
-    const workspace = document.querySelector<HTMLElement>(".workspace-panels")!;
+    const workspace = document.querySelector<HTMLElement>(".work-surface")!;
     Object.defineProperty(workspace, "getBoundingClientRect", {
       value: () => ({ left: 0, top: 0, width: 1000, height: 800 }),
     });
-    const divider = document.querySelector<HTMLElement>(".divider-main")!;
+    const divider = document.querySelector<HTMLElement>(".work-divider")!;
     await act(async () =>
       divider.dispatchEvent(pointerEvent(window, "pointerdown", 520, 200)),
     );
@@ -980,7 +1013,7 @@ test("releasing away from a divider clears the shield on pointerup or mouseup an
         pointerEvent(window, "lostpointercapture", 620, 200),
       ),
     );
-    assert.equal(document.querySelector(".resize-shield"), null);
+    assert.equal(document.querySelector(".work-surface.is-resizing"), null);
     assert.equal(
       commands.filter((command) => command.type === "window.resize").length,
       1,
@@ -993,7 +1026,7 @@ test("releasing away from a divider clears the shield on pointerup or mouseup an
     );
     await act(async () => window.dispatchEvent(new window.Event("mouseup")));
     assert.equal(
-      document.querySelector(".resize-shield"),
+      document.querySelector(".work-surface.is-resizing"),
       null,
       "mouse-only release cannot swallow the following click",
     );
@@ -1017,58 +1050,62 @@ test("releasing away from a divider clears the shield on pointerup or mouseup an
   });
 });
 
-test("pinned navigation remains open across independent configuration pages and project selection does not run work", async () => {
-  const snap = workbenchSnapshot([taskFixture("pin-work", true)]);
-  await withWorkbench(snap, async ({ document, window, act, commands }) => {
-    const click = async (selector: string) => {
-      const element = document.querySelector(selector);
-      assert.ok(element, selector);
-      await act(async () =>
-        element.dispatchEvent(new window.Event("click", { bubbles: true })),
+test("pinned navigation remains open across settings groups without starting work", async () => {
+  await withWorkbench(
+    workbenchSnapshot([taskFixture("pin-work", true)]),
+    async ({ document, window, act, commands }) => {
+      const click = async (selector: string) => {
+        const element = document.querySelector(selector);
+        assert.ok(element, selector);
+        await act(async () =>
+          element.dispatchEvent(new window.Event("click", { bubbles: true })),
+        );
+      };
+      await click('.topbar [aria-label="展开侧栏"]');
+      await click('[aria-label="固定侧栏"]');
+      assert.equal(
+        JSON.parse(window.localStorage.getItem("ytriple.navigation.v2")!)
+          .pinned,
+        true,
       );
-    };
-    await click('.topbar [aria-label="展开侧栏"]');
-    await click('[aria-label="固定侧栏"]');
-    assert.equal(
-      JSON.parse(window.localStorage.getItem("ytriple.navigation.v1")!).pinned,
-      true,
-    );
-    await click(".configuration-nav button:nth-of-type(1)");
-    assert.ok(
-      !document.querySelector(".sidebar")!.classList.contains("sidebar-hidden"),
-    );
-    assert.equal(
-      document.querySelector(".settings-page h1")?.textContent,
-      "多 Agent 团队",
-    );
-    assert.equal(document.querySelector(".settings-page .page-tabs"), null);
-    await click(".configuration-nav button:nth-of-type(2)");
-    assert.equal(
-      document.querySelector(".settings-page h1")?.textContent,
-      "AI 模型",
-    );
-    await click(".configuration-nav button:nth-of-type(3)");
-    assert.equal(
-      document.querySelector(".settings-page h1")?.textContent,
-      "本机环境",
-    );
-    await click('[aria-label="取消固定侧栏"]');
-    await click(".primary-nav button:nth-child(1)");
-    assert.ok(
-      document.querySelector(".sidebar")!.classList.contains("sidebar-hidden"),
-    );
-    assert.ok(
-      !commands.some((command) =>
-        ["task.create", "task.run", "settings.save"].includes(command.type),
-      ),
-    );
-  });
+      await click(".settings-nav");
+      assert.equal(
+        document.querySelector(".settings-page h1")?.textContent,
+        "设置",
+      );
+      for (const index of [2, 1, 3]) {
+        await click(`.settings-groups button:nth-child(${index})`);
+        assert.equal(
+          document
+            .querySelector(`.settings-groups button:nth-child(${index})`)
+            ?.getAttribute("aria-current"),
+          "page",
+        );
+        assert.ok(
+          !document
+            .querySelector(".sidebar")!
+            .classList.contains("sidebar-hidden"),
+        );
+      }
+      await click('[aria-label="取消固定侧栏"]');
+      await click(".primary-nav button:nth-child(1)");
+      assert.ok(
+        document
+          .querySelector(".sidebar")!
+          .classList.contains("sidebar-hidden"),
+      );
+      assert.ok(
+        !commands.some((command) =>
+          ["task.create", "task.run", "settings.save"].includes(command.type),
+        ),
+      );
+    },
+  );
 });
 
-test("project discussions keep separate drafts, attach a project on send, and leave the workbench task intact", async () => {
-  const original = taskFixture("original-decision", true);
-  const snap = workbenchSnapshot([original]);
-  snap.projects = ["alpha", "beta"].map((id) => ({
+function projectSnapshot(id: string) {
+  const snapshot = workbenchSnapshot([taskFixture(id, true)]);
+  snapshot.projects = ["alpha", "beta"].map((id) => ({
     id,
     name: id,
     series: "y",
@@ -1076,6 +1113,25 @@ test("project discussions keep separate drafts, attach a project on send, and le
     devPath: `/unused/Code/y/${id}/${id}-dev`,
     documents: {},
   }));
+  return snapshot;
+}
+function typeText(
+  window: Window & typeof globalThis,
+  element: HTMLTextAreaElement | null,
+  text: string,
+) {
+  assert.ok(element);
+  const setter = Object.getOwnPropertyDescriptor(
+    window.HTMLTextAreaElement.prototype,
+    "value",
+  )?.set;
+  assert.ok(setter);
+  setter.call(element, text);
+  element.dispatchEvent(new window.Event("input", { bubbles: true }));
+}
+
+test("project work opens in the shared workspace, keeps separate drafts, and runs explicitly with its original project", async () => {
+  const snap = projectSnapshot("original-decision");
   await withWorkbench(snap, async ({ document, window, act, commands }) => {
     const click = async (selector: string) => {
       const element = document.querySelector(selector);
@@ -1084,41 +1140,52 @@ test("project discussions keep separate drafts, attach a project on send, and le
         element.dispatchEvent(new window.Event("click", { bubbles: true })),
       );
     };
-    await click(".primary-nav button:nth-child(3)");
-    await click('[aria-label="选择项目 alpha"]');
-    assert.equal(
-      document.querySelector(".project-decision-header h2")?.textContent,
-      "alpha",
-    );
-    await click(".project-discussion-seeds button:nth-child(1)");
-    const draftA = document.querySelector<HTMLTextAreaElement>(
-      ".project-decision textarea",
-    )!.value;
-    await click('[aria-label="选择项目 beta"]');
-    assert.equal(
-      document.querySelector<HTMLTextAreaElement>(".project-decision textarea")!
-        .value,
-      "",
-    );
-    await click(".project-discussion-seeds button:nth-child(2)");
-    await click('[aria-label="选择项目 alpha"]');
-    assert.equal(
-      document.querySelector<HTMLTextAreaElement>(".project-decision textarea")!
-        .value ||
-        document.querySelector<HTMLTextAreaElement>(
-          ".project-decision textarea",
-        )!.defaultValue,
-      draftA,
-    );
+    const type = async (value: string) =>
+      act(async () =>
+        typeText(
+          window,
+          document.querySelector(".work-discussion textarea"),
+          value,
+        ),
+      );
+    const text = () => {
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        ".work-discussion textarea",
+      )!;
+      return textarea.value || textarea.defaultValue || "";
+    };
+    const open = async (id: string) => {
+      await click(".primary-nav button:nth-child(3)");
+      await click(`[aria-label="打开项目 ${id}"]`);
+      assert.equal(document.querySelector('[role="dialog"]'), null);
+      assert.equal(
+        document.querySelector<HTMLElement>(".work-surface")?.hidden,
+        false,
+      );
+      assert.equal(document.querySelector(".location-title")?.textContent, id);
+      assert.ok(
+        document.querySelector('.work-content [aria-label="项目状态概览"]'),
+      );
+      assert.ok(document.querySelector(".work-analysis"));
+    };
+    await open("alpha");
     assert.ok(
-      !commands.some(
-        (command) =>
-          command.type === "task.create" || command.type === "task.run",
+      !commands.some((command) =>
+        ["task.create", "task.run"].includes(command.type),
       ),
+      "opening the full project workspace does not create or run a task",
     );
+    await type("先梳理 alpha 的当前重点。");
+    const draftA = text();
+    await open("beta");
+    assert.equal(text(), "");
+    await type("讨论 beta 的独立目标。");
+    const draftB = text();
+    await open("alpha");
+    assert.equal(text(), draftA);
     await act(async () =>
       document
-        .querySelector(".project-decision .composer")!
+        .querySelector(".work-discussion form.composer")!
         .dispatchEvent(
           new window.Event("submit", { bubbles: true, cancelable: true }),
         ),
@@ -1126,7 +1193,7 @@ test("project discussions keep separate drafts, attach a project on send, and le
     const created = commands.find((command) => command.type === "task.create");
     assert.ok(created?.type === "task.create");
     assert.equal(created.projectId, "alpha");
-    assert.ok(created.goal.includes("/unused/Code/y/alpha"));
+    assert.match(created.goal, /\/unused\/Code\/y\/alpha/);
     assert.ok(created.goal.includes(draftA));
     assert.ok(!created.goal.includes("/unused/Code/y/beta"));
     assert.deepEqual(
@@ -1134,33 +1201,52 @@ test("project discussions keep separate drafts, attach a project on send, and le
       [{ type: "task.run", taskId: "project-created" }],
     );
     assert.equal(
-      document.querySelector(".pane-main .task-overview h1")?.textContent,
-      original.title,
-    );
-    assert.ok(document.querySelector(".workspace-panels.workspace-hidden"));
-    assert.ok(
-      !document
-        .querySelector(".projects-layout")!
-        .classList.contains("workspace-hidden"),
+      document.querySelector(".location-title")?.textContent,
+      "alpha",
     );
     assert.equal(
-      document.querySelector<HTMLTextAreaElement>(".project-decision textarea")!
-        .value,
-      "",
+      document.querySelector<HTMLSelectElement>("#project-work-choice")?.value,
+      "project-created",
+    );
+    assert.ok(
+      document
+        .querySelector('#project-work-choice option[value="project-created"]')
+        ?.textContent?.includes(created.title!),
+    );
+    assert.equal(
+      document.querySelector(".task-overview .goal-details p")?.textContent,
+      created.goal,
+    );
+    assert.equal(
+      document.querySelector<HTMLElement>(".work-surface")?.hidden,
+      false,
+    );
+    assert.equal(document.querySelector('[role="dialog"]'), null);
+    await open("beta");
+    assert.equal(text(), draftB);
+    await open("alpha");
+    assert.equal(
+      document.querySelector<HTMLSelectElement>("#project-work-choice")?.value,
+      "project-created",
+      "opening a project resumes its actual latest work",
+    );
+    await click(".project-work-context .button.secondary");
+    assert.equal(text(), "");
+    assert.deepEqual(
+      commands.filter((command) => command.type === "task.run"),
+      [{ type: "task.run", taskId: "project-created" }],
+      "browsing existing work and opening a fresh draft never rerun the model",
+    );
+    assert.equal(
+      snap.tasks[0].title,
+      "学习任务：理解光合作用",
+      "the previous work is preserved",
     );
   });
 });
 
-test("a delayed project creation preserves a newer returned-to-project draft and runs only the matching task", async () => {
-  const snap = workbenchSnapshot([taskFixture("original-before-delay", true)]);
-  snap.projects = ["alpha", "beta"].map((id) => ({
-    id,
-    name: id,
-    series: "y",
-    root: `/unused/Code/y/${id}`,
-    devPath: `/unused/Code/y/${id}/${id}-dev`,
-    documents: {},
-  }));
+test("a delayed project creation preserves the newer draft and runs only the matching request without stealing focus", async () => {
+  const snap = projectSnapshot("original-before-delay");
   await withWorkbench(
     snap,
     async ({ document, window, act, commands, emit }) => {
@@ -1171,11 +1257,23 @@ test("a delayed project creation preserves a newer returned-to-project draft and
           element.dispatchEvent(new window.Event("click", { bubbles: true })),
         );
       };
+      const type = async (value: string) =>
+        act(async () =>
+          typeText(
+            window,
+            document.querySelector(".work-discussion textarea"),
+            value,
+          ),
+        );
       const text = () => {
-        const element = document.querySelector<HTMLTextAreaElement>(
-          ".project-decision textarea",
+        const textarea = document.querySelector<HTMLTextAreaElement>(
+          ".work-discussion textarea",
         )!;
-        return element.value || element.defaultValue;
+        return textarea.value || textarea.defaultValue || "";
+      };
+      const reopen = async () => {
+        await click(".primary-nav button:nth-child(3)");
+        await click('[aria-label="打开项目 alpha"]');
       };
       let release!: () => void;
       const gate = new Promise<void>((resolve) => {
@@ -1188,64 +1286,51 @@ test("a delayed project creation preserves a newer returned-to-project draft and
         pending = command;
         await gate;
         const result = await invoke(command);
-        const otherProject = {
-          ...taskFixture("other-project-created", true),
-          projectId: "beta",
-          goal: command.goal,
-        };
-        const otherGoal = {
-          ...taskFixture("other-alpha-created", true),
+        const unrelated = {
+          ...taskFixture("concurrent-same-project-and-goal", true),
           projectId: "alpha",
-          goal: "另一条同时创建的项目讨论",
+          goal: command.goal,
+          requestId: "different-request",
         };
-        const concurrent = {
-          ...result,
-          tasks: [otherProject, otherGoal, ...result.tasks],
-        };
+        const concurrent = { ...result, tasks: [unrelated, ...result.tasks] };
         emit(concurrent);
         return concurrent;
       };
-      await click(".primary-nav button:nth-child(3)");
-      await click('[aria-label="选择项目 alpha"]');
-      await click(".project-discussion-seeds button:nth-child(1)");
-      const submittedText = text();
+      await reopen();
+      await type("第一次已提交的讨论。");
       await act(async () =>
         document
-          .querySelector(".project-decision .composer")!
+          .querySelector(".work-discussion form.composer")!
           .dispatchEvent(
             new window.Event("submit", { bubbles: true, cancelable: true }),
           ),
       );
       assert.equal(pending?.projectId, "alpha");
-      assert.ok(pending?.goal.includes(submittedText));
+      assert.ok(pending?.goal.includes("第一次已提交的讨论。"));
       assert.equal(
         commands.filter((command) => command.type === "task.run").length,
         0,
       );
-      await click('[aria-label="选择项目 beta"]');
-      await click('[aria-label="选择项目 alpha"]');
-      await click(".project-discussion-seeds button:nth-child(2)");
-      const newerText = text();
-      assert.notEqual(newerText, submittedText);
+      await reopen();
+      await type("返回项目后新写的草稿。");
       await act(async () => release());
       assert.equal(
-        text(),
-        newerText,
-        "the old component cannot replace the newer mounted draft",
-      );
-      await click('[aria-label="选择项目 beta"]');
-      await click('[aria-label="选择项目 alpha"]');
-      assert.equal(
-        text(),
-        newerText,
-        "the old request cannot erase the newer shared draft when it completes",
-      );
-      assert.equal(
-        document.querySelector<HTMLSelectElement>(
-          '[aria-label="项目讨论记录"]',
-        )!.value,
+        document.querySelector<HTMLSelectElement>("#project-work-choice")
+          ?.value,
         "",
-        "a newer unsent project draft takes precedence over the newly returned task",
+        "the completed request cannot replace the newly opened project draft",
+      );
+      assert.equal(
+        document.querySelector(".location-title")?.textContent,
+        "alpha",
+      );
+      assert.equal(text(), "返回项目后新写的草稿。");
+      await reopen();
+      await click(".project-work-context .button.secondary");
+      assert.equal(
+        text(),
+        "返回项目后新写的草稿。",
+        "late completion cannot erase the shared draft",
       );
       assert.deepEqual(
         commands.filter((command) => command.type === "task.run"),
@@ -1270,7 +1355,9 @@ test("long decision replies open intact in results and saving the detail stays p
   await withWorkbench(
     snap,
     async ({ document, window, commands, emit, act }) => {
-      const decision = document.querySelector(".pane-main .message.assistant")!;
+      const decision = document.querySelector(
+        ".work-discussion .message.assistant",
+      )!;
       assert.match(decision.textContent!, /先完成核心体验/);
       assert.doesNotMatch(decision.textContent!, /ORCHID-END/);
       assert.ok(
@@ -1279,7 +1366,7 @@ test("long decision replies open intact in results and saving the detail stays p
         "the meeting report must retain evidence and tradeoffs alongside the conclusion",
       );
       assert.equal(
-        document.querySelector(".pane-main .task-run-control"),
+        document.querySelector(".work-discussion .task-run-control"),
         null,
         "a completed task must not offer a redundant continue action",
       );
@@ -1333,18 +1420,23 @@ test("long decision replies open intact in results and saving the detail stays p
           .dispatchEvent(new window.Event("click", { bubbles: true })),
       );
       const right = document.querySelector(
-        '.pane-artifact [aria-label="对话完整内容"]',
+        '.work-content [aria-label="对话完整内容"]',
       )!;
       assert.ok(right, "full answer is shown in the product's result pane");
       assert.match(right.textContent!, /ORCHID-END/);
       assert.ok(
         right.textContent!.includes("背景与证据需要保留。".repeat(350)),
       );
-      assert.ok(
-        commands.some(
-          (command) =>
-            command.type === "window.rightMode" && command.mode === "artifact",
-        ),
+      assert.equal(
+        document
+          .querySelector('[aria-label="工作内容切换"] button')
+          ?.getAttribute("aria-pressed"),
+        "true",
+      );
+      assert.equal(
+        right.closest("[hidden]"),
+        null,
+        "opening the complete reply selects visible results locally",
       );
       const save = Array.from(
         right.querySelectorAll<HTMLButtonElement>("button"),
@@ -1365,13 +1457,15 @@ test("long decision replies open intact in results and saving the detail stays p
       await act(async () => release());
       assert.equal(document.querySelector('[aria-label="对话完整内容"]'), null);
       assert.match(
-        document.querySelector(
-          ".pane-artifact .artifact-reader > div:not([hidden]) .artifact-heading h3",
-        )!.textContent!,
+        document
+          .querySelector(
+            ".work-content .artifact-reader > div:not([hidden]) .artifact-document-heading",
+          )!
+          .getAttribute("title")!,
         /完整答复文档/,
       );
       assert.match(
-        document.querySelector(".pane-artifact")!.textContent!,
+        document.querySelector(".work-content")!.textContent!,
         /ORCHID-END/,
       );
       assert.equal(
@@ -1454,10 +1548,12 @@ test("a delayed answer save preserves the newer full report in the result pane",
             };
             const reader = () =>
               document.querySelector(
-                '.pane-artifact [aria-label="对话完整内容"]',
+                '.work-content [aria-label="对话完整内容"]',
               );
             await click(
-              document.querySelector(".pane-main .message.assistant button"),
+              document.querySelector(
+                ".work-discussion .message.assistant button",
+              ),
             );
             assert.match(reader()!.textContent!, /REPORT-A-END/);
             const save = Array.from(
@@ -1474,7 +1570,9 @@ test("a delayed answer save preserves the newer full report in the result pane",
             }
             await click(
               Array.from(
-                document.querySelectorAll(".pane-main .message.assistant"),
+                document.querySelectorAll(
+                  ".work-discussion .message.assistant",
+                ),
               )
                 .at(-1)
                 ?.querySelector("button"),
@@ -1503,8 +1601,7 @@ test("a delayed answer save preserves the newer full report in the result pane",
             assert.match(reader()!.textContent!, /REPORT-B-END/);
             assert.doesNotMatch(reader()!.textContent!, /REPORT-A-END/);
             assert.equal(
-              document.querySelector(".pane-main .task-overview h1")
-                ?.textContent,
+              document.querySelector(".location-title")?.textContent,
               otherTask ? taskB.title : taskA.title,
             );
             assert.deepEqual(
@@ -1588,7 +1685,10 @@ test("recent-work menus restore archives but permanently delete sessions only af
         document.querySelector(".work-history")!.textContent!,
         /归档/,
       );
-      assert.equal(document.querySelector(".pane-main .task-overview"), null);
+      assert.equal(
+        document.querySelector(".work-discussion .task-overview"),
+        null,
+      );
       await click(
         document.querySelector('[aria-label="恢复工作：' + task.title + '"]'),
       );
@@ -1619,7 +1719,10 @@ test("recent-work menus restore archives but permanently delete sessions only af
       assert.equal(document.querySelector(".work-item"), null);
       assert.equal(document.querySelector('[role="dialog"]'), null);
       assert.equal(document.querySelector(".work-history"), null);
-      assert.equal(document.querySelector(".pane-main .task-overview"), null);
+      assert.equal(
+        document.querySelector(".work-discussion .task-overview"),
+        null,
+      );
       assert.doesNotMatch(
         document.querySelector(".sidebar")!.textContent!,
         /最近删除/,
@@ -1647,19 +1750,10 @@ test("recent-work menus restore archives but permanently delete sessions only af
   );
 });
 
-test("project viewer and decision widths support keyboard resizing and restore the saved split on remount", async () => {
-  const snap = workbenchSnapshot([
-    taskFixture("project-width-regression", true),
-  ]);
+test("the single work split restores its saved width on remount and project browsing adds no second workspace", async () => {
+  const snap = workbenchSnapshot([taskFixture("work-width-regression", true)]);
   await withWorkbench(snap, async ({ document, window, commands, act }) => {
-    await act(async () =>
-      document
-        .querySelector(".primary-nav button:nth-child(3)")!
-        .dispatchEvent(new window.Event("click", { bubbles: true })),
-    );
-    const divider = document.querySelector<HTMLElement>(
-      '[aria-label="调整项目查看区与决策区宽度"]',
-    )!;
+    const divider = document.querySelector<HTMLElement>(".work-divider")!;
     assert.equal(divider.getAttribute("role"), "separator");
     assert.equal(divider.getAttribute("tabindex"), "0");
     const initial = Number(divider.getAttribute("aria-valuenow"));
@@ -1668,34 +1762,31 @@ test("project viewer and decision widths support keyboard resizing and restore t
     );
     const wider = Number(divider.getAttribute("aria-valuenow"));
     assert.ok(wider > initial);
-    const width = window.localStorage.getItem(
-      "ytriple.projects.viewer-width.v1",
-    );
-    assert.ok(
-      width && Math.round(Number(width) * 100) === wider,
-      "the chosen width is persisted independently from workbench panes",
-    );
-    assert.ok(
-      document
-        .querySelector<HTMLElement>(".projects-layout")!
-        .style.gridTemplateColumns.includes(`${Number(width)}fr`),
-    );
+    const saved = commands.find((command) => command.type === "window.resize");
+    assert.ok(saved?.type === "window.resize");
     const { createElement } = await import("react");
     const { createRoot } = await import("react-dom/client");
-    const { ProjectWorkspace } =
-      await import("../src/workbench/ProjectWorkspace.js");
+    const { WorkSurface } = await import("../src/workbench/WorkSurface.js");
     const mount = document.createElement("div");
     document.body.append(mount);
     const root = createRoot(mount);
     try {
       await act(async () =>
         root.render(
-          createElement(ProjectWorkspace, {
+          createElement(WorkSurface, {
+            desktop: {
+              ...snap.desktop!,
+              ratios: { main: saved.main, evidence: saved.evidence },
+            },
+            dispatch: window.ytriple!.invoke,
             hidden: false,
-            children: [
-              createElement("div", null, "文件与查看区"),
-              createElement("div", null, "决策区"),
-            ],
+            decision: "交流内容",
+            artifact: "成果正文",
+            sources: "资料正文",
+            process: "实际贡献",
+            context: "artifact",
+            onContext: () => undefined,
+            sourceCount: 0,
           }),
         ),
       );
@@ -1715,13 +1806,62 @@ test("project viewer and decision widths support keyboard resizing and restore t
       await act(async () => root.unmount());
       mount.remove();
     }
+    await act(async () =>
+      document
+        .querySelector(".primary-nav button:nth-child(3)")!
+        .dispatchEvent(new window.Event("click", { bubbles: true })),
+    );
+    assert.equal(
+      document.querySelector('.software-projects [role="separator"]'),
+      null,
+    );
+    assert.equal(document.querySelector(".project-start"), null);
     assert.ok(
       !commands.some(
         (command) =>
-          command.type === "window.resize" ||
-          command.type === "task.run" ||
-          command.type === "task.create",
+          command.type === "task.run" || command.type === "task.create",
       ),
     );
   });
+});
+
+test("new collection work opens from the returned snapshot before React commits its next render", async () => {
+  await withWorkbench(
+    workbenchSnapshot([taskFixture("old-selection", true)]),
+    async ({ document, window, act, commands }) => {
+      const click = async (label: string) =>
+        act(async () => {
+          const button = Array.from(document.querySelectorAll("button")).find(
+            (e) => e.textContent?.trim() === label,
+          );
+          assert.ok(button, label);
+          button.dispatchEvent(new window.Event("click", { bubbles: true }));
+        });
+      await click("资产");
+      await click("导入资料");
+      const form = document.querySelector<HTMLFormElement>(".portable-form")!;
+      form.querySelector<HTMLInputElement>('[name="title"]')!.value =
+        "新收藏待继续";
+      form.querySelector<HTMLTextAreaElement>('[name="goal"]')!.value =
+        "整理刚导入的材料";
+      form.querySelector<HTMLTextAreaElement>('[name="content"]')!.value =
+        "用户提供的一项材料";
+      await act(async () =>
+        form.dispatchEvent(
+          new window.Event("submit", { bubbles: true, cancelable: true }),
+        ),
+      );
+      assert.equal(
+        document.querySelector(".location-title")?.textContent,
+        "新收藏待继续",
+      );
+      assert.ok(
+        commands.some(
+          (command) =>
+            command.type === "window.select" &&
+            command.taskId === "collection-created",
+        ),
+      );
+    },
+  );
 });

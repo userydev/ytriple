@@ -657,7 +657,7 @@ test("checked-in OpenAPI exposes the same paths, enums, hashes, and cursors", as
   assert.equal(raw.includes('"additionalProperties": false'), false);
   assert.equal(
     raw.match(/#\/components\/parameters\/IdempotencyKey/g)?.length,
-    7,
+    8,
   );
   const section = (start: string, end: string) =>
     raw.slice(raw.indexOf(`"${start}"`), raw.indexOf(`"${end}"`));
@@ -677,6 +677,6 @@ test("checked-in OpenAPI exposes the same paths, enums, hashes, and cursors", as
   assert.equal(
     raw.match(/"schema": \{ "\$ref": "#\/components\/schemas\/Uuid" \}/g)
       ?.length,
-    5,
+    8,
   );
 });

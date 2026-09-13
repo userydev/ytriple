@@ -13,6 +13,7 @@ import {
 import { aisdk } from "@openai/agents-extensions/ai-sdk";
 import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import OpenAI from "openai";
+import { bufferedCompatibleModel } from "./compatible-agents.js";
 import { z } from "zod";
 import type { ModelProfile } from "../shared/types.js";
 
@@ -119,7 +120,7 @@ export async function createConfiguredModel(
   validateProfile(profile);
   const key = await readKey(profile);
   if (!key) throw new Error(`${profile.name} 未找到密钥，请在模型设置中配置。`);
-  const inner =
+  const configured =
     profile.protocol === "google"
       ? aisdk(
           createGoogleGenerativeAI({
@@ -137,6 +138,10 @@ export async function createConfiguredModel(
           profile.modelId,
           { strictFeatureValidation: true },
         );
+  const inner =
+    profile.protocol === "openai" && profile.streamingMode === "buffered"
+      ? bufferedCompatibleModel(configured)
+      : configured;
   return {
     async getResponse(request) {
       try {
@@ -355,9 +360,14 @@ export async function probeProfile(
         delta += event.data.delta;
     await response.completed;
     capabilities.streaming =
-      delta.includes("STREAM_OK") &&
+      (profile.streamingMode === "buffered" || delta.includes("STREAM_OK")) &&
       String(response.finalOutput).includes("STREAM_OK");
-    if (!capabilities.streaming) problems.push("没有收到可用的流式文本增量");
+    if (!capabilities.streaming)
+      problems.push(
+        profile.streamingMode === "buffered"
+          ? "没有收到可用的完整响应"
+          : "没有收到可用的流式文本增量",
+      );
   } catch (error) {
     problems.push(`流式：${safeModelError(error)}`);
   }

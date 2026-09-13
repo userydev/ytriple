@@ -9,7 +9,17 @@ import {
 import { safeServiceMessage } from "./security.js";
 import { SourceDatabase } from "./store/database.js";
 import { SourceWorker } from "./worker.js";
-import { ReadingWorker, geminiReadingGenerator } from "./reading.js";
+import { EditorialWorker } from "./editorial-worker.js";
+import {
+  EditorialPresentationWorker,
+  geminiEditorialPresenter,
+} from "./editorial-presentation.js";
+import { geminiEditorialModel } from "./editorial-model.js";
+import { coverReader } from "./editorial-cover.js";
+import {
+  EditorialEditionWorker,
+  geminiEditionEditor,
+} from "./editorial-edition.js";
 
 export type ServiceRole = "api" | "worker" | "all" | "migrate";
 
@@ -40,7 +50,9 @@ export async function runSourceService(
 
   let api: SourceApi | undefined;
   let worker: SourceWorker | undefined;
-  let reading: ReadingWorker | undefined;
+  let reading: EditorialWorker | undefined;
+  let presentation: EditorialPresentationWorker | undefined;
+  let edition: EditorialEditionWorker | undefined;
   let closing: Promise<void> | undefined;
   const close = () => {
     if (closing) return closing;
@@ -48,6 +60,8 @@ export async function runSourceService(
       await api?.close();
       await worker?.stop();
       await reading?.stop();
+      await presentation?.stop();
+      await edition?.stop();
       await database.close();
     })();
     return closing;
@@ -64,15 +78,28 @@ export async function runSourceService(
     const readingKey = process.env.SOURCE_READING_API_KEY;
     const readingModel = process.env.SOURCE_READING_MODEL;
     if (readingKey && readingModel) {
-      reading = new ReadingWorker(
+      reading = new EditorialWorker(
         database,
-        geminiReadingGenerator(readingKey, readingModel),
+        geminiEditorialModel(readingKey, readingModel),
         readingModel,
       );
+      presentation = new EditorialPresentationWorker(
+        database,
+        geminiEditorialPresenter(readingKey, readingModel),
+        readingModel,
+      );
+      void presentation.start();
+      edition = new EditorialEditionWorker(
+        database,
+        geminiEditionEditor(readingKey, readingModel),
+        readingModel,
+        coverReader({ localDevEgressMode: config.localDevEgressMode }),
+      );
+      void edition.start();
       void reading
         .start()
         .catch(() =>
-          process.stderr.write("服务器主题整理暂停；来源采集继续。\n"),
+          process.stderr.write("服务器栏目制作暂停；来源采集继续。\n"),
         );
     }
     void worker.start().catch((error) => {
