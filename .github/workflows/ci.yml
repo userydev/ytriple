@@ -18,9 +18,53 @@ jobs:
         with:
           node-version: 22
           cache: npm
+
       - run: npm ci
       - run: npm run lint
       - run: npm run build
       - run: npm test
-      - name: Headless task harness (offline replay provider)
-        run: npm run harness -- --scenario demo --out "$RUNNER_TEMP/harness-out"
+
+      # The runtime boundary contract: core must be importable where no host
+      # capability exists, so nothing it emits may reach for one.
+      - name: core emits no host import
+        run: |
+          node --input-type=module -e '
+            import { readdirSync, readFileSync, statSync } from "node:fs";
+            import { join } from "node:path";
+
+            const files = [];
+            const walk = (dir) => {
+              for (const entry of readdirSync(dir)) {
+                const path = join(dir, entry);
+                if (statSync(path).isDirectory()) walk(path);
+                else if (path.endsWith(".js") && !path.endsWith(".test.js")) files.push(path);
+              }
+            };
+            walk("packages/core/dist");
+
+            const offenders = [];
+            for (const file of files) {
+              for (const [, specifier] of readFileSync(file, "utf8").matchAll(
+                /(?:from|import|require)\s*\(?\s*["'"'"']([^"'"'"']+)["'"'"']/g,
+              )) {
+                const bare = !specifier.startsWith(".") && !specifier.startsWith("/");
+                if (bare && specifier !== "@ytriple/shared") {
+                  offenders.push(`${file} -> ${specifier}`);
+                }
+              }
+            }
+
+            if (offenders.length > 0) {
+              console.error("packages/core reached for a host capability:");
+              for (const offender of offenders) console.error(`  ${offender}`);
+              process.exit(1);
+            }
+            console.log(`checked ${files.length} emitted core modules: no host imports`);
+          '
+
+      - name: headless task harness (offline replay, no key, no network)
+        run: |
+          npm run harness -- --scenario demo --out "$RUNNER_TEMP/harness" --task-id ci-run
+          test -f "$RUNNER_TEMP/harness/ytriple-outputs/ci-run/prd.md"
+          echo "--- prd.md ---"
+          cat "$RUNNER_TEMP/harness/ytriple-outputs/ci-run/prd.md"
