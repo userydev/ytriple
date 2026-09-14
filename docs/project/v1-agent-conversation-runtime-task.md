@@ -1,5 +1,11 @@
 # V1 Agent Conversation Runtime Fix
 
+> **Superseded.** 本文档基于「固定三 Agent」的 V1 假设，已被「可配置 Agent 团队」模型取代，保留作为历史决策记录，不再作为实现依据。
+>
+> 现行契约：[Positioning](../product/positioning.md) · [Agent 团队契约](../contracts/agent-team-contract.md) · [Provider 契约](../contracts/provider-contract.md) · [运行时边界契约](../contracts/runtime-boundary-contract.md)
+>
+> 本文件中仍然有效的部分：状态机与事件流的思路、手工验收用例、「侧舱必须显示真实过程」的要求；三个固定 agent 字段的事件模型已改为按 `agentId` 寻址。
+
 ## Status
 
 Blocking task for V1 usability.

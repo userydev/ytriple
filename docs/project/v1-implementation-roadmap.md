@@ -1,5 +1,11 @@
 # yTriple V1 Implementation Roadmap
 
+> **Superseded.** 本文档基于「固定三 Agent」的 V1 假设，已被「可配置 Agent 团队」模型取代，保留作为历史决策记录，不再作为实现依据。
+>
+> 现行契约：[Positioning](../product/positioning.md) · [Agent 团队契约](../contracts/agent-team-contract.md) · [Provider 契约](../contracts/provider-contract.md) · [运行时边界契约](../contracts/runtime-boundary-contract.md)
+>
+> 本文件中仍然有效的部分：里程碑顺序的思路（runtime 先于 UI）；具体里程碑已被重建计划的阶段 0-6 取代。
+
 ## Purpose
 
 本文件不是泛计划，而是面向落地的 V1 执行路线。目标是把当前文档定义转成一个最短可验证的产品实现顺序。

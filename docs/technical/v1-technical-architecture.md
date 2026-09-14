@@ -1,5 +1,11 @@
 # yTriple V1 Technical Architecture
 
+> **Superseded.** 本文档基于「固定三 Agent」的 V1 假设，已被「可配置 Agent 团队」模型取代，保留作为历史决策记录，不再作为实现依据。
+>
+> 现行契约：[Positioning](../product/positioning.md) · [Agent 团队契约](../contracts/agent-team-contract.md) · [Provider 契约](../contracts/provider-contract.md) · [运行时边界契约](../contracts/runtime-boundary-contract.md)
+>
+> 本文件中仍然有效的部分：桌面壳定位、工作区只读与输出边界、错误分级；单一 provider 策略与本地 runtime 分层已由新契约取代。
+
 ## Purpose
 
 本文件定义 yTriple V1 的技术架构方向，确保后续实现围绕固定三 Agent PRD 工作流展开，而不是演化成通用 agent 平台。
@@ -104,7 +110,7 @@ Tauri Shell
 职责：
 
 - 创建任务输出目录
-- 写入四份标准交付文件
+- 写入单一默认交付文件 `prd.md`
 - 保证不覆盖用户已有文档
 
 ### History Store

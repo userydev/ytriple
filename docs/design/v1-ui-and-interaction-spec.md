@@ -1,5 +1,11 @@
 # yTriple V1 UI And Interaction Spec
 
+> **Superseded.** 本文档基于「固定三 Agent」的 V1 假设，已被「可配置 Agent 团队」模型取代，保留作为历史决策记录，不再作为实现依据。
+>
+> 现行契约：[Positioning](../product/positioning.md) · [Agent 团队契约](../contracts/agent-team-contract.md) · [Provider 契约](../contracts/provider-contract.md) · [运行时边界契约](../contracts/runtime-boundary-contract.md)
+>
+> 本文件中仍然有效的部分：三舱布局比例、状态呈现规则、「不做假进度」原则；固定三 Agent 的舱位绑定改为按成员动态分栏。
+
 ## Purpose
 
 本文件定义 yTriple V1 的界面与交互规范，目标是把此前的产品和运行时 contract 落成可设计、可实现的桌面交互。
@@ -144,8 +150,8 @@ V1 采用固定三舱布局：
 
 ### Primary Focus
 
-- 默认自动打开 `01-final-prd.md`
-- 同时展示交付包文件清单
+- 默认自动打开 `prd.md`
+- 左右舱继续展示调研与审查过程材料，而不是列出交付包文件清单
 
 ### Secondary Actions
 
@@ -175,7 +181,7 @@ V1 采用固定三舱布局：
 ## Flow C: Refine Existing Draft
 
 1. 用户打开历史任务
-2. 查看 `01-final-prd.md`
+2. 查看 `prd.md`
 3. 在中心输入区提出修订意图
 4. 系统基于已有交付包和原始上下文再生成下一版
 

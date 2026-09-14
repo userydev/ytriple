@@ -1,5 +1,11 @@
 # yTriple V1 Role Selection Contract
 
+> **Superseded.** 本文档基于「固定三 Agent」的 V1 假设，已被「可配置 Agent 团队」模型取代，保留作为历史决策记录，不再作为实现依据。
+>
+> 现行契约：[Positioning](positioning.md) · [Agent 团队契约](../contracts/agent-team-contract.md) · [Provider 契约](../contracts/provider-contract.md) · [运行时边界契约](../contracts/runtime-boundary-contract.md)
+>
+> 本文件中仍然有效的部分：curated allowlist 的思路（新契约改为按能力标签 allowlist）与 orchestrator 默认锁定；固定 slot 模型作废。
+
 ## Purpose
 
 This document defines how yTriple should manually select and configure role references from the upstream `agency-agents` catalog.
