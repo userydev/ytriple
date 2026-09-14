@@ -1,9 +1,12 @@
-import type { AgentId, ClockPort, IdPort, SessionMessage } from "@ytriple/shared";
+import type { AgentId, ClockPort, SessionMessage } from "@ytriple/shared";
+import type { IdFactory } from "../ids.js";
 
 /**
- * The single shared conversation. Every agent question, every user answer and
- * every orchestrator statement lands here, so each agent is prompted with the
- * same transcript instead of a private side channel.
+ * The single shared conversation.
+ *
+ * Only the user and team members appear here. Sub-agents are an implementation
+ * detail of their parent and have no way to reach this object, which is how the
+ * "sub-agents stay out of the shared chat" rule holds structurally.
  */
 export interface Session {
   addUserMessage(text: string, inReplyTo?: string): SessionMessage;
@@ -13,7 +16,7 @@ export interface Session {
   transcript(displayNames: Record<AgentId, string>): string;
 }
 
-export function createSession(clock: ClockPort, ids: IdPort): Session {
+export function createSession(clock: ClockPort, ids: IdFactory): Session {
   const messages: SessionMessage[] = [];
 
   const push = (message: SessionMessage): SessionMessage => {

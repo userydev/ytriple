@@ -8,3 +8,15 @@ export const TOOL_NAMES = {
 } as const;
 
 export type ToolName = (typeof TOOL_NAMES)[keyof typeof TOOL_NAMES];
+
+const KNOWN_TOOLS = new Set<string>(Object.values(TOOL_NAMES));
+
+export function isKnownTool(name: string): name is ToolName {
+  return KNOWN_TOOLS.has(name);
+}
+
+export const WORKSPACE_TOOLS: readonly ToolName[] = [
+  TOOL_NAMES.listWorkspaceFiles,
+  TOOL_NAMES.readWorkspaceFile,
+  TOOL_NAMES.searchWorkspaceText,
+];

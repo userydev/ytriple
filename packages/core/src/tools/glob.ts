@@ -1,9 +1,10 @@
 /**
  * Minimal glob matcher for workspace include/exclude rules.
  *
- * Supports `**`, `*` and `?` over POSIX-style relative paths. It is
- * deliberately small: the rules it has to express are the default exclude list
- * and a handful of extension filters, not a general file selection language.
+ * Supports `**`, `*` and `?` over POSIX-style relative paths. It stays small on
+ * purpose: the rules it has to express are a default exclude list and a handful
+ * of extension filters, not a general file selection language. Hosts import it
+ * so their `FsPort` applies exactly the same rules core does.
  */
 export function matchGlob(pattern: string, path: string): boolean {
   return globToRegExp(pattern).test(path);
@@ -24,10 +25,9 @@ function globToRegExp(pattern: string): RegExp {
     const char = pattern[index]!;
 
     if (char === "*") {
-      const isDoubleStar = pattern[index + 1] === "*";
-      if (isDoubleStar) {
+      if (pattern[index + 1] === "*") {
         const followedBySlash = pattern[index + 2] === "/";
-        // `**/` matches zero or more leading directories, `**` matches the rest.
+        // `**/` matches zero or more leading directories; a trailing `**` takes the rest.
         source += followedBySlash ? "(?:[^/]+/)*" : "[\\s\\S]*";
         index += followedBySlash ? 2 : 1;
         continue;
@@ -49,7 +49,7 @@ function globToRegExp(pattern: string): RegExp {
   return regExp;
 }
 
-/** Normalises host paths to the relative POSIX form core works with. */
+/** Normalises a host path to the relative POSIX form core works with. */
 export function normalizeRelativePath(path: string): string {
   return path.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
 }

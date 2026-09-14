@@ -12,36 +12,58 @@ export interface ToolResult {
   ok: boolean;
   /** One line for the event stream. */
   summary: string;
-  /** Fed back to the model as an observation. */
+  /** Fed back to the model as the tool result. */
   detail: string;
   sources?: SourceNote[];
+  /** Structured result for the runtime; never shown to the model. */
+  data?: Record<string, unknown>;
 }
 
 export interface ToolDefinition {
   name: string;
   description: string;
-  /** Documented for the model's plan step; arguments are validated on execute. */
   parameters: JsonSchema;
-  execute(args: ToolArgs, context: ToolContext): Promise<ToolResult>;
-}
-
-/**
- * Tool arguments are a flat, schema-friendly bag. Keeping them flat lets the
- * plan step be expressed in one strict JSON schema that every provider,
- * including JSON-mode-only ones, can produce reliably.
- */
-export interface ToolArgs {
-  query?: string;
-  path?: string;
-  purpose?: string;
-  instructions?: string;
-  tools?: string;
-  max_results?: number;
-  start_line?: number;
-  end_line?: number;
-  max_tokens?: number;
+  execute(args: Record<string, unknown>, context: ToolContext): Promise<ToolResult>;
 }
 
 export function toolFailure(summary: string, detail = summary): ToolResult {
   return { ok: false, summary, detail };
+}
+
+export function readStringArg(
+  args: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = args[key];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+export function readNumberArg(
+  args: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = args[key];
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+export function readStringListArg(
+  args: Record<string, unknown>,
+  key: string,
+): string[] | undefined {
+  const value = args[key];
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string");
+  }
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0);
+  }
+  return undefined;
 }

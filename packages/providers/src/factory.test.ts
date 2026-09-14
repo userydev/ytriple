@@ -1,5 +1,5 @@
 import type { YtripleConfig } from "@ytriple/shared";
-import { ProviderError } from "@ytriple/shared";
+import type { ProviderError } from "@ytriple/shared";
 import { describe, expect, it } from "vitest";
 import { createAdapter, createModelRouter } from "./factory.js";
 import { createFakeHttpPort, createFakeSecretPort } from "./testSupport.js";
