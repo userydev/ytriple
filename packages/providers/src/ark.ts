@@ -1,90 +1,113 @@
 import type {
+  ChatMessage,
+  Degradation,
+  GenerateRequest,
+  GenerateResult,
   HttpPort,
   ProviderAdapter,
-  ProviderCapabilities,
-  ProviderRequest,
-  ProviderResponse,
   SourceNote,
+  ToolCall,
 } from "@ytriple/shared";
 import { ProviderError } from "@ytriple/shared";
-import { postJson, readArray, readNumber, readRecord, readString } from "./http.js";
-import { appendSchemaInstruction } from "./schemaPrompt.js";
+import {
+  assertToolCallingSupported,
+  limitToolCalls,
+  parseToolArguments,
+  planNativeWebSearch,
+  planStructuredOutput,
+  postJson,
+  readArray,
+  readNumber,
+  readRecord,
+  readString,
+  resolveCapabilities,
+  trimTrailingSlash,
+} from "./adapterSupport.js";
+import { baselineFor } from "./capabilities.js";
+import { runHealthCheck } from "./healthCheck.js";
 
-export interface ArkProviderOptions {
+export const ARK_DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
+
+export interface ArkAdapterOptions {
   providerId: string;
-  model: string;
   baseUrl?: string;
   apiKey: string;
-  capabilities: ProviderCapabilities;
   http: HttpPort;
   webSearchMaxKeyword?: number;
 }
 
-export const ARK_DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
-
 /**
- * Volcengine Ark Responses API. Unlike Gemini, Ark combines its native
- * `web_search` tool with strict `json_schema` output in a single call, so a
- * grounded request keeps structured output.
+ * Volcengine Ark Responses API. Its own shape, so its own family. It is the one
+ * adapter that can combine native web search with a strict response schema in a
+ * single call — a capability fact, not a reason for the runtime to know its
+ * name.
  */
-export function createArkProvider(options: ArkProviderOptions): ProviderAdapter {
+export function createArkAdapter(options: ArkAdapterOptions): ProviderAdapter {
   const {
     providerId,
-    model,
     apiKey,
-    capabilities,
     http,
     baseUrl = ARK_DEFAULT_BASE_URL,
     webSearchMaxKeyword = 2,
   } = options;
+  const baseline = baselineFor("ark");
 
-  return {
+  const adapter: ProviderAdapter = {
+    adapterId: "ark",
     providerId,
-    kind: "ark",
-    model,
-    capabilities,
-    async complete(request: ProviderRequest): Promise<ProviderResponse> {
-      const usesNativeSchema =
-        Boolean(request.responseSchema) && capabilities.structuredOutput === "json_schema";
-      const system =
-        request.responseSchema && !usesNativeSchema
-          ? appendSchemaInstruction(request.system, request.responseSchema)
-          : request.system;
+    describe: (model) => resolveCapabilities(baseline, model),
+    healthCheck: (model) => runHealthCheck(adapter, model),
+    async generate(request: GenerateRequest): Promise<GenerateResult> {
+      const capabilities = resolveCapabilities(baseline, request.model);
+      assertToolCallingSupported(request, capabilities, providerId);
+
+      const structured = planStructuredOutput(request, capabilities);
+      const nativeSearch = planNativeWebSearch(request, capabilities);
+      const degradations: Degradation[] = [
+        ...structured.degradations,
+        ...nativeSearch.degradations,
+      ];
 
       const body: Record<string, unknown> = {
-        model,
+        model: request.model.modelId,
         stream: false,
         input: [
-          { role: "system", content: system },
-          { role: "user", content: request.user },
+          { role: "system", content: structured.system },
+          ...request.messages.map(toArkInput),
         ],
       };
 
       if (request.temperature !== undefined) body.temperature = request.temperature;
-      if (request.maxOutputTokens !== undefined) body.max_output_tokens = request.maxOutputTokens;
+      const maxOutputTokens = request.maxOutputTokens ?? request.model.capabilities?.maxOutputTokens;
+      if (maxOutputTokens !== undefined) body.max_output_tokens = maxOutputTokens;
 
       if (request.responseSchema) {
         body.text = {
-          format: usesNativeSchema
-            ? {
-                type: "json_schema",
-                name: request.responseSchema.name,
-                strict: true,
-                schema: request.responseSchema.schema,
-              }
-            : { type: "json_object" },
+          format:
+            structured.mode === "json_schema"
+              ? {
+                  type: "json_schema",
+                  name: request.responseSchema.name,
+                  strict: true,
+                  schema: request.responseSchema.schema,
+                }
+              : { type: "json_object" },
         };
       }
 
-      if (request.webSearch?.enabled && capabilities.nativeWebSearch) {
-        body.tools = [
-          {
-            type: "web_search",
-            max_keyword: webSearchMaxKeyword,
-            limit: request.webSearch.maxResults ?? 5,
-          },
-        ];
+      const tools: Array<Record<string, unknown>> = [];
+      if (nativeSearch.enabled) {
+        tools.push({ type: "web_search", max_keyword: webSearchMaxKeyword, limit: 5 });
       }
+      for (const tool of request.tools ?? []) {
+        tools.push({
+          type: "function",
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters,
+        });
+      }
+      if (tools.length > 0) body.tools = tools;
 
       const payload = await postJson(http, {
         providerId,
@@ -93,25 +116,66 @@ export function createArkProvider(options: ArkProviderOptions): ProviderAdapter 
         body,
       });
 
+      const parsedToolCalls = extractToolCalls(payload);
+      const limited = limitToolCalls(parsedToolCalls, capabilities);
+      degradations.push(...limited.degradations);
+
+      const text = extractOutputText(payload);
+      if (text === undefined && limited.toolCalls.length === 0) {
+        throw new ProviderError(`${providerId} response contained no output text or tool call`, {
+          providerId,
+          code: "unknown",
+        });
+      }
+
       const sources = extractSources(payload);
       return {
-        text: extractOutputText(payload, providerId),
+        text: text ?? "",
+        toolCalls: limited.toolCalls,
         usage: {
-          promptTokens: readNumber(readRecord(payload, "usage"), "input_tokens") ?? 0,
-          completionTokens: readNumber(readRecord(payload, "usage"), "output_tokens") ?? 0,
+          inputTokens: readNumber(readRecord(payload, "usage"), "input_tokens") ?? 0,
+          outputTokens: readNumber(readRecord(payload, "usage"), "output_tokens") ?? 0,
         },
         ...(sources.length > 0 ? { sources } : {}),
-        structuredOutputMode: request.responseSchema
-          ? usesNativeSchema
-            ? "json_schema"
-            : "json_object"
-          : "text_only",
+        degradations,
       };
     },
   };
+
+  return adapter;
 }
 
-function extractOutputText(payload: Record<string, unknown>, providerId: string): string {
+function toArkInput(message: ChatMessage): Record<string, unknown> {
+  if (message.role === "tool") {
+    return {
+      type: "function_call_output",
+      call_id: message.toolCallId,
+      output: message.content,
+    };
+  }
+  return { role: message.role, content: message.content };
+}
+
+function extractToolCalls(payload: Record<string, unknown>): ToolCall[] {
+  return readArray(payload, "output").flatMap((item, index): ToolCall[] => {
+    if (readString(item, "type") !== "function_call") return [];
+    const name = readString(item, "name");
+    if (!name) return [];
+    return [
+      {
+        toolCallId: readString(item, "call_id") ?? `call_${index}`,
+        name,
+        arguments: parseToolArguments(
+          typeof item === "object" && item !== null
+            ? (item as Record<string, unknown>).arguments
+            : undefined,
+        ),
+      },
+    ];
+  });
+}
+
+function extractOutputText(payload: Record<string, unknown>): string | undefined {
   const direct = readString(payload, "output_text");
   if (direct) return direct;
 
@@ -121,8 +185,7 @@ function extractOutputText(payload: Record<string, unknown>, providerId: string)
       if (text) return text;
     }
   }
-
-  throw new ProviderError(`${providerId} response contained no output text`, { providerId });
+  return undefined;
 }
 
 function extractSources(payload: Record<string, unknown>): SourceNote[] {
@@ -147,8 +210,4 @@ function extractSources(payload: Record<string, unknown>): SourceNote[] {
   }
 
   return sources;
-}
-
-function trimTrailingSlash(url: string): string {
-  return url.endsWith("/") ? url.slice(0, -1) : url;
 }

@@ -1,12 +1,8 @@
-import type {
-  ProviderAdapter,
-  ProviderConfig,
-  SecretsPort,
-  YtripleConfig,
-} from "@ytriple/shared";
-import { findProviderConfig } from "@ytriple/shared";
-import { capabilitiesFor } from "./capabilities.js";
-import { createProviderAdapter, type ProviderDeps } from "./factory.js";
+import type { ProviderConfig, YtripleConfig } from "@ytriple/shared";
+import { findModelConfig } from "@ytriple/shared";
+import { baselineFor } from "./capabilities.js";
+import { createAdapter, type ProviderDeps } from "./factory.js";
+import { runHealthCheck } from "./healthCheck.js";
 
 export type PreflightStatus = "ok" | "warn" | "fail";
 
@@ -30,28 +26,30 @@ export interface PreflightReport {
 }
 
 export interface PreflightOptions {
-  /** Issue one tiny live request per provider. Off by default: it costs money. */
-  probeConnectivity?: boolean;
+  /** Run the live self-check for every provider. Off by default: it costs money. */
+  runHealthChecks?: boolean;
+  now?: () => number;
 }
 
-const PLACEHOLDER_KEYS = new Set(["", "changeme", "your-api-key", "xxx", "todo", "<your-key>"]);
+const PLACEHOLDER_CREDENTIALS = new Set(["", "changeme", "your-api-key", "xxx", "todo", "<your-key>"]);
 
 /**
- * Configuration self-check. Everything here runs without touching the network
- * unless `probeConnectivity` is requested, so a desktop settings screen can run
- * it on every edit.
+ * Configuration self-check. Everything is offline unless `runHealthChecks` is
+ * requested, so a settings screen can run it on every edit.
  */
 export async function preflightConfig(
   config: YtripleConfig,
   deps: ProviderDeps,
   options: PreflightOptions = {},
 ): Promise<PreflightReport> {
-  const checks: PreflightCheck[] = [];
-
-  checks.push(checkProvidersPresent(config));
-  checks.push(checkUniqueProviderIds(config));
-  checks.push(checkDefaultBinding(config));
-  checks.push(...checkAgentBindings(config));
+  const checks: PreflightCheck[] = [
+    checkProvidersPresent(config),
+    checkUniqueProviderIds(config),
+    checkBinding(config, "model.default", "Default model binding", config.defaultModel),
+    ...Object.entries(config.agentModels ?? {}).map(([agentId, binding]) =>
+      checkBinding(config, `model.agent.${agentId}`, `Model binding for ${agentId}`, binding),
+    ),
+  ];
 
   const providers: ProviderPreflightReport[] = [];
   for (const providerConfig of config.providers) {
@@ -59,7 +57,10 @@ export async function preflightConfig(
   }
 
   return {
-    status: worstStatus([...checks.map((check) => check.status), ...providers.map((report) => report.status)]),
+    status: worstStatus([
+      ...checks.map((check) => check.status),
+      ...providers.map((report) => report.status),
+    ]),
     checks,
     providers,
   };
@@ -70,16 +71,15 @@ export async function preflightProvider(
   deps: ProviderDeps,
   options: PreflightOptions = {},
 ): Promise<ProviderPreflightReport> {
-  const checks: PreflightCheck[] = [];
+  const checks: PreflightCheck[] = [
+    checkModels(config),
+    checkBaseUrl(config),
+    ...checkCapabilities(config),
+    await checkCredential(config, deps),
+  ];
 
-  checks.push(checkModel(config));
-  checks.push(checkBaseUrl(config));
-  checks.push(...checkCapabilityExpectations(config));
-  checks.push(await checkCredential(config, deps.secrets));
-
-  const credentialOk = checks.every((check) => check.status !== "fail");
-  if (options.probeConnectivity && credentialOk) {
-    checks.push(await probeProvider(config, deps));
+  if (options.runHealthChecks && checks.every((check) => check.status !== "fail")) {
+    checks.push(...(await runProviderHealthChecks(config, deps, options)));
   }
 
   return {
@@ -122,74 +122,61 @@ function checkUniqueProviderIds(config: YtripleConfig): PreflightCheck {
       };
 }
 
-function checkDefaultBinding(config: YtripleConfig): PreflightCheck {
-  const target = findProviderConfig(config, config.defaultModel.providerId);
-  return target
+function checkBinding(
+  config: YtripleConfig,
+  id: string,
+  label: string,
+  binding: { providerId: string; modelId: string },
+): PreflightCheck {
+  const resolved = findModelConfig(config, binding);
+  return resolved
     ? {
-        id: "model.default",
-        label: "Default model binding",
+        id,
+        label,
         status: "ok",
-        detail: `defaultModel -> ${target.providerId} (${config.defaultModel.model ?? target.model})`,
+        detail: `${binding.providerId} / ${binding.modelId}`,
       }
     : {
-        id: "model.default",
-        label: "Default model binding",
+        id,
+        label,
         status: "fail",
-        detail: `defaultModel points at unknown provider "${config.defaultModel.providerId}"`,
+        detail: `"${binding.providerId} / ${binding.modelId}" is not a configured provider+model pair`,
       };
 }
 
-function checkAgentBindings(config: YtripleConfig): PreflightCheck[] {
-  return Object.entries(config.agentModels ?? {}).map(([agentId, binding]) => {
-    const target = findProviderConfig(config, binding.providerId);
-    return target
-      ? {
-          id: `model.agent.${agentId}`,
-          label: `Model binding for ${agentId}`,
-          status: "ok" as const,
-          detail: `${agentId} -> ${target.providerId} (${binding.model ?? target.model})`,
-        }
-      : {
-          id: `model.agent.${agentId}`,
-          label: `Model binding for ${agentId}`,
-          status: "fail" as const,
-          detail: `${agentId} points at unknown provider "${binding.providerId}"`,
-        };
-  });
-}
-
-function checkModel(config: ProviderConfig): PreflightCheck {
-  return config.model.trim().length > 0
-    ? {
-        id: `${config.providerId}.model`,
-        label: "Model name",
-        status: "ok",
-        detail: config.model,
-      }
+function checkModels(config: ProviderConfig): PreflightCheck {
+  const id = `${config.providerId}.models`;
+  if (config.models.length === 0) {
+    return { id, label: "Models", status: "fail", detail: "Provider has no models configured" };
+  }
+  const unnamed = config.models.filter((model) => model.modelId.trim().length === 0);
+  return unnamed.length > 0
+    ? { id, label: "Models", status: "fail", detail: `${unnamed.length} model(s) have an empty modelId` }
     : {
-        id: `${config.providerId}.model`,
-        label: "Model name",
-        status: "fail",
-        detail: "Model name is empty",
+        id,
+        label: "Models",
+        status: "ok",
+        detail: config.models.map((model) => model.modelId).join(", "),
       };
 }
 
 function checkBaseUrl(config: ProviderConfig): PreflightCheck {
   const id = `${config.providerId}.baseUrl`;
   if (!config.baseUrl) {
-    return config.kind === "openai_compatible"
+    return config.adapterId === "openai_compatible"
       ? {
           id,
           label: "Base URL",
           status: "fail",
-          detail: "openai_compatible providers require an explicit baseUrl",
+          detail: "the openai_compatible adapter requires an explicit baseUrl",
         }
-      : { id, label: "Base URL", status: "ok", detail: "Using the built-in default endpoint" };
+      : { id, label: "Base URL", status: "ok", detail: "Using the adapter's default endpoint" };
   }
 
   try {
     const url = new URL(config.baseUrl);
-    if (url.protocol !== "https:" && url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
+    const isLocal = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+    if (url.protocol !== "https:" && !isLocal) {
       return {
         id,
         label: "Base URL",
@@ -203,95 +190,113 @@ function checkBaseUrl(config: ProviderConfig): PreflightCheck {
   }
 }
 
-function checkCapabilityExpectations(config: ProviderConfig): PreflightCheck[] {
-  const capabilities = capabilitiesFor(config.kind, config.capabilityOverrides);
-  const checks: PreflightCheck[] = [
-    {
-      id: `${config.providerId}.capabilities`,
-      label: "Declared capabilities",
-      status: "ok",
-      detail: `structuredOutput=${capabilities.structuredOutput}, nativeWebSearch=${capabilities.nativeWebSearch}, context=${capabilities.maxContextTokens}`,
-    },
-  ];
-
-  if (config.enableNativeWebSearch && !capabilities.nativeWebSearch) {
-    checks.push({
-      id: `${config.providerId}.nativeWebSearch`,
-      label: "Native web search",
-      status: "warn",
-      detail:
-        "enableNativeWebSearch is set but this provider cannot search natively; research will fall back to the SearchPort",
-    });
-  }
-
-  if (capabilities.structuredOutput === "text_only") {
-    checks.push({
-      id: `${config.providerId}.structuredOutput`,
-      label: "Structured output",
-      status: "warn",
-      detail: "No JSON mode; the runtime will prompt for JSON and validate with repair retries",
-    });
-  }
-
-  return checks;
+function checkCapabilities(config: ProviderConfig): PreflightCheck[] {
+  const baseline = baselineFor(config.adapterId);
+  return config.models.map((model) => {
+    const capabilities = { ...baseline, ...model.capabilities };
+    const notes: string[] = [];
+    if (capabilities.structuredOutput === "none") {
+      notes.push("no JSON mode: only non-orchestrator members may use it");
+    }
+    if (capabilities.toolCalling === "none") {
+      notes.push("no tool calling: only members with an empty tool allowlist may use it");
+    }
+    return {
+      id: `${config.providerId}.capabilities.${model.modelId}`,
+      label: `Capabilities for ${model.modelId}`,
+      status: notes.length > 0 ? ("warn" as const) : ("ok" as const),
+      detail: [
+        `structuredOutput=${capabilities.structuredOutput}`,
+        `toolCalling=${capabilities.toolCalling}`,
+        `nativeWebSearch=${capabilities.nativeWebSearch}`,
+        `context=${capabilities.maxContextTokens}`,
+        ...notes,
+      ].join(", "),
+    };
+  });
 }
 
 async function checkCredential(
   config: ProviderConfig,
-  secrets: SecretsPort,
+  deps: ProviderDeps,
 ): Promise<PreflightCheck> {
   const id = `${config.providerId}.credential`;
-  const label = `Credential (${config.apiKeyRef.kind}:${config.apiKeyRef.name})`;
+  const label = `Credential (${config.credentialRef})`;
 
-  if (config.apiKeyRef.kind === "inline_dev") {
-    return {
-      id,
-      label,
-      status: "warn",
-      detail: "inline_dev secrets are for local development only; use keychain or env elsewhere",
-    };
+  let value: string | undefined;
+  try {
+    value = await deps.secrets.resolve(config.credentialRef);
+  } catch (error) {
+    value = undefined;
+    if (!config.credentialOptional) {
+      return {
+        id,
+        label,
+        status: "fail",
+        detail: `Could not resolve "${config.credentialRef}": ${
+          error instanceof Error ? error.message : "unknown error"
+        }`,
+      };
+    }
   }
 
-  const value = await secrets.get(config.apiKeyRef.name);
-  if (value === undefined) {
-    return { id, label, status: "fail", detail: `Secret "${config.apiKeyRef.name}" is not set` };
+  if (!value) {
+    return config.credentialOptional
+      ? { id, label, status: "ok", detail: "No credential needed for this provider" }
+      : { id, label, status: "fail", detail: `Credential "${config.credentialRef}" is not set` };
   }
-  if (PLACEHOLDER_KEYS.has(value.trim().toLowerCase())) {
-    return { id, label, status: "fail", detail: "Secret is still a placeholder value" };
+  if (PLACEHOLDER_CREDENTIALS.has(value.trim().toLowerCase())) {
+    return { id, label, status: "fail", detail: "Credential is still a placeholder value" };
   }
   return { id, label, status: "ok", detail: `Resolved (${value.length} chars, value not logged)` };
 }
 
-async function probeProvider(
+async function runProviderHealthChecks(
   config: ProviderConfig,
   deps: ProviderDeps,
-): Promise<PreflightCheck> {
-  const id = `${config.providerId}.probe`;
+  options: PreflightOptions,
+): Promise<PreflightCheck[]> {
   try {
-    const adapter: ProviderAdapter = await createProviderAdapter(config, deps);
-    const response = await adapter.complete({
-      system: "You are a connectivity probe. Answer with JSON only.",
-      user: 'Reply with exactly {"ok":true}.',
-      maxOutputTokens: 32,
-      responseSchema: {
-        name: "connectivity_probe",
-        schema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } },
-      },
-      metadata: { agentId: "preflight", phase: "probe", round: 0 },
-    });
-    return {
-      id,
-      label: "Connectivity probe",
-      status: response.text.includes("ok") ? "ok" : "warn",
-      detail: `Responded in ${response.usage.completionTokens} completion tokens`,
-    };
+    const adapter = await createAdapter(config, deps);
+    const results: PreflightCheck[] = [];
+
+    for (const model of config.models) {
+      const health = await runHealthCheck(adapter, model, {
+        ...(options.now ? { now: options.now } : {}),
+      });
+      const id = `${config.providerId}.healthCheck.${model.modelId}`;
+      if (!health.reachable) {
+        results.push({
+          id,
+          label: `Self-check ${model.modelId}`,
+          status: "fail",
+          detail: health.error?.message ?? "unreachable",
+        });
+        continue;
+      }
+      results.push({
+        id,
+        label: `Self-check ${model.modelId}`,
+        status: health.mismatches.length > 0 ? "warn" : "ok",
+        detail:
+          health.mismatches.length > 0
+            ? health.mismatches.join("; ")
+            : `verified: ${Object.entries(health.detected)
+                .map(([key, value]) => `${key}=${String(value)}`)
+                .join(", ")}`,
+      });
+    }
+
+    return results;
   } catch (error) {
-    return {
-      id,
-      label: "Connectivity probe",
-      status: "fail",
-      detail: error instanceof Error ? error.message : "Probe failed",
-    };
+    return [
+      {
+        id: `${config.providerId}.healthCheck`,
+        label: "Self-check",
+        status: "fail",
+        detail: error instanceof Error ? error.message : "self-check failed",
+      },
+    ];
   }
 }
 
@@ -302,8 +307,8 @@ function worstStatus(statuses: PreflightStatus[]): PreflightStatus {
 }
 
 export function formatPreflightReport(report: PreflightReport): string {
-  const lines: string[] = [`Configuration self-check: ${report.status.toUpperCase()}`];
   const icon = (status: PreflightStatus) => (status === "ok" ? "✓" : status === "warn" ? "!" : "✗");
+  const lines: string[] = [`Configuration self-check: ${report.status.toUpperCase()}`];
 
   for (const check of report.checks) {
     lines.push(`  ${icon(check.status)} ${check.label}: ${check.detail}`);

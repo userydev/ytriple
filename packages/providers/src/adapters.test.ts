@@ -1,34 +1,45 @@
-import { ProviderError, type NamedJsonSchema, type ProviderRequest } from "@ytriple/shared";
+import type { GenerateRequest, ModelConfig, ToolSpec } from "@ytriple/shared";
+import { ProviderError } from "@ytriple/shared";
 import { describe, expect, it } from "vitest";
-import { createArkProvider } from "./ark.js";
-import { capabilitiesFor } from "./capabilities.js";
-import { createGoogleProvider, toGeminiSchema } from "./google.js";
-import { createOpenAiCompatibleProvider } from "./openaiCompatible.js";
+import { createArkAdapter } from "./ark.js";
+import { createGoogleAdapter, toGeminiSchema } from "./google.js";
+import { createOpenAiCompatibleAdapter } from "./openaiCompatible.js";
 import { createFakeHttpPort } from "./testSupport.js";
 
-const schema: NamedJsonSchema = {
+const responseSchema = {
   name: "contribution",
   schema: {
-    type: "object",
+    type: "object" as const,
     required: ["summary"],
     properties: {
-      summary: { type: "string", description: "one sentence" },
-      risks: { type: "array", items: { type: "string" } },
+      summary: { type: "string" as const, description: "one sentence" },
+      risks: { type: "array" as const, items: { type: "string" as const } },
     },
   },
 };
 
-function requestWith(overrides: Partial<ProviderRequest> = {}): ProviderRequest {
+const searchTool: ToolSpec = {
+  name: "web_search",
+  description: "Search the web",
+  parameters: { type: "object", required: ["query"], properties: { query: { type: "string" } } },
+};
+
+function model(overrides: Partial<ModelConfig> = {}): ModelConfig {
+  return { modelId: "test-model", displayName: "Test Model", ...overrides };
+}
+
+function requestWith(overrides: Partial<GenerateRequest> = {}): GenerateRequest {
   return {
-    system: "You are the Researcher.",
-    user: "Summarise the market.",
-    metadata: { agentId: "researcher", phase: "synthesis", round: 0 },
+    model: model(),
+    system: "You are a member of the team.",
+    messages: [{ role: "user", content: "Summarise the market." }],
+    metadata: { agentId: "member-a", phase: "synthesis", round: 0 },
     ...overrides,
   };
 }
 
-describe("openai-compatible adapter", () => {
-  it("sends a native json_schema response_format when the capability allows it", async () => {
+describe("openai_compatible adapter", () => {
+  it("uses a native json_schema response format when the model declares it", async () => {
     const http = createFakeHttpPort(() => ({
       body: {
         choices: [{ message: { content: '{"summary":"ok"}' } }],
@@ -36,71 +47,193 @@ describe("openai-compatible adapter", () => {
       },
     }));
 
-    const provider = createOpenAiCompatibleProvider({
+    const adapter = createOpenAiCompatibleAdapter({
       providerId: "gateway",
-      model: "gpt-4o-mini",
       baseUrl: "https://gateway.example/v1/",
       apiKey: "sk-test",
-      capabilities: capabilitiesFor("openai_compatible", { structuredOutput: "json_schema" }),
       http,
     });
 
-    const response = await provider.complete(requestWith({ responseSchema: schema }));
+    const result = await adapter.generate(
+      requestWith({
+        model: model({ capabilities: { structuredOutput: "json_schema" } }),
+        responseSchema,
+      }),
+    );
 
     expect(http.calls[0]?.init.url).toBe("https://gateway.example/v1/chat/completions");
     expect(http.calls[0]?.init.headers.authorization).toBe("Bearer sk-test");
     expect(http.lastBody.response_format).toEqual({
       type: "json_schema",
-      json_schema: { name: "contribution", strict: true, schema: schema.schema },
+      json_schema: { name: "contribution", strict: true, schema: responseSchema.schema },
     });
-    expect(response.text).toBe('{"summary":"ok"}');
-    expect(response.usage).toEqual({ promptTokens: 11, completionTokens: 5 });
-    expect(response.structuredOutputMode).toBe("json_schema");
+    expect(result.usage).toEqual({ inputTokens: 11, outputTokens: 5 });
+    expect(result.degradations).toEqual([]);
   });
 
-  it("degrades to JSON mode plus a prompt-injected schema for DeepSeek-class providers", async () => {
+  it("degrades to JSON mode with the schema in the prompt and reports it", async () => {
     const http = createFakeHttpPort(() => ({
       body: { choices: [{ message: { content: '{"summary":"ok"}' } }] },
     }));
 
-    const provider = createOpenAiCompatibleProvider({
-      providerId: "deepseek",
-      kind: "deepseek",
-      model: "deepseek-chat",
+    const adapter = createOpenAiCompatibleAdapter({
+      providerId: "deepseek-personal",
       baseUrl: "https://api.deepseek.com/v1",
       apiKey: "sk-test",
-      capabilities: capabilitiesFor("deepseek"),
       http,
     });
 
-    const response = await provider.complete(requestWith({ responseSchema: schema }));
+    const result = await adapter.generate(requestWith({ responseSchema }));
     const messages = http.lastBody.messages as Array<{ role: string; content: string }>;
 
     expect(http.lastBody.response_format).toEqual({ type: "json_object" });
     expect(messages[0]?.content).toContain('"summary": string');
-    expect(response.structuredOutputMode).toBe("json_object");
+    expect(result.degradations).toEqual([
+      {
+        kind: "structured_output",
+        from: "json_schema",
+        to: "json_mode",
+        detail:
+          "model declares structuredOutput=json_mode; schema moved into the prompt and validated locally with repair retries",
+      },
+    ]);
   });
 
-  it("surfaces an actionable error on an auth failure", async () => {
-    const http = createFakeHttpPort(() => ({ status: 401, body: { error: "invalid key" } }));
-    const provider = createOpenAiCompatibleProvider({
-      providerId: "deepseek",
-      model: "deepseek-chat",
-      baseUrl: "https://api.deepseek.com/v1",
-      apiKey: "nope",
-      capabilities: capabilitiesFor("deepseek"),
+  it("round-trips native tool calls and tool results", async () => {
+    const http = createFakeHttpPort((_init, call) =>
+      call === 0
+        ? {
+            body: {
+              choices: [
+                {
+                  message: {
+                    content: "",
+                    tool_calls: [
+                      {
+                        id: "call_1",
+                        function: { name: "web_search", arguments: '{"query":"prd tools"}' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          }
+        : { body: { choices: [{ message: { content: '{"summary":"done"}' } }] } },
+    );
+
+    const adapter = createOpenAiCompatibleAdapter({
+      providerId: "gateway",
+      baseUrl: "https://gateway.example/v1",
+      apiKey: "sk-test",
       http,
     });
 
-    await expect(provider.complete(requestWith())).rejects.toThrowError(
-      /deepseek rejected the credentials \(HTTP 401\)/,
+    const first = await adapter.generate(requestWith({ tools: [searchTool] }));
+    expect(first.toolCalls).toEqual([
+      { toolCallId: "call_1", name: "web_search", arguments: { query: "prd tools" } },
+    ]);
+    expect((http.lastBody.tools as unknown[])[0]).toMatchObject({
+      type: "function",
+      function: { name: "web_search" },
+    });
+
+    await adapter.generate(
+      requestWith({
+        tools: [searchTool],
+        messages: [
+          { role: "user", content: "Summarise the market." },
+          { role: "assistant", content: "", toolCalls: first.toolCalls },
+          { role: "tool", toolCallId: "call_1", name: "web_search", content: "3 sources" },
+        ],
+      }),
     );
-    await expect(provider.complete(requestWith())).rejects.toBeInstanceOf(ProviderError);
+
+    const messages = http.lastBody.messages as Array<Record<string, unknown>>;
+    expect(messages[2]).toMatchObject({ role: "assistant" });
+    expect(messages[3]).toEqual({ role: "tool", tool_call_id: "call_1", content: "3 sources" });
+  });
+
+  it("keeps only the first tool call for sequential models and reports the trim", async () => {
+    const http = createFakeHttpPort(() => ({
+      body: {
+        choices: [
+          {
+            message: {
+              content: "",
+              tool_calls: [
+                { id: "a", function: { name: "web_search", arguments: "{}" } },
+                { id: "b", function: { name: "web_search", arguments: "{}" } },
+              ],
+            },
+          },
+        ],
+      },
+    }));
+
+    const adapter = createOpenAiCompatibleAdapter({
+      providerId: "gateway",
+      baseUrl: "https://gateway.example/v1",
+      apiKey: "sk-test",
+      http,
+    });
+
+    const result = await adapter.generate(requestWith({ tools: [searchTool] }));
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.degradations[0]).toMatchObject({ kind: "tool_calling", to: "sequential" });
+  });
+
+  it("refuses tools on a model that cannot call them instead of simulating them", async () => {
+    const http = createFakeHttpPort(() => ({ body: {} }));
+    const adapter = createOpenAiCompatibleAdapter({
+      providerId: "ollama-local",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      http,
+    });
+
+    await expect(
+      adapter.generate(
+        requestWith({ model: model({ capabilities: { toolCalling: "none" } }), tools: [searchTool] }),
+      ),
+    ).rejects.toThrowError(/declares toolCalling="none".*no prompt-simulated fallback/s);
+    expect(http.calls).toHaveLength(0);
+  });
+
+  it("classifies an auth failure as a blocking provider error", async () => {
+    const http = createFakeHttpPort(() => ({ status: 401, body: { error: "invalid key" } }));
+    const adapter = createOpenAiCompatibleAdapter({
+      providerId: "deepseek-personal",
+      baseUrl: "https://api.deepseek.com/v1",
+      apiKey: "nope",
+      http,
+    });
+
+    const error = await adapter.generate(requestWith()).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(ProviderError);
+    expect((error as ProviderError).code).toBe("auth_failed");
+    expect((error as ProviderError).retryable).toBe(false);
+  });
+
+  it("classifies a context-length rejection as recoverable", async () => {
+    const http = createFakeHttpPort(() => ({
+      status: 400,
+      body: { error: { message: "This model's maximum context length is 64000 tokens" } },
+    }));
+    const adapter = createOpenAiCompatibleAdapter({
+      providerId: "deepseek-personal",
+      baseUrl: "https://api.deepseek.com/v1",
+      apiKey: "sk-test",
+      http,
+    });
+
+    const error = (await adapter.generate(requestWith()).catch((caught: unknown) => caught)) as ProviderError;
+    expect(error.code).toBe("context_overflow");
+    expect(error.retryable).toBe(true);
   });
 });
 
 describe("ark adapter", () => {
-  it("combines native web_search with strict json_schema output", async () => {
+  it("combines native web search with a strict schema in one call", async () => {
     const http = createFakeHttpPort(() => ({
       body: {
         output: [
@@ -120,42 +253,67 @@ describe("ark adapter", () => {
       },
     }));
 
-    const provider = createArkProvider({
-      providerId: "ark",
-      model: "doubao-seed-1-6",
-      apiKey: "ark-key",
-      capabilities: capabilitiesFor("ark"),
-      http,
-    });
-
-    const response = await provider.complete(
-      requestWith({ responseSchema: schema, webSearch: { enabled: true, maxResults: 3 } }),
-    );
+    const adapter = createArkAdapter({ providerId: "ark-personal", apiKey: "ark-key", http });
+    const result = await adapter.generate(requestWith({ responseSchema, nativeWebSearch: true }));
 
     expect(http.calls[0]?.init.url).toBe("https://ark.cn-beijing.volces.com/api/v3/responses");
-    expect(http.lastBody.tools).toEqual([{ type: "web_search", max_keyword: 2, limit: 3 }]);
+    expect(http.lastBody.tools).toEqual([{ type: "web_search", max_keyword: 2, limit: 5 }]);
     expect(http.lastBody.text).toEqual({
-      format: { type: "json_schema", name: "contribution", strict: true, schema: schema.schema },
+      format: { type: "json_schema", name: "contribution", strict: true, schema: responseSchema.schema },
     });
-    expect(response.structuredOutputMode).toBe("json_schema");
-    expect(response.sources).toEqual([
+    expect(result.degradations).toEqual([]);
+    expect(result.sources).toEqual([
       { title: "A", url: "https://example.com/a", snippet: "s", origin: "native_provider_search" },
     ]);
-    expect(response.usage).toEqual({ promptTokens: 20, completionTokens: 7 });
   });
 
-  it("omits the search tool when the caller did not request search", async () => {
+  it("reports a degradation when a model without native search is asked to ground", async () => {
     const http = createFakeHttpPort(() => ({ body: { output_text: "{}" } }));
-    const provider = createArkProvider({
-      providerId: "ark",
-      model: "doubao-seed-1-6",
-      apiKey: "ark-key",
-      capabilities: capabilitiesFor("ark"),
-      http,
-    });
+    const adapter = createArkAdapter({ providerId: "ark-personal", apiKey: "ark-key", http });
 
-    await provider.complete(requestWith());
+    const result = await adapter.generate(
+      requestWith({
+        model: model({ capabilities: { nativeWebSearch: false } }),
+        nativeWebSearch: true,
+      }),
+    );
+
     expect(http.lastBody.tools).toBeUndefined();
+    expect(result.degradations).toEqual([
+      {
+        kind: "native_web_search",
+        from: "native",
+        to: "search_port",
+        detail: "bound model has no native web search; the runtime must use the SearchPort",
+      },
+    ]);
+  });
+
+  it("parses function calls and sends tool output back in Ark's shape", async () => {
+    const http = createFakeHttpPort(() => ({
+      body: {
+        output: [
+          { type: "function_call", call_id: "c1", name: "web_search", arguments: '{"query":"x"}' },
+        ],
+      },
+    }));
+    const adapter = createArkAdapter({ providerId: "ark-personal", apiKey: "ark-key", http });
+
+    const result = await adapter.generate(requestWith({ tools: [searchTool] }));
+    expect(result.toolCalls).toEqual([
+      { toolCallId: "c1", name: "web_search", arguments: { query: "x" } },
+    ]);
+
+    await adapter.generate(
+      requestWith({
+        messages: [{ role: "tool", toolCallId: "c1", name: "web_search", content: "2 sources" }],
+      }),
+    );
+    expect((http.lastBody.input as unknown[])[1]).toEqual({
+      type: "function_call_output",
+      call_id: "c1",
+      output: "2 sources",
+    });
   });
 });
 
@@ -168,25 +326,16 @@ describe("google adapter", () => {
       },
     }));
 
-    const provider = createGoogleProvider({
-      providerId: "gemini",
-      model: "gemini-2.5-flash",
-      apiKey: "g-key",
-      capabilities: capabilitiesFor("google"),
-      http,
-    });
-
-    const response = await provider.complete(requestWith({ responseSchema: schema }));
+    const adapter = createGoogleAdapter({ providerId: "gemini", apiKey: "g-key", http });
+    const result = await adapter.generate(requestWith({ responseSchema }));
     const generationConfig = http.lastBody.generationConfig as Record<string, unknown>;
 
     expect(http.calls[0]?.init.headers["x-goog-api-key"]).toBe("g-key");
-    expect(http.calls[0]?.init.url).toContain("/models/gemini-2.5-flash:generateContent");
     expect(generationConfig.responseMimeType).toBe("application/json");
-    expect(http.lastBody.tools).toBeUndefined();
-    expect(response.structuredOutputMode).toBe("json_schema");
+    expect(result.degradations).toEqual([]);
   });
 
-  it("trades the response schema for grounding and reports the degradation", async () => {
+  it("trades schema and function tools for grounding, reporting both degradations", async () => {
     const http = createFakeHttpPort(() => ({
       body: {
         candidates: [
@@ -200,35 +349,59 @@ describe("google adapter", () => {
       },
     }));
 
-    const provider = createGoogleProvider({
-      providerId: "gemini",
-      model: "gemini-2.5-flash",
-      apiKey: "g-key",
-      capabilities: capabilitiesFor("google"),
-      http,
-    });
-
-    const response = await provider.complete(
-      requestWith({ responseSchema: schema, webSearch: { enabled: true } }),
+    const adapter = createGoogleAdapter({ providerId: "gemini", apiKey: "g-key", http });
+    const result = await adapter.generate(
+      requestWith({ responseSchema, tools: [searchTool], nativeWebSearch: true }),
     );
-    const generationConfig = (http.lastBody.generationConfig ?? {}) as Record<string, unknown>;
-    const systemText = (
-      http.lastBody.systemInstruction as { parts: Array<{ text: string }> }
-    ).parts[0]?.text;
 
     expect(http.lastBody.tools).toEqual([{ google_search: {} }]);
-    expect(generationConfig.responseSchema).toBeUndefined();
-    expect(systemText).toContain('"summary": string');
-    expect(response.structuredOutputMode).toBe("text_only");
-    expect(response.sources).toEqual([
+    expect(
+      ((http.lastBody.generationConfig ?? {}) as Record<string, unknown>).responseSchema,
+    ).toBeUndefined();
+    expect(result.degradations.map((entry) => entry.kind)).toEqual([
+      "structured_output",
+      "tool_calling",
+    ]);
+    expect(result.sources).toEqual([
       { title: "B", url: "https://example.com/b", origin: "native_provider_search" },
     ]);
+  });
+
+  it("declares functions and parses functionCall parts when not grounded", async () => {
+    const http = createFakeHttpPort(() => ({
+      body: {
+        candidates: [
+          { content: { parts: [{ functionCall: { name: "web_search", args: { query: "x" } } }] } },
+        ],
+      },
+    }));
+
+    const adapter = createGoogleAdapter({ providerId: "gemini", apiKey: "g-key", http });
+    const result = await adapter.generate(requestWith({ tools: [searchTool] }));
+
+    expect(http.lastBody.tools).toEqual([
+      {
+        functionDeclarations: [
+          {
+            name: "web_search",
+            description: "Search the web",
+            parameters: {
+              type: "OBJECT",
+              required: ["query"],
+              propertyOrdering: ["query"],
+              properties: { query: { type: "STRING" } },
+            },
+          },
+        ],
+      },
+    ]);
+    expect(result.toolCalls[0]).toMatchObject({ name: "web_search", arguments: { query: "x" } });
   });
 });
 
 describe("toGeminiSchema", () => {
   it("converts to the OpenAPI-flavoured shape Gemini expects", () => {
-    expect(toGeminiSchema(schema.schema)).toEqual({
+    expect(toGeminiSchema(responseSchema.schema)).toEqual({
       type: "OBJECT",
       required: ["summary"],
       propertyOrdering: ["summary", "risks"],

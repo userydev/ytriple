@@ -1,91 +1,112 @@
-import type { ProviderCapabilities, ProviderKind } from "@ytriple/shared";
+import type { AdapterId, ProviderCapabilities } from "@ytriple/shared";
 
 /**
- * The capability table is the contract between the provider layer and the
- * orchestrator. Orchestration branches on these flags and never on a provider
- * name, which is what keeps adding a provider a data change.
- *
- * Values are deliberately conservative: a provider that under-declares degrades
- * gracefully, one that over-declares fails at run time.
+ * Adapter baselines. Deliberately conservative: a model that under-declares
+ * degrades gracefully, one that over-declares fails at run time. Real values
+ * come from the self-check and overwrite these.
  */
-export const DEFAULT_CAPABILITIES: Record<ProviderKind, ProviderCapabilities> = {
+export const ADAPTER_BASELINE_CAPABILITIES: Record<AdapterId, ProviderCapabilities> = {
   google: {
     structuredOutput: "json_schema",
-    toolCalling: true,
+    toolCalling: "parallel",
     nativeWebSearch: true,
     streaming: true,
     maxContextTokens: 1_000_000,
+    maxOutputTokens: 8_192,
+    reasoningEffort: true,
+    visionInput: true,
+    costTier: "standard",
   },
   ark: {
     structuredOutput: "json_schema",
-    toolCalling: true,
+    toolCalling: "sequential",
     nativeWebSearch: true,
     streaming: true,
     maxContextTokens: 256_000,
+    maxOutputTokens: 16_384,
+    reasoningEffort: true,
+    visionInput: true,
+    costTier: "standard",
   },
-  deepseek: {
-    // DeepSeek exposes JSON mode but not strict per-request schemas.
-    structuredOutput: "json_object",
-    toolCalling: true,
+  openai_compatible: {
+    // Widest common denominator across DeepSeek, OpenRouter, vLLM and Ollama.
+    // Raise per model with capability overrides or a self-check.
+    structuredOutput: "json_mode",
+    toolCalling: "sequential",
     nativeWebSearch: false,
     streaming: true,
     maxContextTokens: 64_000,
-  },
-  openai_compatible: {
-    // Covers OpenRouter, vLLM, Ollama and friends. JSON mode is the widest
-    // common denominator; raise it per provider with capabilityOverrides.
-    structuredOutput: "json_object",
-    toolCalling: true,
-    nativeWebSearch: false,
-    streaming: true,
-    maxContextTokens: 128_000,
+    maxOutputTokens: 8_192,
+    reasoningEffort: false,
+    visionInput: false,
+    costTier: "cheap",
   },
 };
 
-export function capabilitiesFor(
-  kind: ProviderKind,
-  overrides?: Partial<ProviderCapabilities>,
-): ProviderCapabilities {
-  return { ...DEFAULT_CAPABILITIES[kind], ...overrides };
-}
-
-export interface CapabilityDescription {
-  kind: ProviderKind;
+export interface AdapterDescription {
+  adapterId: AdapterId;
   label: string;
   defaultBaseUrl?: string;
+  covers: string;
   notes: string;
-  capabilities: ProviderCapabilities;
+  baseline: ProviderCapabilities;
 }
 
-/** Rendered by settings UIs and by `preflightConfig` reports. */
-export const PROVIDER_CATALOG: readonly CapabilityDescription[] = [
+/** Rendered by a settings UI when the user adds a provider. */
+export const ADAPTER_CATALOG: readonly AdapterDescription[] = [
   {
-    kind: "google",
+    adapterId: "google",
     label: "Google Gemini",
     defaultBaseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    covers: "Gemini",
     notes:
-      "Native search grounding. Grounding and strict response schemas are mutually exclusive, so a grounded call degrades to prompt-injected schema.",
-    capabilities: DEFAULT_CAPABILITIES.google,
+      "Native search grounding and native JSON schema, but not in the same request: a grounded call moves the schema into the prompt and reports a degradation.",
+    baseline: ADAPTER_BASELINE_CAPABILITIES.google,
   },
   {
-    kind: "ark",
+    adapterId: "openai_compatible",
+    label: "OpenAI-compatible endpoint",
+    covers: "DeepSeek, Ark's compatible endpoint, OpenRouter, Ollama, vLLM",
+    notes:
+      "Distinguished by baseUrl, modelId and capability overrides. Adding a vendor here is a configuration change, not a code change.",
+    baseline: ADAPTER_BASELINE_CAPABILITIES.openai_compatible,
+  },
+  {
+    adapterId: "ark",
     label: "Volcengine Ark (Responses API)",
     defaultBaseUrl: "https://ark.cn-beijing.volces.com/api/v3",
-    notes: "Native web_search tool and strict json_schema output in the same request.",
-    capabilities: DEFAULT_CAPABILITIES.ark,
-  },
-  {
-    kind: "deepseek",
-    label: "DeepSeek",
-    defaultBaseUrl: "https://api.deepseek.com/v1",
-    notes: "OpenAI-compatible chat completions with JSON mode. No native search; uses the SearchPort.",
-    capabilities: DEFAULT_CAPABILITIES.deepseek,
-  },
-  {
-    kind: "openai_compatible",
-    label: "OpenAI-compatible endpoint",
-    notes:
-      "Any /chat/completions endpoint: OpenRouter, Ark's compatible mode, vLLM, Ollama. Base URL is required.",
-    capabilities: DEFAULT_CAPABILITIES.openai_compatible,
+    covers: "Ark Responses API",
+    notes: "Non-OpenAI shape. Combines its native web_search tool with strict json_schema output.",
+    baseline: ADAPTER_BASELINE_CAPABILITIES.ark,
   },
 ];
+
+export function baselineFor(adapterId: AdapterId): ProviderCapabilities {
+  return ADAPTER_BASELINE_CAPABILITIES[adapterId];
+}
+
+/**
+ * Handy presets for well-known endpoints behind `openai_compatible`. These are
+ * data, not code paths: nothing in the runtime reads them.
+ */
+export const KNOWN_OPENAI_COMPATIBLE_ENDPOINTS = [
+  {
+    label: "DeepSeek",
+    baseUrl: "https://api.deepseek.com/v1",
+    capabilities: { structuredOutput: "json_mode", maxContextTokens: 64_000 },
+  },
+  {
+    label: "OpenRouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    capabilities: {},
+  },
+  {
+    label: "Ollama (local)",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    capabilities: { structuredOutput: "json_mode", toolCalling: "none", maxContextTokens: 8_192 },
+  },
+] as const satisfies ReadonlyArray<{
+  label: string;
+  baseUrl: string;
+  capabilities: Partial<ProviderCapabilities>;
+}>;

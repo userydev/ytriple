@@ -1,23 +1,34 @@
 export { PROVIDERS_PACKAGE_VERSION } from "./version.js";
 
-export type { CapabilityDescription } from "./capabilities.js";
-export { DEFAULT_CAPABILITIES, PROVIDER_CATALOG, capabilitiesFor } from "./capabilities.js";
-
-export type { OpenAiCompatibleOptions } from "./openaiCompatible.js";
-export { createOpenAiCompatibleProvider } from "./openaiCompatible.js";
-
-export type { ArkProviderOptions } from "./ark.js";
-export { ARK_DEFAULT_BASE_URL, createArkProvider } from "./ark.js";
-
-export type { GoogleProviderOptions } from "./google.js";
-export { GOOGLE_DEFAULT_BASE_URL, createGoogleProvider, toGeminiSchema } from "./google.js";
-
-export type { ProviderDeps, ProviderRegistry, ProviderRegistryOptions } from "./factory.js";
+export type { AdapterDescription } from "./capabilities.js";
 export {
-  DEEPSEEK_DEFAULT_BASE_URL,
-  createProviderAdapter,
-  createProviderRegistry,
+  ADAPTER_BASELINE_CAPABILITIES,
+  ADAPTER_CATALOG,
+  KNOWN_OPENAI_COMPATIBLE_ENDPOINTS,
+  baselineFor,
+} from "./capabilities.js";
+
+export { resolveCapabilities } from "./adapterSupport.js";
+
+export type { OpenAiCompatibleAdapterOptions } from "./openaiCompatible.js";
+export { createOpenAiCompatibleAdapter } from "./openaiCompatible.js";
+
+export type { ArkAdapterOptions } from "./ark.js";
+export { ARK_DEFAULT_BASE_URL, createArkAdapter } from "./ark.js";
+
+export type { GoogleAdapterOptions } from "./google.js";
+export { GOOGLE_DEFAULT_BASE_URL, createGoogleAdapter, toGeminiSchema } from "./google.js";
+
+export type { HealthCheckOptions } from "./healthCheck.js";
+export { runHealthCheck } from "./healthCheck.js";
+
+export type {
+  ModelRouter,
+  ModelRouterOptions,
+  ProviderDeps,
+  ResolvedModel,
 } from "./factory.js";
+export { createAdapter, createModelRouter } from "./factory.js";
 
 export type {
   PreflightCheck,
@@ -29,16 +40,19 @@ export type {
 export { formatPreflightReport, preflightConfig, preflightProvider } from "./preflight.js";
 
 export type {
+  PhaseHandler,
   ProviderRecording,
   ProviderRecordingEntry,
-  RecordingProviderOptions,
-  ReplayProviderOptions,
-  ScriptedProviderOptions,
+  RecordingAdapter,
+  RecordingAdapterOptions,
+  ReplayAdapterOptions,
+  ScriptedAdapter,
+  ScriptedAdapterOptions,
 } from "./testing.js";
 export {
-  createJsonScriptedProvider,
-  createRecordingProvider,
-  createReplayProvider,
-  createScriptedProvider,
+  createJsonScriptedAdapter,
+  createRecordingAdapter,
+  createReplayAdapter,
+  createScriptedAdapter,
   recordingKey,
 } from "./testing.js";

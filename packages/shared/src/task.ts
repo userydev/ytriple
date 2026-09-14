@@ -13,21 +13,50 @@ export type TaskStatus =
   | "failed";
 
 /**
- * The structured summary the orchestrator must publish before any contributor
- * is dispatched. Field names follow the V1 runtime contract.
+ * What the host actually offers this run. The tool registry is filtered by
+ * these flags, so an unavailable capability means the tool does not exist for
+ * the task rather than failing when called.
+ */
+export interface RuntimeCapabilities {
+  workspaceRead: boolean;
+  outputWrite: boolean;
+  webSearch: boolean;
+  localModels: boolean;
+  persistentBackgroundRuns: boolean;
+  streaming: boolean;
+}
+
+export interface MemberTask {
+  agentId: AgentId;
+  objective: string;
+  mustCover: string[];
+  outOfScope: string[];
+}
+
+/**
+ * The orchestrator's only dispatch credential. `memberTasks` is addressed by
+ * `agentId`, which is what decouples the brief from the team size.
  */
 export interface TaskBrief {
-  product_object: string;
-  target_user: string;
-  core_scenario: string;
-  pain_or_problem: string;
-  v1_scope: string[];
-  non_goals: string[];
-  success_criteria: string[];
-  research_scope: string;
-  specialist_focus: string;
+  productObject: string;
+  targetUser: string;
+  coreScenario: string;
+  painOrProblem: string;
+  v1Scope: string[];
+  nonGoals: string[];
+  successCriteria: string[];
   assumptions: string[];
-  open_questions: string[];
+  openQuestions: string[];
+  memberTasks: MemberTask[];
+  /** Filled from capability negotiation so the plan can degrade explicitly. */
+  contextAvailability: {
+    workspace: boolean;
+    webSearch: boolean;
+  };
+}
+
+export function memberTaskFor(brief: TaskBrief, agentId: AgentId): MemberTask | undefined {
+  return brief.memberTasks.find((task) => task.agentId === agentId);
 }
 
 export type SessionAuthorKind = "user" | "agent";
@@ -35,13 +64,11 @@ export type SessionAuthorKind = "user" | "agent";
 export interface SessionMessage {
   messageId: string;
   authorKind: SessionAuthorKind;
-  /** `"user"` for the human, otherwise the agent id. */
+  /** `"user"` for the human, otherwise the agent id. Sub-agents never appear. */
   authorId: AgentId | "user";
   kind: "statement" | "question" | "answer";
   text: string;
-  /** Why an agent asked this, shown next to the question. */
   reason?: string;
-  /** Set on answers, pointing at the question message id. */
   inReplyTo?: string;
   createdAt: number;
 }
@@ -63,38 +90,37 @@ export interface SourceNote {
   title: string;
   url: string;
   snippet?: string;
-  sourceType?: string;
-  /** `native` when the provider grounded the answer itself. */
   origin: "native_provider_search" | "search_port" | "workspace";
 }
 
 export interface TokenUsage {
-  promptTokens: number;
-  completionTokens: number;
+  inputTokens: number;
+  outputTokens: number;
 }
 
-export const EMPTY_TOKEN_USAGE: TokenUsage = { promptTokens: 0, completionTokens: 0 };
+export const EMPTY_TOKEN_USAGE: TokenUsage = { inputTokens: 0, outputTokens: 0 };
 
 export function addUsage(left: TokenUsage, right: TokenUsage): TokenUsage {
   return {
-    promptTokens: left.promptTokens + right.promptTokens,
-    completionTokens: left.completionTokens + right.completionTokens,
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
   };
 }
 
 export function totalTokens(usage: TokenUsage): number {
-  return usage.promptTokens + usage.completionTokens;
+  return usage.inputTokens + usage.outputTokens;
 }
 
-/** One contributor's structured hand-off to the orchestrator's merge step. */
+/**
+ * A member's hand-off. The payload shape is whatever the role's `outputSchema`
+ * declares, so the runtime carries it without understanding it.
+ */
 export interface AgentContribution {
   agentId: AgentId;
-  summary: string;
-  key_findings: string[];
-  risks: string[];
-  recommendations: string[];
-  proposed_sections: Array<{ title: string; body: string }>;
-  assumptions: string[];
-  open_questions: string[];
+  schemaId: string;
+  payload: Record<string, unknown>;
   sources: SourceNote[];
+  usage: TokenUsage;
+  /** Set when a member finished with a gap, e.g. an aborted sub-agent. */
+  incomplete?: boolean;
 }

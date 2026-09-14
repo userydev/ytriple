@@ -1,63 +1,93 @@
 import type { YtripleConfig } from "@ytriple/shared";
+import { ProviderError } from "@ytriple/shared";
 import { describe, expect, it } from "vitest";
-import { createProviderAdapter, createProviderRegistry } from "./factory.js";
-import { createFakeHttpPort, createFakeSecretsPort } from "./testSupport.js";
+import { createAdapter, createModelRouter } from "./factory.js";
+import { createFakeHttpPort, createFakeSecretPort } from "./testSupport.js";
 
 const http = createFakeHttpPort(() => ({ body: { output_text: "{}" } }));
-const secrets = createFakeSecretsPort({ ARK_API_KEY: "ark-secret", GOOGLE_API_KEY: "g-secret" });
+const secrets = createFakeSecretPort({ ARK_API_KEY: "ark-secret", GOOGLE_API_KEY: "g-secret" });
 
 const config: YtripleConfig = {
   providers: [
     {
-      providerId: "ark-default",
-      kind: "ark",
-      model: "doubao-seed-1-6",
-      apiKeyRef: { kind: "env", name: "ARK_API_KEY" },
+      providerId: "ark-personal",
+      adapterId: "ark",
+      displayName: "Ark",
+      credentialRef: "ARK_API_KEY",
+      models: [{ modelId: "doubao-seed-1-6", displayName: "Doubao Seed 1.6" }],
     },
     {
       providerId: "gemini-fast",
-      kind: "google",
-      model: "gemini-2.5-flash",
-      apiKeyRef: { kind: "env", name: "GOOGLE_API_KEY" },
-      capabilityOverrides: { maxContextTokens: 128_000 },
+      adapterId: "google",
+      displayName: "Gemini Flash",
+      credentialRef: "GOOGLE_API_KEY",
+      models: [
+        {
+          modelId: "gemini-2.5-flash",
+          displayName: "Gemini 2.5 Flash",
+          capabilities: { maxContextTokens: 128_000, costTier: "cheap" },
+        },
+      ],
     },
   ],
-  defaultModel: { providerId: "ark-default" },
+  defaultModel: { providerId: "ark-personal", modelId: "doubao-seed-1-6" },
 };
 
-describe("createProviderAdapter", () => {
-  it("builds adapters per kind and applies capability overrides", async () => {
-    const ark = await createProviderAdapter(config.providers[0]!, { http, secrets });
-    const gemini = await createProviderAdapter(config.providers[1]!, { http, secrets });
+describe("createAdapter", () => {
+  it("builds one adapter per family and applies per-model capability overrides", async () => {
+    const ark = await createAdapter(config.providers[0]!, { http, secrets });
+    const gemini = await createAdapter(config.providers[1]!, { http, secrets });
 
-    expect(ark.kind).toBe("ark");
-    expect(ark.capabilities.nativeWebSearch).toBe(true);
-    expect(gemini.kind).toBe("google");
-    expect(gemini.capabilities.maxContextTokens).toBe(128_000);
+    expect(ark.adapterId).toBe("ark");
+    expect(ark.describe(config.providers[0]!.models[0]!).nativeWebSearch).toBe(true);
+
+    const geminiCapabilities = gemini.describe(config.providers[1]!.models[0]!);
+    expect(geminiCapabilities.maxContextTokens).toBe(128_000);
+    expect(geminiCapabilities.costTier).toBe("cheap");
+    expect(geminiCapabilities.structuredOutput).toBe("json_schema");
   });
 
-  it("fails with a pointer to the secret ref when a credential is missing", async () => {
+  it("names the credentialRef when a credential cannot be resolved", async () => {
     await expect(
-      createProviderAdapter(
+      createAdapter(
         {
-          providerId: "deepseek",
-          kind: "deepseek",
-          model: "deepseek-chat",
-          apiKeyRef: { kind: "env", name: "DEEPSEEK_API_KEY" },
+          providerId: "deepseek-personal",
+          adapterId: "openai_compatible",
+          displayName: "DeepSeek",
+          baseUrl: "https://api.deepseek.com/v1",
+          credentialRef: "DEEPSEEK_API_KEY",
+          models: [{ modelId: "deepseek-chat", displayName: "DeepSeek Chat" }],
         },
         { http, secrets },
       ),
-    ).rejects.toThrowError(/secret ref "DEEPSEEK_API_KEY" \(env\) is unset/);
+    ).rejects.toThrowError(/credentialRef "DEEPSEEK_API_KEY" could not be resolved/);
   });
 
-  it("requires an explicit base URL for generic OpenAI-compatible endpoints", async () => {
+  it("allows a local provider to run without a credential", async () => {
+    const adapter = await createAdapter(
+      {
+        providerId: "ollama-local",
+        adapterId: "openai_compatible",
+        displayName: "Ollama",
+        baseUrl: "http://127.0.0.1:11434/v1",
+        credentialRef: "OLLAMA_API_KEY",
+        credentialOptional: true,
+        models: [{ modelId: "qwen3", displayName: "Qwen 3" }],
+      },
+      { http, secrets },
+    );
+    expect(adapter.adapterId).toBe("openai_compatible");
+  });
+
+  it("requires an explicit base URL for the compatible family", async () => {
     await expect(
-      createProviderAdapter(
+      createAdapter(
         {
-          providerId: "local",
-          kind: "openai_compatible",
-          model: "qwen",
-          apiKeyRef: { kind: "env", name: "ARK_API_KEY" },
+          providerId: "mystery",
+          adapterId: "openai_compatible",
+          displayName: "Mystery",
+          credentialRef: "ARK_API_KEY",
+          models: [{ modelId: "m", displayName: "M" }],
         },
         { http, secrets },
       ),
@@ -65,28 +95,34 @@ describe("createProviderAdapter", () => {
   });
 });
 
-describe("createProviderRegistry", () => {
-  it("caches adapters per provider id", async () => {
+describe("createModelRouter", () => {
+  it("caches one adapter per provider and resolves the bound model", async () => {
     let built = 0;
-    const registry = createProviderRegistry(config, { http, secrets }, {
+    const router = createModelRouter(config, { http, secrets }, {
       adapterFactory: async (providerConfig, deps) => {
         built += 1;
-        return createProviderAdapter(providerConfig, deps);
+        return createAdapter(providerConfig, deps);
       },
     });
 
-    const first = await registry.get("ark-default");
-    const second = await registry.get("ark-default");
+    const first = await router.resolve({ providerId: "ark-personal", modelId: "doubao-seed-1-6" });
+    const second = await router.resolve({ providerId: "ark-personal", modelId: "doubao-seed-1-6" });
 
-    expect(first).toBe(second);
+    expect(first.adapter).toBe(second.adapter);
+    expect(first.model.displayName).toBe("Doubao Seed 1.6");
     expect(built).toBe(1);
-    expect(registry.listConfigured()).toEqual(["ark-default", "gemini-fast"]);
+    expect(router.listProviders()).toEqual(["ark-personal", "gemini-fast"]);
   });
 
-  it("names the configured providers when an id is unknown", async () => {
-    const registry = createProviderRegistry(config, { http, secrets });
-    await expect(registry.get("nope")).rejects.toThrowError(
-      /Unknown providerId "nope". Configured providers: ark-default, gemini-fast/,
+  it("reports the configured ids when a binding does not resolve", async () => {
+    const router = createModelRouter(config, { http, secrets });
+
+    await expect(router.resolve({ providerId: "nope", modelId: "x" })).rejects.toThrowError(
+      /Unknown providerId "nope". Configured providers: ark-personal, gemini-fast/,
     );
+    const error = (await router
+      .resolve({ providerId: "ark-personal", modelId: "not-configured" })
+      .catch((caught: unknown) => caught)) as ProviderError;
+    expect(error.message).toMatch(/has no model "not-configured". Configured models: doubao-seed-1-6/);
   });
 });

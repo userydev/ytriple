@@ -1,72 +1,86 @@
 import type {
+  AdapterId,
+  GenerateMetadata,
+  GenerateRequest,
+  GenerateResult,
+  ModelConfig,
   ProviderAdapter,
   ProviderCapabilities,
-  ProviderKind,
-  ProviderRequest,
-  ProviderRequestMetadata,
-  ProviderResponse,
 } from "@ytriple/shared";
 import { ProviderError } from "@ytriple/shared";
-import { capabilitiesFor } from "./capabilities.js";
+import { resolveCapabilities } from "./adapterSupport.js";
+import { baselineFor } from "./capabilities.js";
 
 /**
- * Deterministic, offline provider doubles.
+ * Deterministic, offline adapter doubles.
  *
  * `scripted` answers from a function, `replay` answers from a recording, and
- * `recording` wraps a live adapter so a real run can be captured once and then
- * replayed forever without a network or an API key.
+ * `recording` wraps a live adapter so one real run can be captured and then
+ * replayed forever with no key and no network.
  */
 
-export interface ScriptedProviderOptions {
+export interface ScriptedAdapterOptions {
   providerId?: string;
-  kind?: ProviderKind;
-  model?: string;
+  adapterId?: AdapterId;
   capabilities?: Partial<ProviderCapabilities>;
-  respond: (request: ProviderRequest) => ProviderResponse | Promise<ProviderResponse>;
+  respond: (request: GenerateRequest) => GenerateResult | Promise<GenerateResult>;
 }
 
-export function createScriptedProvider(options: ScriptedProviderOptions): ProviderAdapter & {
-  readonly requests: ProviderRequest[];
-} {
-  const requests: ProviderRequest[] = [];
-  const kind = options.kind ?? "openai_compatible";
+export interface ScriptedAdapter extends ProviderAdapter {
+  readonly requests: GenerateRequest[];
+}
+
+export function createScriptedAdapter(options: ScriptedAdapterOptions): ScriptedAdapter {
+  const requests: GenerateRequest[] = [];
+  const adapterId = options.adapterId ?? "openai_compatible";
+  const baseline = { ...baselineFor(adapterId), ...options.capabilities };
 
   return {
+    adapterId,
     providerId: options.providerId ?? "scripted",
-    kind,
-    model: options.model ?? "scripted-model",
-    capabilities: capabilitiesFor(kind, options.capabilities),
     requests,
-    async complete(request) {
+    describe: (model) => resolveCapabilities(baseline, model),
+    async healthCheck() {
+      return { reachable: true, detected: baseline, mismatches: [] };
+    },
+    async generate(request) {
       requests.push(request);
       return options.respond(request);
     },
   };
 }
 
-/** Convenience wrapper: reply with a JSON payload per phase. */
-export function createJsonScriptedProvider(
-  handlers: Record<string, (request: ProviderRequest) => unknown>,
-  options: Omit<ScriptedProviderOptions, "respond"> = {},
-): ProviderAdapter & { readonly requests: ProviderRequest[] } {
-  return createScriptedProvider({
+export type PhaseHandler = (request: GenerateRequest) => unknown;
+
+/** Reply with a JSON payload per phase; the most common shape in tests. */
+export function createJsonScriptedAdapter(
+  handlers: Record<string, PhaseHandler>,
+  options: Omit<ScriptedAdapterOptions, "respond"> = {},
+): ScriptedAdapter {
+  return createScriptedAdapter({
     ...options,
     respond(request) {
       const handler = handlers[request.metadata.phase];
       if (!handler) {
         throw new ProviderError(
           `No scripted handler for phase "${request.metadata.phase}" (known: ${Object.keys(handlers).join(", ")})`,
-          { providerId: options.providerId ?? "scripted" },
+          { providerId: options.providerId ?? "scripted", code: "unsupported" },
         );
       }
       const payload = handler(request);
+      if (isGenerateResult(payload)) return payload;
+
       const text = typeof payload === "string" ? payload : JSON.stringify(payload);
       return {
         text,
+        toolCalls: [],
         usage: {
-          promptTokens: estimateTokens(`${request.system}\n${request.user}`),
-          completionTokens: estimateTokens(text),
+          inputTokens: estimateTokens(
+            `${request.system}${request.messages.map((message) => message.content).join("")}`,
+          ),
+          outputTokens: estimateTokens(text),
         },
+        degradations: [],
       };
     },
   });
@@ -76,67 +90,68 @@ export interface ProviderRecordingEntry {
   key: string;
   phase: string;
   agentId: string;
-  response: ProviderResponse;
+  result: GenerateResult;
 }
 
 export interface ProviderRecording {
   providerId: string;
-  kind: ProviderKind;
-  model: string;
+  adapterId: AdapterId;
   capabilities: ProviderCapabilities;
   entries: ProviderRecordingEntry[];
 }
 
 /**
- * Recording keys stay stable across runs because the runtime uses injected
- * deterministic clock and id ports when recording.
+ * Keys stay stable across runs because the runtime derives ids from a counter
+ * and takes time from an injected clock.
  */
-export function recordingKey(metadata: ProviderRequestMetadata): string {
+export function recordingKey(metadata: GenerateMetadata): string {
   return [metadata.agentId, metadata.subAgentId ?? "-", metadata.phase, metadata.round].join("#");
 }
 
-export interface ReplayProviderOptions {
+export interface ReplayAdapterOptions {
   /**
-   * When an exact key is missing, fall back to the first unused entry for the
-   * same agent and phase. Keeps hand-authored fixtures usable while the
-   * runtime's round counts evolve.
+   * When an exact key is missing, fall back to the next unused entry for the
+   * same agent and phase. Keeps hand-authored fixtures usable as round counts
+   * shift.
    */
   allowPhaseFallback?: boolean;
 }
 
-export function createReplayProvider(
+export function createReplayAdapter(
   recording: ProviderRecording,
-  options: ReplayProviderOptions = {},
+  options: ReplayAdapterOptions = {},
 ): ProviderAdapter {
   const allowPhaseFallback = options.allowPhaseFallback ?? true;
   const consumed = new Set<number>();
 
   return {
+    adapterId: recording.adapterId,
     providerId: recording.providerId,
-    kind: recording.kind,
-    model: recording.model,
-    capabilities: recording.capabilities,
-    async complete(request) {
+    describe: (model) => resolveCapabilities(recording.capabilities, model),
+    async healthCheck() {
+      return { reachable: true, detected: recording.capabilities, mismatches: [] };
+    },
+    async generate(request) {
       const key = recordingKey(request.metadata);
 
-      const exactIndex = recording.entries.findIndex(
+      const exact = recording.entries.findIndex(
         (entry, index) => entry.key === key && !consumed.has(index),
       );
-      if (exactIndex >= 0) {
-        consumed.add(exactIndex);
-        return recording.entries[exactIndex]!.response;
+      if (exact >= 0) {
+        consumed.add(exact);
+        return recording.entries[exact]!.result;
       }
 
       if (allowPhaseFallback) {
-        const phaseIndex = recording.entries.findIndex(
+        const byPhase = recording.entries.findIndex(
           (entry, index) =>
             !consumed.has(index) &&
             entry.phase === request.metadata.phase &&
             entry.agentId === request.metadata.agentId,
         );
-        if (phaseIndex >= 0) {
-          consumed.add(phaseIndex);
-          return recording.entries[phaseIndex]!.response;
+        if (byPhase >= 0) {
+          consumed.add(byPhase);
+          return recording.entries[byPhase]!.result;
         }
       }
 
@@ -144,49 +159,61 @@ export function createReplayProvider(
         `Recording has no entry for "${key}". Available keys: ${recording.entries
           .map((entry) => entry.key)
           .join(", ")}`,
-        { providerId: recording.providerId },
+        { providerId: recording.providerId, code: "unsupported" },
       );
     },
   };
 }
 
-export interface RecordingProviderOptions {
+export interface RecordingAdapterOptions {
   inner: ProviderAdapter;
+  model: ModelConfig;
   onEntry?: (entry: ProviderRecordingEntry) => void;
 }
 
-/** Wraps a live adapter and accumulates a replayable recording. */
-export function createRecordingProvider(options: RecordingProviderOptions): ProviderAdapter & {
+export interface RecordingAdapter extends ProviderAdapter {
   readonly recording: ProviderRecording;
-} {
+}
+
+/** Wraps a live adapter and accumulates a replayable recording. */
+export function createRecordingAdapter(options: RecordingAdapterOptions): RecordingAdapter {
   const { inner } = options;
   const recording: ProviderRecording = {
     providerId: inner.providerId,
-    kind: inner.kind,
-    model: inner.model,
-    capabilities: inner.capabilities,
+    adapterId: inner.adapterId,
+    capabilities: inner.describe(options.model),
     entries: [],
   };
 
   return {
+    adapterId: inner.adapterId,
     providerId: inner.providerId,
-    kind: inner.kind,
-    model: inner.model,
-    capabilities: inner.capabilities,
     recording,
-    async complete(request) {
-      const response = await inner.complete(request);
+    describe: (model) => inner.describe(model),
+    healthCheck: (model) => inner.healthCheck(model),
+    async generate(request) {
+      const result = await inner.generate(request);
       const entry: ProviderRecordingEntry = {
         key: recordingKey(request.metadata),
         phase: request.metadata.phase,
         agentId: request.metadata.agentId,
-        response,
+        result,
       };
       recording.entries.push(entry);
       options.onEntry?.(entry);
-      return response;
+      return result;
     },
   };
+}
+
+function isGenerateResult(value: unknown): value is GenerateResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "toolCalls" in value &&
+    "usage" in value &&
+    "degradations" in value
+  );
 }
 
 function estimateTokens(text: string): number {

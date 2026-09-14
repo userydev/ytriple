@@ -1,128 +1,155 @@
 import type {
   HttpPort,
+  ModelBinding,
+  ModelConfig,
   ProviderAdapter,
   ProviderConfig,
-  SecretsPort,
+  SecretPort,
   YtripleConfig,
 } from "@ytriple/shared";
 import { ProviderError, findProviderConfig } from "@ytriple/shared";
-import { ARK_DEFAULT_BASE_URL, createArkProvider } from "./ark.js";
-import { capabilitiesFor } from "./capabilities.js";
-import { GOOGLE_DEFAULT_BASE_URL, createGoogleProvider } from "./google.js";
-import { createOpenAiCompatibleProvider } from "./openaiCompatible.js";
-
-export const DEEPSEEK_DEFAULT_BASE_URL = "https://api.deepseek.com/v1";
+import { ARK_DEFAULT_BASE_URL, createArkAdapter } from "./ark.js";
+import { GOOGLE_DEFAULT_BASE_URL, createGoogleAdapter } from "./google.js";
+import { createOpenAiCompatibleAdapter } from "./openaiCompatible.js";
 
 export interface ProviderDeps {
   http: HttpPort;
-  secrets: SecretsPort;
+  secrets: SecretPort;
 }
 
-export interface ProviderRegistry {
-  get(providerId: string): Promise<ProviderAdapter>;
-  listConfigured(): string[];
+export interface ResolvedModel {
+  adapter: ProviderAdapter;
+  model: ModelConfig;
 }
 
-export async function createProviderAdapter(
+/**
+ * Resolves `ModelBinding -> { adapter, model }`. Core holds this interface and
+ * never learns which vendor is behind an id, so adding a vendor stays a
+ * configuration change.
+ */
+export interface ModelRouter {
+  resolve(binding: ModelBinding): Promise<ResolvedModel>;
+  listProviders(): string[];
+}
+
+export async function createAdapter(
   config: ProviderConfig,
   deps: ProviderDeps,
 ): Promise<ProviderAdapter> {
-  const capabilities = capabilitiesFor(config.kind, config.capabilityOverrides);
-  const apiKey = await resolveApiKey(config, deps.secrets);
+  const apiKey = await resolveCredential(config, deps.secrets);
 
-  switch (config.kind) {
+  switch (config.adapterId) {
     case "ark":
-      return createArkProvider({
+      if (!apiKey) {
+        throw new ProviderError(`Provider ${config.providerId} requires a credential`, {
+          providerId: config.providerId,
+          code: "auth_failed",
+        });
+      }
+      return createArkAdapter({
         providerId: config.providerId,
-        model: config.model,
         baseUrl: config.baseUrl ?? ARK_DEFAULT_BASE_URL,
         apiKey,
-        capabilities,
         http: deps.http,
       });
     case "google":
-      return createGoogleProvider({
+      if (!apiKey) {
+        throw new ProviderError(`Provider ${config.providerId} requires a credential`, {
+          providerId: config.providerId,
+          code: "auth_failed",
+        });
+      }
+      return createGoogleAdapter({
         providerId: config.providerId,
-        model: config.model,
         baseUrl: config.baseUrl ?? GOOGLE_DEFAULT_BASE_URL,
         apiKey,
-        capabilities,
         http: deps.http,
       });
-    case "deepseek":
-      return createOpenAiCompatibleProvider({
-        providerId: config.providerId,
-        model: config.model,
-        baseUrl: config.baseUrl ?? DEEPSEEK_DEFAULT_BASE_URL,
-        apiKey,
-        capabilities,
-        http: deps.http,
-        kind: "deepseek",
-      });
-    case "openai_compatible": {
+    case "openai_compatible":
       if (!config.baseUrl) {
         throw new ProviderError(
-          `Provider ${config.providerId} is openai_compatible and needs an explicit baseUrl`,
-          { providerId: config.providerId },
+          `Provider ${config.providerId} uses the openai_compatible adapter and needs an explicit baseUrl`,
+          { providerId: config.providerId, code: "unsupported" },
         );
       }
-      return createOpenAiCompatibleProvider({
+      return createOpenAiCompatibleAdapter({
         providerId: config.providerId,
-        model: config.model,
         baseUrl: config.baseUrl,
-        apiKey,
-        capabilities,
+        ...(apiKey ? { apiKey } : {}),
         http: deps.http,
       });
-    }
   }
 }
 
-export interface ProviderRegistryOptions {
-  /** Swapped in tests and by the CLI harness to run against a recording. */
+export interface ModelRouterOptions {
+  /** Swapped by tests and by the CLI harness to run against a recording. */
   adapterFactory?: (config: ProviderConfig, deps: ProviderDeps) => Promise<ProviderAdapter>;
 }
 
-export function createProviderRegistry(
-  config: YtripleConfig,
+export function createModelRouter(
+  config: Pick<YtripleConfig, "providers">,
   deps: ProviderDeps,
-  options: ProviderRegistryOptions = {},
-): ProviderRegistry {
-  const factory = options.adapterFactory ?? createProviderAdapter;
+  options: ModelRouterOptions = {},
+): ModelRouter {
+  const factory = options.adapterFactory ?? createAdapter;
   const cache = new Map<string, Promise<ProviderAdapter>>();
 
   return {
-    listConfigured: () => config.providers.map((provider) => provider.providerId),
-    get(providerId: string) {
-      const cached = cache.get(providerId);
-      if (cached) return cached;
-
-      const providerConfig = findProviderConfig(config, providerId);
+    listProviders: () => config.providers.map((provider) => provider.providerId),
+    async resolve(binding) {
+      const providerConfig = findProviderConfig(config, binding.providerId);
       if (!providerConfig) {
-        return Promise.reject(
-          new ProviderError(
-            `Unknown providerId "${providerId}". Configured providers: ${
-              config.providers.map((provider) => provider.providerId).join(", ") || "none"
-            }`,
-            { providerId },
-          ),
+        throw new ProviderError(
+          `Unknown providerId "${binding.providerId}". Configured providers: ${
+            config.providers.map((provider) => provider.providerId).join(", ") || "none"
+          }`,
+          { providerId: binding.providerId, code: "unsupported" },
         );
       }
 
-      const pending = factory(providerConfig, deps);
-      cache.set(providerId, pending);
-      return pending;
+      const model = providerConfig.models.find((entry) => entry.modelId === binding.modelId);
+      if (!model) {
+        throw new ProviderError(
+          `Provider "${binding.providerId}" has no model "${binding.modelId}". Configured models: ${
+            providerConfig.models.map((entry) => entry.modelId).join(", ") || "none"
+          }`,
+          { providerId: binding.providerId, code: "unsupported" },
+        );
+      }
+
+      let pending = cache.get(binding.providerId);
+      if (!pending) {
+        pending = factory(providerConfig, deps);
+        cache.set(binding.providerId, pending);
+      }
+
+      return { adapter: await pending, model };
     },
   };
 }
 
-async function resolveApiKey(config: ProviderConfig, secrets: SecretsPort): Promise<string> {
-  const apiKey = await secrets.get(config.apiKeyRef.name);
-  if (!apiKey) {
-    throw new ProviderError(
-      `No credential found for ${config.providerId}: secret ref "${config.apiKeyRef.name}" (${config.apiKeyRef.kind}) is unset`,
-      { providerId: config.providerId },
-    );
+async function resolveCredential(
+  config: ProviderConfig,
+  secrets: SecretPort,
+): Promise<string | undefined> {
+  try {
+    const value = await secrets.resolve(config.credentialRef);
+    if (value) return value;
+  } catch (error) {
+    if (!config.credentialOptional) {
+      throw new ProviderError(
+        `No credential for ${config.providerId}: credentialRef "${config.credentialRef}" could not be resolved (${
+          error instanceof Error ? error.message : "unknown error"
+        })`,
+        { providerId: config.providerId, code: "auth_failed" },
+      );
+    }
+    return undefined;
   }
-  return apiKey;
+
+  if (config.credentialOptional) return undefined;
+  throw new ProviderError(
+    `No credential for ${config.providerId}: credentialRef "${config.credentialRef}" resolved to an empty value`,
+    { providerId: config.providerId, code: "auth_failed" },
+  );
 }

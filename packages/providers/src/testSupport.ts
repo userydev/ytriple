@@ -1,4 +1,4 @@
-import type { HttpPort, HttpRequestInit, SecretsPort } from "@ytriple/shared";
+import type { HttpPort, HttpRequestInit, SecretPort } from "@ytriple/shared";
 
 export interface FakeHttpCall {
   init: HttpRequestInit;
@@ -12,7 +12,7 @@ export interface FakeHttpPort extends HttpPort {
 
 /** HttpPort double: no adapter test may ever reach the network. */
 export function createFakeHttpPort(
-  responder: (init: HttpRequestInit) => { status?: number; body: unknown },
+  responder: (init: HttpRequestInit, call: number) => { status?: number; body: unknown },
 ): FakeHttpPort {
   const calls: FakeHttpCall[] = [];
 
@@ -24,11 +24,12 @@ export function createFakeHttpPort(
       return last.body;
     },
     async request(init: HttpRequestInit) {
+      const index = calls.length;
       calls.push({
         init,
         body: init.body ? (JSON.parse(init.body) as Record<string, unknown>) : {},
       });
-      const result = responder(init);
+      const result = responder(init, index);
       return {
         status: result.status ?? 200,
         headers: { "content-type": "application/json" },
@@ -38,13 +39,14 @@ export function createFakeHttpPort(
   };
 }
 
-export function createFakeSecretsPort(values: Record<string, string>): SecretsPort {
+export function createFakeSecretPort(values: Record<string, string>): SecretPort {
   return {
-    async has(refName) {
-      return refName in values;
-    },
-    async get(refName) {
-      return values[refName];
+    async resolve(credentialRef) {
+      const value = values[credentialRef];
+      if (value === undefined) {
+        throw new Error(`secret "${credentialRef}" is not set`);
+      }
+      return value;
     },
   };
 }
