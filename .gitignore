@@ -12,3 +12,4 @@ src-tauri/target/
 ytriple-outputs/
 dist-web/
 src-tauri/gen/
+*.tsbuildinfo
