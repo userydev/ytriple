@@ -1,5 +1,11 @@
 # yTriple V1 Runtime And Tool Contract
 
+> **Superseded.** 本文档基于「固定三 Agent」的 V1 假设，已被「可配置 Agent 团队」模型取代，保留作为历史决策记录，不再作为实现依据。
+>
+> 现行契约：[Positioning](positioning.md) · [Agent 团队契约](../contracts/agent-team-contract.md) · [Provider 契约](../contracts/provider-contract.md) · [运行时边界契约](../contracts/runtime-boundary-contract.md)
+>
+> 本文件中仍然有效的部分：工作区只读工具的输入输出形状与默认排除规则；固定管线、`quick_clarify` 状态和 artifact manifest 作废。
+
 ## Purpose
 
 本文件定义 yTriple V1 的运行时边界与工具契约，服务于后续桌面端实现、agent 编排和工具层开发。
@@ -163,10 +169,7 @@ V1 建议三个 Agent 都使用结构化输出，避免合并阶段过度依赖�
   ],
   "final_prd_markdown": "...",
   "artifact_manifest": [
-    "01-final-prd.md",
-    "02-assumptions-and-open-questions.md",
-    "03-research-notes.md",
-    "04-specialist-review.md"
+    "prd.md"
   ]
 }
 ```
@@ -381,7 +384,7 @@ V1 最小工具集如下。
 ```json
 {
   "artifacts_dir": "/absolute/path/to/output",
-  "filename": "01-final-prd.md",
+  "filename": "prd.md",
   "content": "# ..."
 }
 ```
@@ -390,7 +393,7 @@ V1 最小工具集如下。
 
 ```json
 {
-  "path": "/absolute/path/to/output/01-final-prd.md",
+  "path": "/absolute/path/to/output/prd.md",
   "created": true
 }
 ```
@@ -436,10 +439,7 @@ V1 最小工具集如下。
 <workspace-or-app-output-root>/
   ytriple-outputs/
     <task-id>/
-      01-final-prd.md
-      02-assumptions-and-open-questions.md
-      03-research-notes.md
-      04-specialist-review.md
+      prd.md
 ```
 
 ### Naming Rules

@@ -1,5 +1,11 @@
 # yTriple V1 Information Architecture
 
+> **Superseded.** 本文档基于「固定三 Agent」的 V1 假设，已被「可配置 Agent 团队」模型取代，保留作为历史决策记录，不再作为实现依据。
+>
+> 现行契约：[Positioning](positioning.md) · [Agent 团队契约](../contracts/agent-team-contract.md) · [Provider 契约](../contracts/provider-contract.md) · [运行时边界契约](../contracts/runtime-boundary-contract.md)
+>
+> 本文件中仍然有效的部分：一级对象划分与「以任务为核心、单一 PRD 为结果」的 IA 原则；固定三舱与固定角色绑定作废。
+
 ## Purpose
 
 本文件定义 yTriple V1 的信息架构，回答三个问题：

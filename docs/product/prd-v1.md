@@ -1,5 +1,11 @@
 # yTriple 产品需求文档（PRD V1）
 
+> **Superseded.** 本文档基于「固定三 Agent」的 V1 假设，已被「可配置 Agent 团队」模型取代，保留作为历史决策记录，不再作为实现依据。
+>
+> 现行契约：[Positioning](positioning.md) · [Agent 团队契约](../contracts/agent-team-contract.md) · [Provider 契约](../contracts/provider-contract.md) · [运行时边界契约](../contracts/runtime-boundary-contract.md)
+>
+> 本文件中仍然有效的部分：问题陈述与「先给方向、再求精确」的体验原则；但目标用户已收窄为个人开发者与个人自媒体工作者，不再包含小团队。
+
 ## 文档信息
 
 - 产品名：yTriple
@@ -137,17 +143,14 @@ Conductor 审查、合并、收敛
 
 ### 输出形态
 
-一次任务的核心不是一条聊天回复，而是一个交付包。V1 默认输出：
+一次任务的核心不是一条聊天回复，而是一份正式文档。默认输出只有一个文件：
 
-- `01-final-prd.md`
-- `02-assumptions-and-open-questions.md`
-- `03-research-notes.md`
-- `04-specialist-review.md`
+- `prd.md`
 
 其中：
 
-- `01-final-prd.md` 是唯一主产物
-- 其他文件是独立参考资料，不混入 PRD 正文
+- `prd.md` 是唯一默认交付物，假设与未决问题写在文档内部
+- 调研笔记与专业审查意见是过程材料，只体现在 `prd.md` 的相关结论里或在界面中查看，不单独成为默认交付文件
 
 ### Tri-Panel Layout
 
@@ -270,7 +273,7 @@ V1 的核心模板为 `PRD`。它不只是一个提示词，而是一份固定 c
 - Quick Clarify 是否能在少量问题内启动执行
 - Researcher 是否只做轻量调研而不过度发散
 - Specialist 是否按模板提供稳定的专业视角
-- Conductor 是否能稳定输出四份交付文档
+- Conductor 是否能稳定输出一份干净的 `prd.md`
 - 工作区只读与新文档写入边界是否正确
 
 ### 建议的验证层次

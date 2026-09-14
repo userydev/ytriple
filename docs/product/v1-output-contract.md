@@ -1,5 +1,9 @@
 # yTriple V1 Output Contract
 
+> **Active（保留决策）。** 本文档定义的单一交付物 `prd.md` 在新的 Agent 团队模型下继续有效，是权威输出定义。
+>
+> 文中「固定三 Agent」「左/右面板固定绑定 Researcher/Specialist」的表述已被 [Agent 团队契约](../contracts/agent-team-contract.md) 取代：交付物契约不变，团队规模与面板分栏改为由团队定义决定。
+
 ## Purpose
 
 This document defines what yTriple V1 should deliver to the user.
