@@ -1,0 +1,93 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+      - name: Renderer bundle
+        run: npm run build --workspace @ytriple/desktop
+
+      # The runtime boundary contract: core must be importable where no host
+      # capability exists, so nothing it emits may reach for one.
+      - name: core emits no host import
+        run: |
+          node --input-type=module -e '
+            import { readdirSync, readFileSync, statSync } from "node:fs";
+            import { join } from "node:path";
+
+            const files = [];
+            const walk = (dir) => {
+              for (const entry of readdirSync(dir)) {
+                const path = join(dir, entry);
+                if (statSync(path).isDirectory()) walk(path);
+                else if (path.endsWith(".js") && !path.endsWith(".test.js")) files.push(path);
+              }
+            };
+            walk("packages/core/dist");
+
+            const offenders = [];
+            for (const file of files) {
+              for (const [, specifier] of readFileSync(file, "utf8").matchAll(
+                /(?:from|import|require)\s*\(?\s*["'"'"']([^"'"'"']+)["'"'"']/g,
+              )) {
+                const bare = !specifier.startsWith(".") && !specifier.startsWith("/");
+                if (bare && specifier !== "@ytriple/shared") {
+                  offenders.push(`${file} -> ${specifier}`);
+                }
+              }
+            }
+
+            if (offenders.length > 0) {
+              console.error("packages/core reached for a host capability:");
+              for (const offender of offenders) console.error(`  ${offender}`);
+              process.exit(1);
+            }
+            console.log(`checked ${files.length} emitted core modules: no host imports`);
+          '
+
+      - name: headless task harness (offline replay, no key, no network)
+        run: |
+          npm run harness -- --scenario demo --out "$RUNNER_TEMP/harness" --task-id ci-run
+          test -f "$RUNNER_TEMP/harness/ytriple-outputs/ci-run/prd.md"
+          echo "--- prd.md ---"
+          cat "$RUNNER_TEMP/harness/ytriple-outputs/ci-run/prd.md"
+
+  shell:
+    name: Tauri shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev \
+            librsvg2-dev libsecret-1-dev libayatana-appindicator3-dev patchelf
+      - name: Shell tests
+        working-directory: src-tauri
+        run: cargo test
+      - name: Shell lints
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings

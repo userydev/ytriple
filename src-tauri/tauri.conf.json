@@ -1,29 +1,32 @@
 {
-  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "$schema": "https://schema.tauri.app/config/2",
   "productName": "yTriple",
-  "version": "0.1.0",
-  "identifier": "com.ytriple.desktop",
+  "version": "0.2.0",
+  "identifier": "dev.ytriple.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
-  },
-  "bundle": {
-    "active": false
+    "frontendDist": "../apps/desktop/dist-web",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeDevCommand": "npm run dev --workspace @ytriple/desktop",
+    "beforeBuildCommand": "npm run build && npm run build --workspace @ytriple/desktop"
   },
   "app": {
     "windows": [
       {
         "title": "yTriple",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 1080,
-        "minHeight": 680
+        "width": 1440,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 640,
+        "resizable": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost"
     }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/icon.png"]
   }
 }
