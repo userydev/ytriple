@@ -680,15 +680,12 @@ button.primary {
   font-size: 11px;
 }
 
-.prd-fab {
-  position: fixed;
-  right: 20px;
-  /* Clear the member pane's usage footer. */
-  bottom: 48px;
-  background: var(--accent);
+/* In the app bar rather than floating: a button over a pane hides content. */
+.artifact-toggle {
+  padding: 2px 10px;
+  font-size: 12px;
   border-color: var(--accent);
-  color: #0b1220;
-  font-weight: 600;
+  color: var(--accent);
 }
 
 .markdown h1 {

@@ -127,6 +127,15 @@ function AppShell(props: ShellProps): JSX.Element {
           {taskView.degradations.length > 0 && (
             <span className="tag tag-warn">{taskView.degradations.length} degradation(s)</span>
           )}
+          {view === "workspace" && taskView.artifact && (
+            <button
+              type="button"
+              className="artifact-toggle"
+              onClick={() => props.onShowPrd(!prdVisible)}
+            >
+              {prdVisible ? "Back to conversation" : `Show ${taskView.artifact.filename}`}
+            </button>
+          )}
         </div>
 
         <nav className="view-switch">
@@ -203,11 +212,6 @@ function AppShell(props: ShellProps): JSX.Element {
         </main>
       )}
 
-      {view === "workspace" && taskView.artifact && !prdVisible && (
-        <button className="prd-fab" type="button" onClick={() => props.onShowPrd(true)}>
-          Show {taskView.artifact.filename}
-        </button>
-      )}
     </div>
   );
 }

@@ -23,6 +23,8 @@ jobs:
       - run: npm run lint
       - run: npm run build
       - run: npm test
+      - name: Renderer bundle
+        run: npm run build --workspace @ytriple/desktop
 
       # The runtime boundary contract: core must be importable where no host
       # capability exists, so nothing it emits may reach for one.
@@ -68,3 +70,24 @@ jobs:
           test -f "$RUNNER_TEMP/harness/ytriple-outputs/ci-run/prd.md"
           echo "--- prd.md ---"
           cat "$RUNNER_TEMP/harness/ytriple-outputs/ci-run/prd.md"
+
+  shell:
+    name: Tauri shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev libgtk-3-dev \
+            librsvg2-dev libsecret-1-dev libayatana-appindicator3-dev patchelf
+      - name: Shell tests
+        working-directory: src-tauri
+        run: cargo test
+      - name: Shell lints
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
