@@ -1,8 +1,0 @@
-node_modules
-release
-out
-test-results
-.git
-.env*
-.ytriple-server
-apps
