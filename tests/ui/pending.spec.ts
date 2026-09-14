@@ -30,7 +30,7 @@ test('a lost submit acknowledgement survives reopening and is reconciled without
   try {
     let page = await launch();
     await page.getByLabel('新工作目标').fill('隔离验证：提交回执丢失后继续同一工作');
-    await page.getByRole('button', { name: '建立工作', exact: true }).click();
+    await page.getByRole('button', { name: '先准备材料', exact: true }).click();
     const prompt = '请核对时间边界，形成完整的活动安排。';
     await page.getByLabel('与团队交流').fill(prompt);
     await page.getByRole('button', { name: '发送给团队', exact: true }).click();

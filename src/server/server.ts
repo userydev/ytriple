@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import { timingSafeEqual, createHash, randomUUID } from 'node:crypto';
 import type { AppNotification } from '../shared/contracts';
 import { AppService, publicError, type ServiceOptions } from '../application/service';
+import { isNotAcceptedError } from '../shared/error-protocol';
 
 export function createServer(options:Omit<ServiceOptions,'mode'|'notify'> & {token:string}) {
   if(options.token.length<24) throw new Error('服务访问令牌至少需要 24 个字符');
@@ -26,7 +27,7 @@ export function createServer(options:Omit<ServiceOptions,'mode'|'notify'> & {tok
     const device=request.headers['x-ytriple-device'];
     if(typeof device!=='string' || !/^[\w-]{1,100}$/.test(device) || !body || typeof body.method!=='string') return reply.code(400).send({error:'请求格式无效'});
     try {return {result:(await service.dispatch(body.method,body.args,device)) ?? null};}
-    catch(error) {return reply.code(400).send({error:publicError(error)});}
+    catch(error) {return reply.code(400).send({error:publicError(error),...(isNotAcceptedError(error)?{code:'NOT_ACCEPTED'}:{})});}
   });
   app.get('/api/events',async(request,reply)=> {
     const query=request.query as {after?:string;epoch?:string};const after=Number(query.after || 0);const changedEpoch=query.epoch!==epoch;

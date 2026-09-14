@@ -10,6 +10,7 @@ import { LocalVault } from './vault';
 import { readConnection, writeConfig } from './config-file';
 import { createRemoteApi, type WorkApi } from '../client/remote';
 import { normalizeServerUrl, validateRpc } from '../shared/validation';
+import { isNotAcceptedError, markNotAccepted } from '../shared/error-protocol';
 import type { AppNotification, ConnectionConfig, ConnectionView, Material } from '../shared/contracts';
 for(const key of ['LANGCHAIN_TRACING','LANGCHAIN_TRACING_V2','LANGSMITH_TRACING','LANGCHAIN_VERBOSE']) process.env[key]='false';
 app.setPath('userData',process.env.YTRIPLE_DESKTOP_DATA_DIR ? resolve(process.env.YTRIPLE_DESKTOP_DATA_DIR) : join(app.getPath('appData'),'ytriple-p1'));
@@ -43,7 +44,12 @@ async function saveConnection(input:unknown):Promise<ConnectionView> {
   writeConfig(join(directory,'connection.json'),{mode:connection.mode,serverUrl:connection.serverUrl,deviceId});
   notify({workId:''});return connectionView();
 }
-app.whenReady().then(()=> {
+const primaryInstance = app.requestSingleInstanceLock();
+if (!primaryInstance) app.quit();
+app.on('second-instance',()=>{if(window){if(window.isMinimized())window.restore();window.show();window.focus();}});
+if (primaryInstance) app.whenReady().then(()=> {
+  // Expose the renderer's labelled controls to native assistive technologies.
+  app.setAccessibilitySupportEnabled(true);
   directory=app.getPath('userData');mkdirSync(directory,{recursive:true,mode:0o700});vault=new LocalVault(join(directory,'credentials.enc.json'));
   const stored=readConnection(join(directory,'connection.json'));
   deviceId=stored.deviceId || `desktop-${randomUUID()}`;
@@ -52,7 +58,8 @@ app.whenReady().then(()=> {
   writeConfig(join(directory,'connection.json'),{...stored,deviceId});
   const rendererFile=join(__dirname,'../renderer/index.html');
   const allowedUrl=process.env.ELECTRON_RENDERER_URL || pathToFileURL(rendererFile).toString();
-  window=new BrowserWindow({width:1540,height:980,minWidth:900,minHeight:650,title:'ytriple',backgroundColor:'#f8f7f4',show:false,webPreferences:{preload:join(__dirname,'../preload/index.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
+  window=new BrowserWindow({width:1440,height:900,minWidth:900,minHeight:650,title:process.env.YTRIPLE_WINDOW_TITLE || 'ytriple',backgroundColor:'#ffffff',show:false,webPreferences:{preload:join(__dirname,'../preload/index.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true}});
+  if(process.env.YTRIPLE_WINDOW_TITLE) window.on('page-title-updated',event=>event.preventDefault());
   window.webContents.session.webRequest.onBeforeRequest((details,callback)=> {
     if(details.webContentsId!==window?.webContents.id)return callback({cancel:false});
     const url=new URL(details.url);const allowed=new URL(allowedUrl);
@@ -76,7 +83,7 @@ app.whenReady().then(()=> {
       if(typeof method!=='string')throw new Error('不支持的操作');
       const request=validateRpc(method,args);const api=workApi();
       return await (api[request.method] as (input:unknown)=>Promise<unknown>)(request.args);
-    } catch(error) {throw new Error(publicError(error));}
+    } catch(error) {throw isNotAcceptedError(error) ? markNotAccepted(new Error(publicError(error))) : new Error(publicError(error));}
   });
   window.once('ready-to-show',()=>window?.show());
   if(process.env.ELECTRON_RENDERER_URL) void window.loadURL(process.env.ELECTRON_RENDERER_URL);else void window.loadFile(rendererFile);

@@ -61,6 +61,31 @@ describe('SQLite durable state and run ownership', () => {
     expect(repository.listWorks()).toHaveLength(1);
   });
 
+  it('resolves internal event relation keys to real IDs within the same run', () => {
+    const work = repository.createWork({ title: '事件关系', goal: '保留真实关系' }).work;
+    const run = start(work.id);
+    const plan = repository.appendEvent(run.id, { type: 'plan', title: '规划', body: '明确处理步骤。', key: 'plan' });
+    const delegation = repository.appendEvent(run.id, { type: 'delegation', title: '委派', body: '交给研究员。', key: 'delegation:t1', relatedEventKeys: ['plan'] });
+    expect(delegation.relatedEventIds).toEqual([plan.id]);
+    expect(repository.getWork(work.id).events[1].relatedEventIds).toEqual([plan.id]);
+    expect(() => repository.appendEvent(run.id, { type: 'analysis', title: '缺失关系', body: '不能凭空关联。', relatedEventKeys: ['missing'] })).toThrow('尚未写入');
+    const nextRun = start(work.id);
+    expect(() => repository.appendEvent(nextRun.id, { type: 'analysis', title: '跨运行关系', body: '不能借用上一轮同名键。', relatedEventKeys: ['plan'] })).toThrow('尚未写入');
+    expect(repository.getWork(work.id).events).toHaveLength(2);
+  });
+
+  it('allows a process correction before the work has its first deliverable', () => {
+    const work = repository.createWork({ title: '先纠正过程', goal: '形成可靠成果' }).work;
+    const run = start(work.id);
+    const event = repository.appendEvent(run.id, { type: 'analysis', title: '待纠正步骤', body: '先做了一个需要复核的判断。', key: 'analysis' });
+    const correction = repository.createRun({
+      workId: work.id, prompt: '纠正这个判断', intent: 'revise', reference: { kind: 'event', id: event.id, quote: '需要复核的判断' },
+    }, repository.getSettings());
+    expect(correction.baseArtifact).toBeUndefined();
+    expect(correction.reference).toEqual({ kind: 'event', id: event.id, quote: '需要复核的判断' });
+    expect(correction.referenceContent).toBe(event.body);
+  });
+
   it('deduplicates material by exact content within its work, without changing the original', () => {
     const first = repository.createWork({ title: '第一项', goal: '' }).work;
     const second = repository.createWork({ title: '第二项', goal: '' }).work;

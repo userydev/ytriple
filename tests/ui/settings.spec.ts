@@ -59,19 +59,19 @@ test('settings connects an empty desktop, keeps model credentials on the service
     await settings.getByRole('button', { name: '完成', exact: true }).click();
 
     await page.getByLabel('新工作目标').fill('隔离测试：安排读书会的活动流程');
-    await page.getByRole('button', { name: '建立工作', exact: true }).click();
+    await page.getByRole('button', { name: '先准备材料', exact: true }).click();
     await page.getByLabel('与团队交流', { exact: true }).fill('整理一份安排，核对回顾时间。');
     await page.getByRole('button', { name: '发送给团队', exact: true }).click();
-    await expect(page.getByLabel('结果窗口').getByRole('heading', { name: '活动安排', exact: true })).toBeVisible();
+    await expect(page.getByLabel('成果').getByRole('heading', { name: '活动安排', exact: true })).toBeVisible();
     expect(modelCalls).toBe(4);
-    const process = page.getByLabel('思维窗口', { exact: true });
-    await process.getByRole('button', { name: '聚焦看见协作与方法', exact: true }).click();
+    const process = page.getByLabel('协作过程', { exact: true });
+    await process.getByRole('button', { name: '聚焦协作过程', exact: true }).click();
     await expect(process).toBeVisible();
-    await expect(page.getByLabel('主窗口', { exact: true })).toBeHidden();
-    await expect(page.getByLabel('结果窗口', { exact: true })).toBeHidden();
+    await expect(page.getByLabel('交流', { exact: true })).toBeHidden();
+    await expect(page.getByLabel('成果', { exact: true })).toBeHidden();
     await process.getByRole('button', { name: '还原三窗口', exact: true }).click();
-    await expect(page.getByLabel('主窗口', { exact: true })).toBeVisible();
-    await expect(page.getByLabel('结果窗口', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('交流', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('成果', { exact: true })).toBeVisible();
     const separator = page.getByRole('separator', { name: '调整第 1 与第 2 窗口宽度', exact: true });
     await separator.focus();
     await separator.press('ArrowRight');
@@ -83,7 +83,7 @@ test('settings connects an empty desktop, keeps model credentials on the service
     await expect(page.locator('.reference-chip')).toContainText('研究员：整理活动流程');
     await page.getByLabel('与团队交流', { exact: true }).fill('仅解释这一步的完成要求，不修改成果。');
     await page.getByRole('button', { name: '发送给团队', exact: true }).click();
-    await expect(page.getByLabel('主窗口').getByText('这一步按目标检查时间和内容是否相符，仍需确认参加者偏好。', { exact: true })).toBeVisible();
+    await expect(page.getByLabel('交流').getByText('这一步按目标检查时间和内容是否相符，仍需确认参加者偏好。', { exact: true })).toBeVisible();
     await expect(page.getByLabel('成果版本')).toHaveValue('1');
     await page.getByRole('button', { name: 'ytriple 首页', exact: true }).click();
     const work = repository.listWorks()[0];

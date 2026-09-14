@@ -9,4 +9,4 @@ export const DEFAULT_SETTINGS: AppSettings = {
   skills: [{ id: 'clear-work', name: '目标—依据—核查', version: '1.0.0', description: '先明确要求，对照材料和反例，检查成果是否满足目标。', instructions: '围绕实际任务明确目标和完成要求；区分材料事实、判断与未知；对照反例和限制核查；公开解释方法及不足；修订时说明修改依据。仅输出面向用户的分析，不输出隐藏思维链。', enabled: true, requires: [] }],
   limits: { maxCalls: 8, maxConcurrency: 2, timeoutMs: 180000, maxOutputTokens: 4096 }
 };
-export const DEFAULT_VIEW: ViewState = { focusedPane: 'all', activePane: 'conversation', widths: [34, 33, 33], scroll: {} };
+export const DEFAULT_VIEW: ViewState = { focusedPane: 'all', activePane: 'conversation', widths: [40, 32, 28], scroll: {} };

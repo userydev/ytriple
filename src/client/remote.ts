@@ -1,4 +1,5 @@
 import type { AppNotification, DesktopApi } from '../shared/contracts';
+import { markNotAccepted } from '../shared/error-protocol';
 export type WorkApi = Omit<DesktopApi,'getConnection'|'saveConnection'|'importMaterials'>;
 export interface RemoteOptions { serverUrl:string; token:string; deviceId:string; fetch?:typeof fetch }
 function timedSignal(parent?:AbortSignal) {
@@ -15,7 +16,7 @@ export function createRemoteApi(options:RemoteOptions):WorkApi {
   const rpc=async(method:string,args?:unknown):Promise<unknown>=> {
     let response:Response;let data:{result?:unknown;error?:string};const deadline=timedSignal();
     try {response=await request(`${base}/api/rpc`,{method:'POST',headers,body:JSON.stringify({method,args}),signal:deadline.signal});data=await response.json() as {result?:unknown;error?:string};} catch {throw new Error('服务连接中断；请重新读取工作状态后再决定是否重试，提交结果可能已保存。');} finally {deadline.dispose();}
-    if(!response.ok) throw new Error(data.error || '服务暂时不可用');
+    if(!response.ok) { const message=data.error || '服务暂时不可用'; if((data as {code?:string}).code==='NOT_ACCEPTED') throw markNotAccepted(new Error(message)); throw new Error(message); }
     return data.result;
   };
   const api=Object.fromEntries(['listWorks','createWork','getWork','renameWork','archiveWork','submit','stop','saveDraft','saveView','saveArtifact','addMaterial','getSettings','saveSettings','testProvider'].map(method=>[method,(args?:unknown)=>rpc(method,args)])) as unknown as WorkApi;

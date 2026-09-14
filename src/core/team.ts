@@ -111,7 +111,8 @@ async function executeTeam(context: TeamContext): Promise<CoreResult> {
   }
   const selected = snapshot.targetMemberId ? members.find((m) => m.id === snapshot.targetMemberId) : undefined;
   if (snapshot.targetMemberId && !selected) throw new CoreError('UNKNOWN_MEMBER', '指定成员不在本轮团队配置中。');
-  if (snapshot.intent === 'revise' && !snapshot.baseArtifact) throw new CoreError('MISSING_BASE', '修订需要明确的成果基线版本。');
+  const processRevision = snapshot.intent === 'revise' && snapshot.reference?.kind === 'event';
+  if (snapshot.intent === 'revise' && !snapshot.baseArtifact && !processRevision) throw new CoreError('MISSING_BASE', '修订需要明确的成果基线版本。');
   if ((snapshot.intent === 'summarize' || snapshot.intent === 'reflect') && !snapshot.contextEvents?.some((event) => ['analysis', 'plan', 'review', 'revision'].includes(event.type))) {
     throw new CoreError('MISSING_PROCESS', '当前范围没有可总结或复盘的公开过程，请先完成一次实际工作或选择已有过程。');
   }
@@ -151,8 +152,8 @@ async function executeTeam(context: TeamContext): Promise<CoreResult> {
     const key = previous ? `revision:${task.id}` : `analysis:${task.id}`;
     const title = previous ? `${member.name}回应核查：${task.title}` : `${member.name}：${task.title}`;
     const response = await call(member, previous ? 'rework' : 'worker', `完成以下受委派任务，返回可直接阅读的公开分析 Markdown。说明采用的方法、依据、达标情况与未确定部分；不要输出私有推理。\n方法：${skillText}\n任务：${JSON.stringify(task)}\n上下文：${inputContext(snapshot, task.sourceIds)}\n${previous ? `你此前的贡献：${previous.body}\n实际收到的交叉核查：${JSON.stringify(review)}\n请针对问题修订，明确修改了什么及依据。` : ''}`, false,
-    (body) => emit({ type: previous ? 'revision' : 'analysis', title, body, memberId: member.id, taskId: task.id, parentTaskId: 'plan', requirement: task.requirement, sourceIds: task.sourceIds, streaming: true, key }));
-    emit({ type: previous ? 'revision' : 'analysis', title, body: response.text, memberId: member.id, taskId: task.id, parentTaskId: 'plan', requirement: task.requirement, sourceIds: task.sourceIds, streaming: false, key });
+    (body) => emit({ type: previous ? 'revision' : 'analysis', title, body, memberId: member.id, taskId: task.id, parentTaskId: 'plan', requirement: task.requirement, sourceIds: task.sourceIds, streaming: true, key, relatedEventKeys: previous ? ['review', `analysis:${task.id}`] : [`delegation:${task.id}`] }));
+    emit({ type: previous ? 'revision' : 'analysis', title, body: response.text, memberId: member.id, taskId: task.id, parentTaskId: 'plan', requirement: task.requirement, sourceIds: task.sourceIds, streaming: false, key, relatedEventKeys: previous ? ['review', `analysis:${task.id}`] : [`delegation:${task.id}`] });
     return { task, body: previous?.body ?? response.text, ...(previous ? { revision: response.text } : {}) };
   };
   const graph = new StateGraph(State)
@@ -166,8 +167,8 @@ async function executeTeam(context: TeamContext): Promise<CoreResult> {
         validateSources(task.sourceIds, snapshot);
         task.id = `${snapshot.id}:${task.id}`;
       }
-      emit({ type: 'plan', title: '统筹明确问题与方法', memberId: lead.id, taskId: 'plan', body: `${plan.overview}\n\n${plan.method}`, requirement: plan.requirements, key: 'plan' });
-      for (const task of plan.tasks) emit({ type: 'delegation', title: task.title, memberId: task.memberId, taskId: task.id, parentTaskId: 'plan', body: task.question, requirement: task.requirement, sourceIds: task.sourceIds, key: `delegation:${task.id}` });
+      emit({ type: 'plan', title: '统筹明确问题与方法', memberId: lead.id, taskId: 'plan', body: `${plan.overview}\n\n${plan.method}`, requirement: plan.requirements, key: 'plan', relatedEventIds: snapshot.reference?.kind === 'event' ? [snapshot.reference.id] : undefined });
+      for (const task of plan.tasks) emit({ type: 'delegation', title: task.title, memberId: task.memberId, taskId: task.id, parentTaskId: 'plan', body: task.question, requirement: task.requirement, sourceIds: task.sourceIds, key: `delegation:${task.id}`, relatedEventKeys: ['plan'] });
       return { plan, results: [] };
     })
     .addNode('work', async ({ plan }) => {
@@ -186,7 +187,7 @@ async function executeTeam(context: TeamContext): Promise<CoreResult> {
       const validIds = new Set(plan.tasks.map((t) => t.id));
       if (review.gaps.some((g) => !validIds.has(g.taskId)) || (review.reworkTaskId !== null && !validIds.has(review.reworkTaskId))) throw new CoreError('INVALID_REVIEW_TARGET', '核查引用了不存在的任务，已停止。');
       if (review.reworkTaskId && !review.gaps.some((g) => g.taskId === review.reworkTaskId)) throw new CoreError('MISSING_REWORK_REASON', '返工缺少具体核查问题，已停止。');
-      emit({ type: 'review', title: `${reviewer.name}交叉核查`, body: `${review.analysis}${review.gaps.length ? '\n\n' + review.gaps.map((g) => `- 未达要求：${g.requirement}\n  具体问题：${g.problem}\n  修正要求：${g.instruction}`).join('\n') : ''}`, memberId: reviewer.id, sourceIds: review.sourceIds, requirement: plan.requirements, key: 'review' });
+      emit({ type: 'review', title: `${reviewer.name}交叉核查`, body: `${review.analysis}${review.gaps.length ? '\n\n' + review.gaps.map((g) => `- 未达要求：${g.requirement}\n  具体问题：${g.problem}\n  修正要求：${g.instruction}`).join('\n') : ''}`, memberId: reviewer.id, sourceIds: review.sourceIds, requirement: plan.requirements, key: 'review', relatedEventKeys: results.map((result) => `analysis:${result.task.id}`) });
       return { review };
     })
     .addNode('rework', async ({ results, review }) => {
@@ -195,8 +196,12 @@ async function executeTeam(context: TeamContext): Promise<CoreResult> {
       return { results: results.map((r) => r.task.id === previous.task.id ? revised : r) };
     })
     .addNode('synthesize', async ({ plan, results, review }) => {
-      const intentInstruction = snapshot.intent === 'revise'
-        ? '本次为现有成果修订。artifact必须为null，replacements列出原文中可唯一定位的最小片段和替换内容；其余文字由程序原样保留。若指定quote，仅能改quote内部的片段。changes说明修订依据。'
+      const intentInstruction = snapshot.intent === 'revise' && snapshot.reference?.kind === 'event' && !snapshot.baseArtifact
+        ? '本次是对过程步骤的纠正，当前尚无成果基线。请回应如何修正该步骤；replacements必须为空。若本轮形成了第一份可用成果，可以提供artifact，否则artifact为null。过程引用片段只限定待纠正判断，不是成果正文原文。changes说明修正依据。'
+        : snapshot.intent === 'revise' && snapshot.reference?.kind === 'event'
+          ? '本次是对过程步骤的纠正，并基于现有成果修订。artifact必须为null，replacements列出成果基线中可唯一定位的最小片段和替换内容；过程引用片段只限定待纠正判断，不能限制成果替换范围。changes说明修订依据。'
+          : snapshot.intent === 'revise'
+            ? '本次为现有成果修订。artifact必须为null，replacements列出原文中可唯一定位的最小片段和替换内容；其余文字由程序原样保留。若指定quote，仅能改quote内部的片段。changes说明修订依据。'
         : snapshot.intent === 'summarize'
           ? '本次成果是过程总结，必须提供artifact：依据已记录过程总结方法、贡献、分歧与决定，指回实际记录；不得补造未发生步骤。'
           : snapshot.intent === 'reflect'
@@ -205,9 +210,12 @@ async function executeTeam(context: TeamContext): Promise<CoreResult> {
       const response = await call(lead, 'synthesize', `把团队的实际贡献与核查整合为可直接使用的答复。必须处理核查问题，解释采纳了什么、未采纳的理由和仍有的不确定项；不能只拼接成员回答或把团队结束说成真实验证通过。\n${intentInstruction}\n${common}\n实际计划：${JSON.stringify(plan)}\n实际贡献与修订：${JSON.stringify(results)}\n实际核查：${JSON.stringify(review)}\n严格只返回JSON：{"answer":"主窗口完整可读的结论与关键依据","artifact":{"title":"成果名称","content":"完整Markdown正文"},"changes":"意见采纳和修订说明","replacements":[]}。无成果时artifact为null，无片段替换时replacements为空数组。`, true);
       const parsed = parseJson(response.text, ResultSchema, '汇合');
       let artifact: CoreResult['artifact'];
-      if (snapshot.intent === 'revise') {
+      if (snapshot.intent === 'revise' && snapshot.reference?.kind === 'event' && !snapshot.baseArtifact) {
+        if (parsed.replacements.length > 0) throw new CoreError('UNEXPECTED_REVISION', '过程纠正尚无成果基线，不能提交成果片段替换。');
+        if (parsed.artifact) artifact = { ...parsed.artifact, kind: 'deliverable' };
+      } else if (snapshot.intent === 'revise') {
         const base = snapshot.baseArtifact!;
-        const content = applyReplacements(base.content, parsed.replacements, snapshot.reference?.quote);
+        const content = applyReplacements(base.content, parsed.replacements, snapshot.reference?.kind === 'artifact' ? snapshot.reference.quote : undefined);
         artifact = { title: base.title, content, kind: base.kind };
       } else {
         if (parsed.replacements.length > 0) throw new CoreError('UNEXPECTED_REVISION', '本次并未请求修订，已拒绝修改成果片段。');
@@ -215,7 +223,7 @@ async function executeTeam(context: TeamContext): Promise<CoreResult> {
         if ((kind === 'summary' || kind === 'reflection') && !parsed.artifact) throw new CoreError('MISSING_ARTIFACT', '总结或复盘未返回实际正文，本轮不标为完成。');
         if (parsed.artifact) artifact = { ...parsed.artifact, kind };
       }
-      if (parsed.changes) emit({ type: 'revision', title: '统筹汇合与意见处理', body: parsed.changes, memberId: lead.id, key: 'synthesis-changes' });
+      if (parsed.changes) emit({ type: 'revision', title: '统筹汇合与意见处理', body: parsed.changes, memberId: lead.id, key: 'synthesis-changes', relatedEventKeys: ['review', ...results.flatMap((result) => [`analysis:${result.task.id}`, ...(result.revision ? [`revision:${result.task.id}`] : [])])], relatedEventIds: snapshot.reference?.kind === 'event' ? [snapshot.reference.id] : undefined });
       return { result: { answer: parsed.answer, artifact, changes: parsed.changes } };
     })
     .addEdge(START, 'planning').addEdge('planning', 'work').addEdge('work', 'cross_review')

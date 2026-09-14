@@ -377,7 +377,10 @@ export class Repository {
       const baseNumber = base && referenced?.reference.kind === 'artifact' && referenced.reference.id === base.id
         ? referenced.reference.version : base?.currentVersion;
       const baseVersion = base?.versions.find((version) => version.version === baseNumber);
-      if (input.intent === 'revise' && !baseVersion) throw new Error('当前工作还没有可修订的成果，请先讨论形成成果。');
+      // A process correction can be useful before a deliverable exists. In that
+      // case the event itself is the scope and the next run may create v1. A
+      // revision without an event reference still needs an artifact baseline.
+      if (input.intent === 'revise' && !baseVersion && input.reference?.kind !== 'event') throw new Error('当前工作还没有可修订的成果，请先讨论形成成果。');
       if (input.intent === 'change-goal') {
         this.db.prepare('UPDATE works SET goal = ?, goal_revision = goal_revision + 1, updated_at = ? WHERE id = ?').run(prompt, now(), work.id);
         work = this.work(work.id);
@@ -457,6 +460,15 @@ export class Repository {
         if (!this.db.prepare('SELECT 1 FROM events WHERE id = ? AND work_id = ?').get(id, run.workId)) throw new Error('相关过程不属于当前工作或不存在。');
         return id;
       });
+      const relatedEventKeys = input.relatedEventKeys?.map((value) => text(value, '关联事件键', 200));
+      const keyedRelations = relatedEventKeys?.map((eventKey) => {
+        const row = this.db.prepare('SELECT id FROM events WHERE run_id = ? AND event_key = ?').get(runId, eventKey) as Row | undefined;
+        if (!row) throw new Error('关联过程键不属于当前运行或尚未写入。');
+        return String(row.id);
+      });
+      const allRelatedEventIds = relatedEventIds || keyedRelations
+        ? [...new Set([...(relatedEventIds ?? []), ...(keyedRelations ?? [])])]
+        : undefined;
       let usage: PublicEvent['usage'];
       if (input.usage !== undefined) {
         if (input.type !== 'usage' || typeof input.usage.known !== 'boolean') throw new Error('用量事件格式不正确。');
@@ -474,7 +486,7 @@ export class Repository {
         ...(input.taskId ? { taskId: optionalText(input.taskId, '任务身份') } : {}),
         ...(input.parentTaskId ? { parentTaskId: optionalText(input.parentTaskId, '父任务身份') } : {}),
         ...(input.requirement ? { requirement: optionalText(input.requirement, '完成要求', 20_000) } : {}),
-        ...(sourceIds ? { sourceIds } : {}), ...(relatedEventIds ? { relatedEventIds } : {}),
+        ...(sourceIds ? { sourceIds } : {}), ...(allRelatedEventIds ? { relatedEventIds: allRelatedEventIds } : {}),
         ...(input.streaming !== undefined ? { streaming: run.status === 'running' && Boolean(input.streaming) } : {}), ...(key ? { key } : {}),
         ...(usage ? { usage } : {}),
       };

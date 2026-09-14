@@ -57,6 +57,11 @@ describe('real team orchestration with a controlled model port', () => {
     expect(events.filter((e) => e.type === 'delegation')).toHaveLength(2);
     expect(events.filter((e) => e.type === 'usage')).toHaveLength(5);
     expect(events.filter((e) => e.type === 'usage').every((e) => e.usage?.calls === 1 && e.usage.known)).toBe(true);
+    const plan = events.find((e) => e.type === 'plan');
+    expect(events.filter((e) => e.type === 'delegation').every((e) => e.relatedEventKeys?.includes('plan'))).toBe(true);
+    expect(events.filter((e) => e.type === 'analysis').every((e) => e.relatedEventKeys?.some((key) => key.startsWith('delegation:')))).toBe(true);
+    expect(events.find((e) => e.type === 'review')?.relatedEventKeys).toEqual(expect.arrayContaining(['analysis:run1:t1', 'analysis:run1:t2']));
+    expect(plan?.relatedEventIds).toBeUndefined();
   });
 
   it('routes one concrete review issue back to its worker and uses the revision in synthesis', async () => {
@@ -66,7 +71,10 @@ describe('real team orchestration with a controlled model port', () => {
     expect(reworks[0].member.id).toBe('researcher');
     expect(reworks[0].prompt).toContain('补充失效与保留策略');
     expect(requests.at(-1)?.prompt).toContain('不因缓存到期删除用户资料');
-    expect(events.some((e) => e.type === 'revision' && e.taskId === 'run1:t1')).toBe(true);
+    expect(events.find((e) => e.type === 'revision' && e.taskId === 'run1:t1')?.relatedEventKeys)
+      .toEqual(expect.arrayContaining(['review', 'analysis:run1:t1']));
+    expect(events.find((e) => e.type === 'revision' && e.key === 'synthesis-changes')?.relatedEventKeys)
+      .toEqual(expect.arrayContaining(['review', 'analysis:run1:t1', 'revision:run1:t1']));
   });
 
   it('answers a selected member or explanation with its reference and never proposes an artifact', async () => {
@@ -75,6 +83,39 @@ describe('real team orchestration with a controlled model port', () => {
     expect(requests[0].member.id).toBe('reviewer');
     expect(requests[0].prompt).toContain('先核对离线要求');
     expect(result.artifact).toBeUndefined();
+  });
+
+  it('corrects a referenced process step without a baseline and can create the first artifact', async () => {
+    const run = snapshot({
+      intent: 'revise',
+      reference: { kind: 'event', id: 'prior-step', quote: '原判断片段' },
+      referenceContent: '原判断片段：尚需核查。',
+    });
+    const { result, events } = await execute(run, {
+      synth: { answer: '已按该步骤重新处理。', artifact: { title: '首次成果', content: '# 首次成果\n\n已补充核查。' }, changes: '根据过程步骤修正并形成首份成果。', replacements: [] },
+    });
+    expect(result.artifact).toMatchObject({ kind: 'deliverable', title: '首次成果' });
+    expect(events.find((event) => event.type === 'plan')?.relatedEventIds).toEqual(['prior-step']);
+  });
+
+  it('uses a process quote as correction context, not as the artifact replacement scope', async () => {
+    const run = snapshot({
+      intent: 'revise',
+      reference: { kind: 'event', id: 'prior-step', quote: '过程中的判断片段' },
+      referenceContent: '过程中的判断片段：需要纠正。',
+      baseArtifact: { id: 'a1', title: '原成果', kind: 'deliverable', version: 1, content: '# 原成果\n需要改正的正文。\n保留其它内容。' },
+    });
+    const { result } = await execute(run, {
+      synth: { answer: '已修订成果。', artifact: null, changes: '依据过程纠正成果。', replacements: [{ original: '需要改正的正文。', replacement: '已修订的正文。' }] },
+    });
+    expect(result.artifact?.content).toContain('已修订的正文。');
+    expect(result.artifact?.content).toContain('保留其它内容。');
+  });
+
+  it('keeps artifact-only revision strict when no artifact baseline exists', async () => {
+    const { port, requests } = fixture();
+    await expect(runTeam(snapshot({ intent: 'revise' }), port, () => {}, new AbortController().signal)).rejects.toMatchObject({ code: 'MISSING_BASE' });
+    expect(requests).toHaveLength(0);
   });
 
   it('applies a precise revision to its baseline and preserves unrelated text', async () => {

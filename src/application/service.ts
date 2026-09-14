@@ -5,6 +5,7 @@ import { runTeam } from '../core/team';
 import { createModelPort } from '../providers/model';
 import type { ModelPort } from '../core/model-port';
 import type { CredentialVault } from './credentials';
+import { markNotAccepted, notAcceptedMessage } from '../shared/error-protocol';
 
 export interface ServiceOptions { repository:Repository; credentials:CredentialVault; mode:'local'|'server'; dataDirectory:string; notify?:(event:AppNotification)=>void; modelFactory?:(config:ProviderConfig,key:string)=>ModelPort }
 export class AppService {
@@ -34,12 +35,16 @@ export class AppService {
     return this.getSettings();
   }
   async submit(input:SubmitRequest):Promise<RunSnapshot> {
-    if(this.active.size+(this.providerCheck?1:0)>=3 && ![...this.active.values()].some(r=>r.workId===input.workId)) throw new Error('已有三项工作正在处理，请等待或停止其中一项');
+    if(this.active.size+(this.providerCheck?1:0)>=3 && ![...this.active.values()].some(r=>r.workId===input.workId)) throw markNotAccepted(new Error('已有三项工作正在处理，请等待或停止其中一项'));
     const settings=this.options.repository.getSettings();
     const key=this.options.credentials.get(settings.provider);
-    if(!key) throw new Error(this.options.mode==='server'?'服务端尚未配置可用模型凭据':'请先在设置中连接可用模型');
-    const port=(this.options.modelFactory || createModelPort)(settings.provider,key);
-    const run=this.options.repository.createRun(input,settings);
+    if(!key) throw markNotAccepted(new Error(this.options.mode==='server'?'服务端尚未配置可用模型凭据':'请先在设置中连接可用模型'));
+    let port: ModelPort;
+    try { port=(this.options.modelFactory || createModelPort)(settings.provider,key); }
+    catch(error) { throw markNotAccepted(error); }
+    let run: RunSnapshot;
+    try { run=this.options.repository.createRun(input,settings); }
+    catch(error) { throw markNotAccepted(error); }
     for(const current of this.active.values()) if(current.workId===input.workId) current.controller.abort();
     const controller=new AbortController();
     const emit=(event:EventInput) => { this.options.repository.appendEvent(run.id,event);this.changed(run.workId,run.id); };
@@ -103,6 +108,7 @@ export class AppService {
   async dispose():Promise<void> {for(const [id] of this.active) this.stop(id); this.providerCheck?.controller.abort(); await Promise.all([this.idle(),this.providerCheck?.done]);}
 }
 export function publicError(error:unknown):string {
-  if(error instanceof Error && !/https?:\/\/|AIza|sk-|api[_ -]?key|authorization|bearer|headers|request body/i.test(error.message)) return error.message.slice(0,600);
+  const message = notAcceptedMessage(error) ?? (error instanceof Error ? error.message : undefined);
+  if(message !== undefined && !/https?:\/\/|AIza|sk-|api[_ -]?key|authorization|bearer|headers|request body/i.test(message)) return message.slice(0,600);
   return '处理失败，请检查模型配置、网络与调用限制；敏感错误详情未写入工作记录。';
 }
