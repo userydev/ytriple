@@ -1,5 +1,6 @@
 import { useState, type JSX } from "react";
 import { memberStatusLabel, type MemberView, type SubAgentView } from "../state/taskView.js";
+import { groupDegradations } from "./DegradationBar.js";
 
 /**
  * One member's workbench. Everything shown here came from an event that member
@@ -93,11 +94,15 @@ export function MemberPane({ member }: { member: MemberView }): JSX.Element {
         {member.degradations.length > 0 && (
           <Block title="Degradations">
             <ul className="degradation-list">
-              {member.degradations.map((degradation, index) => (
+              {/* Grouped: a JSON-mode model reports the same one on every call. */}
+              {groupDegradations(
+                member.degradations.map((degradation) => ({ degradation })),
+              ).map((group, index) => (
                 <li key={index}>
-                  <span className="tag tag-warn">{degradation.kind}</span>
-                  {degradation.from} → {degradation.to}
-                  <p className="muted">{degradation.detail}</p>
+                  <span className="tag tag-warn">{group.degradation.kind}</span>
+                  {group.degradation.from} → {group.degradation.to}
+                  {group.count > 1 && <span className="muted"> ×{group.count}</span>}
+                  <p className="muted">{group.degradation.detail}</p>
                 </li>
               ))}
             </ul>
@@ -195,12 +200,16 @@ function ContributionBlock({
       <h3>
         Contribution <code className="muted">{schemaId}</code>
       </h3>
-      {Object.entries(payload).map(([key, value]) => (
-        <div className="contribution-field" key={key}>
-          <h4>{key.replace(/_/g, " ")}</h4>
-          {renderValue(value)}
-        </div>
-      ))}
+      {/* An empty field means the member had nothing to say there; a bare
+          heading with nothing under it just looks like a rendering bug. */}
+      {Object.entries(payload)
+        .filter(([, value]) => !isEmptyValue(value))
+        .map(([key, value]) => (
+          <div className="contribution-field" key={key}>
+            <h4>{key.replace(/_/g, " ")}</h4>
+            {renderValue(value)}
+          </div>
+        ))}
     </div>
   );
 }
@@ -233,6 +242,14 @@ function renderValue(value: unknown): JSX.Element {
   }
 
   return <p className="muted">—</p>;
+}
+
+export function isEmptyValue(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string") return value.trim().length === 0;
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === "object") return Object.keys(value).length === 0;
+  return false;
 }
 
 function Block({ title, children }: { title: string; children: JSX.Element | JSX.Element[] }): JSX.Element {

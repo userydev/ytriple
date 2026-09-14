@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createDefaultTeam } from "@ytriple/core";
 import { buildTaskView } from "../state/taskView.js";
 import { groupDegradations } from "./DegradationBar.js";
+import { isEmptyValue } from "./MemberPane.js";
 
 const team = createDefaultTeam({ providerId: "p", modelId: "m" });
 
@@ -93,5 +94,22 @@ describe("the grounded-Gemini case reaches the UI", () => {
 
   it("reports nothing when the run degraded nothing", () => {
     expect(groupDegradations(buildTaskView(team, "task-1", []).degradations)).toEqual([]);
+  });
+});
+
+describe("isEmptyValue", () => {
+  it("treats anything a member left blank as absent", () => {
+    expect(isEmptyValue([])).toBe(true);
+    expect(isEmptyValue("")).toBe(true);
+    expect(isEmptyValue("   ")).toBe(true);
+    expect(isEmptyValue({})).toBe(true);
+    expect(isEmptyValue(undefined)).toBe(true);
+  });
+
+  it("keeps anything with content", () => {
+    expect(isEmptyValue(["a"])).toBe(false);
+    expect(isEmptyValue("a")).toBe(false);
+    expect(isEmptyValue({ a: 1 })).toBe(false);
+    expect(isEmptyValue(false)).toBe(false);
   });
 });
