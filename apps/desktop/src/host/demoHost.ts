@@ -1,15 +1,11 @@
-import {
-  createDefaultTeam,
-  createFakeOutputPort,
-  createTaskRuntime,
-  type TaskRuntime,
-} from "@ytriple/core";
+import { createFakeOutputPort, type TaskRuntime } from "@ytriple/core";
 import {
   DEMO_SCENARIO,
   createReplayAdapter,
   scenarioToRecording,
 } from "@ytriple/providers";
-import type { ClockPort, YtripleConfig } from "@ytriple/shared";
+import type { ClockPort, HttpPort, SecretPort, YtripleConfig } from "@ytriple/shared";
+import { createDesktopSession } from "../session.js";
 import type { CreateRuntimeInput, DesktopHost, DesktopSettings, HistoryRecord } from "./types.js";
 
 /**
@@ -48,6 +44,19 @@ export function demoUserInput(): string {
 export function demoAnswerFor(agentId: string): string {
   return DEMO_SCENARIO.answers[agentId] ?? "";
 }
+
+/** The demo never leaves the page; these exist only to satisfy the bridge. */
+const unreachableHttp: HttpPort = {
+  async request() {
+    throw new Error("the demo host replays a recording and never makes a request");
+  },
+};
+
+const unreachableSecrets: SecretPort = {
+  async resolve() {
+    throw new Error("the demo host has no credentials because it sends nothing");
+  },
+};
 
 function browserClock(): ClockPort {
   return {
@@ -109,28 +118,27 @@ export function createDemoHost(): DesktopHost {
     },
     createRuntime(input: CreateRuntimeInput): TaskRuntime {
       const adapter = createReplayAdapter(scenarioToRecording(DEMO_SCENARIO));
-      return createTaskRuntime({
-        taskId: input.taskId,
-        team: input.team.members.length > 0 ? input.team : createDefaultTeam(DEMO_CONFIG.defaultModel),
+
+      // Same session builder as the Tauri host; only the ports differ.
+      return createDesktopSession(input.taskId, {
         config: input.config,
-        capabilities: {
+        team: input.team,
+        http: unreachableHttp,
+        secrets: unreachableSecrets,
+        output,
+        clock: browserClock(),
+        user: input.user,
+        capabilityOverrides: {
+          // A browser cannot read the disk or reach a model on localhost.
           workspaceRead: false,
-          outputWrite: true,
-          webSearch: true,
           localModels: false,
-          persistentBackgroundRuns: false,
           streaming: false,
-        },
-        ports: {
-          output,
-          clock: browserClock(),
-          user: input.user,
         },
         resolveBinding: async () => ({
           adapter,
           model: { modelId: "recorded", displayName: "Replayed responses" },
         }),
-      });
+      }).runtime;
     },
   };
 }

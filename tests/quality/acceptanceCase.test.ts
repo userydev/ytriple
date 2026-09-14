@@ -129,16 +129,18 @@ describe("manual acceptance case", () => {
     ]);
   });
 
-  it("7. the research pane shows real stages and real sources", () => {
+  it("7. the research pane shows real stages, and says so when it could not search", () => {
     const researcher = view.members.find((member) => member.agentId === "researcher")!;
 
     expect(researcher.stages.length).toBeGreaterThan(0);
-    expect(researcher.toolCalls.map((call) => call.tool)).toContain("web_search");
-    expect(researcher.sources.length).toBeGreaterThan(0);
-    for (const source of researcher.sources) {
-      expect(source.url).toMatch(/^https?:\/\//);
-      expect(source.origin).toBe("native_provider_search");
-    }
+    expect(researcher.contribution).toBeDefined();
+
+    // This recording has no web access, so the pane must show an empty source
+    // list rather than sources it never fetched, and the gap must be stated.
+    expect(view.brief?.contextAvailability.webSearch).toBe(false);
+    expect(researcher.sources).toEqual([]);
+    const openQuestions = (researcher.contribution?.payload.open_questions ?? []) as string[];
+    expect(openQuestions.join(" ")).toContain("联网");
   });
 
   it("8. the review pane shows a checklist, risks and recommendations", () => {
@@ -173,12 +175,29 @@ describe("manual acceptance case", () => {
       "## UX / Interaction Requirements",
       "## Success Criteria",
       "## Assumptions and Open Questions",
-      "## Source Notes",
     ]) {
       expect(markdown, `missing ${section}`).toContain(section);
     }
     expect(markdown).toContain("**Assumptions**");
     expect(markdown).toContain("**Open questions**");
+  });
+
+  it("10b. the document carries no source list it did not earn", () => {
+    const markdown = result.prd?.markdown ?? "";
+
+    expect(markdown).not.toContain("## Source Notes");
+    // The missing capability is declared rather than quietly skipped.
+    expect(markdown).toContain("联网");
+  });
+
+  it("10c. the degradations that happened are on the event stream", () => {
+    const degradations = result.events.flatMap((event) =>
+      event.body.type === "degradation" ? [event.body.degradation] : [],
+    );
+
+    expect(degradations.length).toBeGreaterThan(0);
+    expect(degradations.every((entry) => entry.kind === "structured_output")).toBe(true);
+    expect(view.degradations.length).toBe(degradations.length);
   });
 
   it("11. no raw research dump or review noise reaches the document body", () => {

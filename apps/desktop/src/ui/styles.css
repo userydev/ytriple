@@ -813,3 +813,50 @@ button.primary {
 .credential-row input {
   flex: 1;
 }
+
+/* ------------------------------------------------------- degradation bar */
+
+.degradation-bar {
+  border-bottom: 1px solid var(--border);
+  background: #241f16;
+}
+
+.degradation-summary {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 7px 18px;
+  text-align: left;
+  font-size: 12px;
+}
+
+.degradation-detail {
+  margin: 0;
+  padding: 0 18px 10px 38px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.degradation-detail li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.degradation-detail p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.degradation-transition {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  color: var(--warn);
+}

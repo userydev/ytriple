@@ -1,4 +1,10 @@
-import type { ProviderCapabilities, SourceNote, ToolCall, TokenUsage } from "@ytriple/shared";
+import type {
+  Degradation,
+  ProviderCapabilities,
+  SourceNote,
+  TokenUsage,
+  ToolCall,
+} from "@ytriple/shared";
 import type { ProviderRecording } from "./testing.js";
 
 /**
@@ -23,6 +29,8 @@ export interface RecordedScenarioEntry {
   toolCalls?: ToolCall[];
   sources?: SourceNote[];
   usage?: TokenUsage;
+  /** Degradations the recorded provider reported on this call. */
+  degradations?: Degradation[];
 }
 
 export interface RecordedScenario {
@@ -47,9 +55,9 @@ export const DEMO_SCENARIO: RecordedScenario = {
     "specialist": "成功标准是十分钟内拿到一份能直接丢给开发或者 AI coding agent 的初稿。"
   },
   "capabilities": {
-    "structuredOutput": "json_schema",
-    "toolCalling": "parallel",
-    "nativeWebSearch": true,
+    "structuredOutput": "json_mode",
+    "toolCalling": "sequential",
+    "nativeWebSearch": false,
     "streaming": false,
     "maxContextTokens": 128000,
     "maxOutputTokens": 8192,
@@ -62,6 +70,14 @@ export const DEMO_SCENARIO: RecordedScenario = {
       "key": "conductor#-#intake#0",
       "agentId": "conductor",
       "phase": "intake",
+      "degradations": [
+        {
+          "kind": "structured_output",
+          "from": "json_schema",
+          "to": "json_mode",
+          "detail": "model declares structuredOutput=json_mode; schema moved into the prompt and validated locally with repair retries"
+        }
+      ],
       "payload": {
         "understanding": "你想要一个把模糊产品想法收束成 PRD 初稿的工具，目标是这份初稿可以直接交给开发。你自己还没想清楚中间流程，所以流程设计也是这次任务的一部分。",
         "readiness": "needs_questions",
@@ -77,6 +93,14 @@ export const DEMO_SCENARIO: RecordedScenario = {
       "key": "researcher#-#member_questions#0",
       "agentId": "researcher",
       "phase": "member_questions",
+      "degradations": [
+        {
+          "kind": "structured_output",
+          "from": "json_schema",
+          "to": "json_mode",
+          "detail": "model declares structuredOutput=json_mode; schema moved into the prompt and validated locally with repair retries"
+        }
+      ],
       "payload": {
         "questions": [
           {
@@ -90,6 +114,14 @@ export const DEMO_SCENARIO: RecordedScenario = {
       "key": "specialist#-#member_questions#0",
       "agentId": "specialist",
       "phase": "member_questions",
+      "degradations": [
+        {
+          "kind": "structured_output",
+          "from": "json_schema",
+          "to": "json_mode",
+          "detail": "model declares structuredOutput=json_mode; schema moved into the prompt and validated locally with repair retries"
+        }
+      ],
       "payload": {
         "questions": [
           {
@@ -103,6 +135,14 @@ export const DEMO_SCENARIO: RecordedScenario = {
       "key": "conductor#-#question_gate#0",
       "agentId": "conductor",
       "phase": "question_gate",
+      "degradations": [
+        {
+          "kind": "structured_output",
+          "from": "json_schema",
+          "to": "json_mode",
+          "detail": "model declares structuredOutput=json_mode; schema moved into the prompt and validated locally with repair retries"
+        }
+      ],
       "payload": {
         "approved": [
           {
@@ -122,6 +162,14 @@ export const DEMO_SCENARIO: RecordedScenario = {
       "key": "conductor#-#brief#0",
       "agentId": "conductor",
       "phase": "brief",
+      "degradations": [
+        {
+          "kind": "structured_output",
+          "from": "json_schema",
+          "to": "json_mode",
+          "detail": "model declares structuredOutput=json_mode; schema moved into the prompt and validated locally with repair retries"
+        }
+      ],
       "payload": {
         "productObject": "一个桌面端 PRD 工作台：把一句模糊的产品想法，经过一次结构化对话，收束成一份可以直接交给开发的 prd.md。",
         "targetUser": "独立开发者和个人产品作者：一个人同时负责想清楚和写出来，没有产品经理帮忙收敛。",
@@ -185,54 +233,21 @@ export const DEMO_SCENARIO: RecordedScenario = {
       "key": "researcher#-#member_work#0",
       "agentId": "researcher",
       "phase": "member_work",
-      "toolCalls": [
-        {
-          "toolCallId": "call_search_1",
-          "name": "web_search",
-          "arguments": {
-            "query": "把产品想法转成 PRD 的工具 独立开发者 2026"
-          }
-        }
-      ],
-      "usage": {
-        "inputTokens": 1840,
-        "outputTokens": 96
-      }
-    },
-    {
-      "key": "researcher#-#member_work#1",
-      "agentId": "researcher",
-      "phase": "member_work",
-      "sources": [
-        {
-          "title": "Writing a PRD — Atlassian product requirements template",
-          "url": "https://www.atlassian.com/agile/product-management/requirements",
-          "snippet": "A product requirements document defines the product you are about to build, and is the shared reference between product and engineering.",
-          "origin": "native_provider_search"
-        },
-        {
-          "title": "Lenny's Newsletter — How the best PMs write product specs",
-          "url": "https://www.lennysnewsletter.com/p/how-to-write-a-product-spec",
-          "snippet": "The hard part of a spec is not the template, it is deciding what is out of scope.",
-          "origin": "native_provider_search"
-        }
-      ],
       "usage": {
         "inputTokens": 2610,
         "outputTokens": 742
       },
+      "degradations": [
+        {
+          "kind": "structured_output",
+          "from": "json_schema",
+          "to": "json_mode",
+          "detail": "model declares structuredOutput=json_mode; schema moved into the prompt and validated locally with repair retries"
+        }
+      ],
       "payload": {
-        "summary": "把想法变成规格这一步有两类工具在做：模板型（给你一张空表）和对话型（陪你问出答案）。面向独立开发者、并且以单一可交付文件收尾的那一档基本是空的。",
-        "facts": [
-          {
-            "statement": "主流 PRD 指南都把 PRD 定义为产品与工程之间的共享参照，而不是一份汇报材料。",
-            "sourceUrl": "https://www.atlassian.com/agile/product-management/requirements"
-          },
-          {
-            "statement": "写规格的难点被普遍认为不在模板，而在于界定什么不做。",
-            "sourceUrl": "https://www.lennysnewsletter.com/p/how-to-write-a-product-spec"
-          }
-        ],
+        "summary": "本轮没有联网能力，以下全部是既有认知下的判断，没有外部来源支撑。把想法变成规格这一步大致有两类工具：模板型（给你一张空表）和对话型（陪你问出答案）。面向独立开发者、并且以单一可交付文件收尾的那一档，我印象里是空的，但这一点需要联网后核实。",
+        "facts": [],
         "inferences": [
           "模板型工具把认知负担原封不动地还给了用户，这正是独立开发者卡住的地方。",
           "对话型工具大多面向团队协作定价，单人用户的付费意愿和使用频率对不上。",
@@ -259,10 +274,12 @@ export const DEMO_SCENARIO: RecordedScenario = {
           }
         ],
         "assumptions": [
-          "竞品价格带以公开页面为准，未做逐家验证"
+          "以下竞品判断来自既有印象，本轮无外部来源支撑",
+          "假设目标市场同时包含中文和英文的独立开发者工具生态"
         ],
         "open_questions": [
-          "中文市场是否已有同类对话型工具，本轮检索未覆盖到独立开发者社区内部的自建工具"
+          "本轮没有联网能力，竞品清单与定位空档都未经核实，需要在有搜索能力时重跑一次调研",
+          "中文独立开发者社区内部是否已有同类自建工具，完全未覆盖"
         ]
       }
     },
@@ -270,6 +287,14 @@ export const DEMO_SCENARIO: RecordedScenario = {
       "key": "specialist#-#member_work#0",
       "agentId": "specialist",
       "phase": "member_work",
+      "degradations": [
+        {
+          "kind": "structured_output",
+          "from": "json_schema",
+          "to": "json_mode",
+          "detail": "model declares structuredOutput=json_mode; schema moved into the prompt and validated locally with repair retries"
+        }
+      ],
       "usage": {
         "inputTokens": 2480,
         "outputTokens": 690
@@ -348,12 +373,20 @@ export const DEMO_SCENARIO: RecordedScenario = {
       "key": "conductor#-#merge#0",
       "agentId": "conductor",
       "phase": "merge",
+      "degradations": [
+        {
+          "kind": "structured_output",
+          "from": "json_schema",
+          "to": "json_mode",
+          "detail": "model declares structuredOutput=json_mode; schema moved into the prompt and validated locally with repair retries"
+        }
+      ],
       "usage": {
         "inputTokens": 4120,
         "outputTokens": 1180
       },
       "payload": {
-        "merge_notes": "调研给出了定位空档，审查给出了 V1 的边界。我把两边合成了一份 PRD 初稿，并把没有来源支撑的判断放进了假设一节。",
+        "merge_notes": "本轮没有联网能力，调研只能给出未经核实的判断，我已经把这一点写进假设一节，并把需要联网复核的部分留在未决问题里。审查给出了 V1 的边界。",
         "product_summary": "yTriple 是一个桌面端 PRD 工作台。用户粘贴一段模糊的产品想法，一个小型 Agent 团队在同一个对话里回问最多两三个关键问题，然后产出一份可以直接交给开发或 AI coding agent 的 prd.md。产品承诺是一份干净的初稿，不是一包报告。",
         "problem_background": "独立开发者一个人同时负责想清楚和写出来。把模糊想法整理成规格的这一步既最容易卡住，也最容易被跳过，结果是需求停留在脑子里，开发从一句话开始猜。现有工具要么给一张空模板把认知负担还回来，要么能聊但不收敛，产出散落在对话里。",
         "target_users": "独立开发者与个人产品作者：自带模型 key，习惯本地工作，需要的是把想法变成可执行规格，而不是团队评审流程。",
@@ -415,7 +448,7 @@ export const DEMO_SCENARIO: RecordedScenario = {
         "assumptions": [
           "第一批用户是作者本人这类独立开发者，自带模型 key",
           "桌面端优先，手机端本轮不考虑",
-          "竞品判断来自公开资料，未逐家验证价格与留存"
+          "本轮没有联网能力，竞品与市场判断均无外部来源支撑，属于待核实的假设"
         ],
         "open_questions": [
           "PRD 之后第二个值得做的模板是什么",
@@ -459,7 +492,7 @@ export function scenarioToRecording(scenario: RecordedScenario): ProviderRecordi
         toolCalls: entry.toolCalls ?? [],
         usage: entry.usage ?? { inputTokens: 0, outputTokens: 0 },
         ...(entry.sources ? { sources: entry.sources } : {}),
-        degradations: [],
+        degradations: entry.degradations ?? [],
       },
     })),
   };

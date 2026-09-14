@@ -131,13 +131,32 @@ describe("buildTaskView on a real run", () => {
     expect(view.members.map((member) => member.agentId)).toEqual(["researcher", "specialist"]);
     expect(researcher?.status).toBe("contributed");
     expect(researcher?.objective).toContain("调研");
-    expect(researcher?.toolCalls.map((call) => call.tool)).toContain("web_search");
-    expect(researcher?.sources).toHaveLength(2);
     expect(researcher?.contribution?.schemaId).toBe("research_contribution");
     expect(specialist?.contribution?.schemaId).toBe("review_contribution");
     // Panels are labelled by the role, not by a hardcoded slot.
     expect(researcher?.panelSections).toContain("Sources");
     expect(specialist?.panelSections).toContain("Review checklist");
+  });
+
+  it("surfaces the degradations the run reported, attributed to an agent", async () => {
+    const view = buildTaskView(team, "view-task", await recordedRun());
+
+    // The recorded provider is JSON-mode only, so every schema call degrades.
+    expect(view.degradations.length).toBeGreaterThan(0);
+    expect(view.degradations[0]?.degradation.kind).toBe("structured_output");
+    expect(view.degradations[0]?.degradation.to).toBe("json_mode");
+    expect(view.degradations.every((entry) => entry.agentId !== undefined)).toBe(true);
+
+    const researcher = view.members.find((member) => member.agentId === "researcher");
+    expect(researcher?.degradations.length).toBeGreaterThan(0);
+  });
+
+  it("shows no sources and no research tool when the run could not search", async () => {
+    const view = buildTaskView(team, "view-task", await recordedRun());
+    const researcher = view.members.find((member) => member.agentId === "researcher");
+
+    expect(researcher?.sources).toEqual([]);
+    expect(researcher?.toolCalls.map((call) => call.tool)).not.toContain("web_search");
   });
 
   it("keeps the orchestrator out of the side bays", async () => {

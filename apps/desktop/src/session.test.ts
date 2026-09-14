@@ -64,5 +64,32 @@ describe("desktop host boundary", () => {
     expect(typeof session.runtime.run).toBe("function");
     expect(typeof session.runtime.subscribe).toBe("function");
     expect(session.runtime.events()).toEqual([]);
+    expect(session.team.teamId).toBe("prd.default");
+  });
+
+  it("lets a host narrow what it claims it can do", () => {
+    const capabilities = desktopCapabilities(
+      bridge({ capabilityOverrides: { localModels: false, streaming: false } }),
+    );
+    expect(capabilities.localModels).toBe(false);
+    expect(capabilities.streaming).toBe(false);
+    expect(capabilities.outputWrite).toBe(true);
+  });
+
+  it("accepts a host that routes models itself, such as a replay host", async () => {
+    let asked = 0;
+    const session = createDesktopSession(
+      "task-1",
+      bridge({
+        resolveBinding: async () => {
+          asked += 1;
+          throw new Error("stop here; the binding resolver was used");
+        },
+      }),
+    );
+
+    const outcome = await session.runtime.run({ userInput: "an idea" });
+    expect(asked).toBeGreaterThan(0);
+    expect(outcome.status).toBe("failed");
   });
 });

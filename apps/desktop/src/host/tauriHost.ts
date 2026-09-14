@@ -1,9 +1,6 @@
-import { createTaskRuntime, type TaskRuntime } from "@ytriple/core";
-import {
-  createModelRouter,
-  defaultModelBinding,
-  defaultProviderConfigs,
-} from "@ytriple/providers";
+import type { TaskRuntime } from "@ytriple/core";
+import { defaultModelBinding, defaultProviderConfigs } from "@ytriple/providers";
+import { createDesktopSession } from "../session.js";
 import type {
   ClockPort,
   FileContent,
@@ -126,29 +123,20 @@ export function createTauriHost(): DesktopHost {
     saveCredential: (credentialRef, value) =>
       invoke<void>("credential_set", { credentialRef, value }),
     createRuntime(input: CreateRuntimeInput): TaskRuntime {
-      const router = createModelRouter(input.config, { http, secrets });
-
-      return createTaskRuntime({
-        taskId: input.taskId,
-        team: input.team,
+      // Ports are assembled in one place, `createDesktopSession`, so the shell
+      // and the demo host cannot drift into different wiring.
+      return createDesktopSession(input.taskId, {
         config: input.config,
-        capabilities: {
-          workspaceRead: input.workspaceRoot !== undefined,
-          outputWrite: true,
-          webSearch: true,
-          localModels: true,
-          persistentBackgroundRuns: false,
-          streaming: false,
-        },
-        ports: {
-          output: tauriOutputPort(),
-          clock: systemClock(),
-          user: input.user,
-          search: tauriSearchPort(),
-          ...(input.workspaceRoot ? { fs: tauriFsPort(input.workspaceRoot) } : {}),
-        },
-        resolveBinding: (binding) => router.resolve(binding),
-      });
+        team: input.team,
+        http,
+        secrets,
+        output: tauriOutputPort(),
+        clock: systemClock(),
+        user: input.user,
+        search: tauriSearchPort(),
+        capabilityOverrides: { streaming: false },
+        ...(input.workspaceRoot ? { fs: tauriFsPort(input.workspaceRoot) } : {}),
+      }).runtime;
     },
   };
 }

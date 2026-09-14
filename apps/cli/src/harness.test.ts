@@ -65,10 +65,24 @@ describe("the demo scenario", () => {
       "## UX / Interaction Requirements",
       "## Success Criteria",
       "## Assumptions and Open Questions",
-      "## Source Notes",
     ]) {
       expect(markdown).toContain(heading);
     }
+  });
+
+  it("claims no sources when the run had no way to search", async () => {
+    const out = await tempDir("ytriple-harness-");
+    const outcome = await runHarness(
+      ["--scenario", "demo", "--out", out, "--task-id", "no-search"],
+      collectingIo(),
+      {},
+    );
+
+    // The recorded provider cannot ground and the harness has no SearchPort, so
+    // the document must not carry a source list it never had.
+    expect(outcome.result?.brief?.contextAvailability.webSearch).toBe(false);
+    expect(outcome.result?.prd?.markdown).not.toContain("## Source Notes");
+    expect(outcome.result?.contributions.every((entry) => entry.sources.length === 0)).toBe(true);
   });
 
   it("streams the real event sequence to stdout", async () => {

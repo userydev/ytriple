@@ -91,7 +91,8 @@ export interface TaskView {
   /** Contributors only; the orchestrator owns the centre pane. */
   members: MemberView[];
   artifact?: { filename: string; path: string };
-  degradations: Degradation[];
+  /** Every degradation the run reported, with the agent it happened to. */
+  degradations: Array<{ degradation: Degradation; agentId?: AgentId; subAgentId?: string }>;
   errors: Array<{ stage: string; message: string; agentId?: AgentId; retryable: boolean }>;
   usage: TokenUsage;
   eventCount: number;
@@ -317,7 +318,11 @@ export function buildTaskView(
       }
 
       case "degradation": {
-        view.degradations.push(body.degradation);
+        view.degradations.push({
+          degradation: body.degradation,
+          ...(body.agentId ? { agentId: body.agentId } : {}),
+          ...(body.subAgentId ? { subAgentId: body.subAgentId } : {}),
+        });
         memberFor(body.agentId)?.degradations.push(body.degradation);
         break;
       }

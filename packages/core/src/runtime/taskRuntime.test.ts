@@ -343,6 +343,60 @@ describe("team size is data", () => {
   });
 });
 
+describe("a brief with no member tasks", () => {
+  const handlers = defaultHandlers({
+    brief: () => ({
+      productObject: "A thing",
+      targetUser: "Someone",
+      coreScenario: "They use it",
+      painOrProblem: "It is hard today",
+      v1Scope: ["one"],
+      nonGoals: ["two"],
+      successCriteria: ["three"],
+      assumptions: [],
+      openQuestions: [],
+      memberTasks: [],
+    }),
+  });
+
+  /**
+   * Failing the whole task because the model dropped one field is worse than
+   * proceeding, but proceeding silently would be a hidden decision. The
+   * fallback must therefore always be announced on the event stream.
+   */
+  it("dispatches every member on its role and says so on the event stream", async () => {
+    const { runtime, team } = harness({ handlers });
+    const result = await runtime.run({ userInput: "idea" });
+
+    const notice = eventsOfType(result.events, "agent_stage").find(
+      (body) => body.stage === "dispatch",
+    );
+    expect(notice).toBeDefined();
+    expect(notice?.agentId).toBe(team.orchestratorId);
+    expect(notice?.detail).toBe(
+      "brief contained no memberTasks; dispatching every member on its role responsibility",
+    );
+
+    const contributors = team.members
+      .filter((member) => member.agentId !== team.orchestratorId)
+      .map((member) => member.agentId);
+    expect(eventsOfType(result.events, "agent_dispatched").map((body) => body.agentId)).toEqual(
+      contributors,
+    );
+    expect(result.brief?.memberTasks.map((task) => task.agentId)).toEqual(contributors);
+    expect(result.status).toBe("completed");
+  });
+
+  it("does not announce a fallback when the brief listed its members", async () => {
+    const { runtime } = harness();
+    const result = await runtime.run({ userInput: "idea" });
+
+    expect(
+      eventsOfType(result.events, "agent_stage").filter((body) => body.stage === "dispatch"),
+    ).toEqual([]);
+  });
+});
+
 describe("sub-agents stay an implementation detail", () => {
   const handlers = defaultHandlers({
     "researcher:member_work": (request: GenerateRequest) => {

@@ -6,6 +6,7 @@ import { credentialRefsOf, defaultSettings, teamFromSettings } from "../state/se
 import { taskStatusLabel } from "../state/taskView.js";
 import { useTaskSession } from "../state/useTaskSession.js";
 import { ChatPane } from "./ChatPane.js";
+import { DegradationBar, groupDegradations } from "./DegradationBar.js";
 import { HistoryView } from "./HistoryView.js";
 import { MemberPane } from "./MemberPane.js";
 import { PrdPreview } from "./PrdPreview.js";
@@ -124,9 +125,6 @@ function AppShell(props: ShellProps): JSX.Element {
             {taskView.eventCount} events · {taskView.usage.inputTokens} in /{" "}
             {taskView.usage.outputTokens} out
           </span>
-          {taskView.degradations.length > 0 && (
-            <span className="tag tag-warn">{taskView.degradations.length} degradation(s)</span>
-          )}
           {view === "workspace" && taskView.artifact && (
             <button
               type="button"
@@ -157,6 +155,11 @@ function AppShell(props: ShellProps): JSX.Element {
           <strong>{host.info.label}.</strong> {host.info.replayNotice}
         </div>
       )}
+
+      <DegradationBar
+        groups={groupDegradations(taskView.degradations)}
+        displayNames={displayNames}
+      />
 
       {view === "workspace" && (
         <main className={`bays bays-${layout.bays.length}`}>
