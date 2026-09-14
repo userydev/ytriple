@@ -13,6 +13,8 @@ import {
   createReplayAdapter,
   formatPreflightReport,
   preflightConfig,
+  findScenario,
+  scenarioToRecording,
   type PreflightReport,
   type ProviderRecording,
 } from "@ytriple/providers";
@@ -29,7 +31,6 @@ import {
   createSystemClock,
 } from "./nodePorts.js";
 import { renderEvent, renderSummary, summaryFor } from "./render.js";
-import { loadScenario, scenarioToRecording } from "./scenario.js";
 
 export interface HarnessIo {
   write(text: string): void;
@@ -62,7 +63,7 @@ export async function runHarness(
     return { exitCode: 0 };
   }
 
-  const config = await loadConfig(args.values.get("config"));
+  const config = await loadConfig(args.values.get("config"), env);
   const http = createNodeHttpPort();
   const secrets = createEnvSecretPort(env);
   const verbose = args.flags.has("verbose");
@@ -78,7 +79,7 @@ export async function runHarness(
   }
 
   const scenarioName = args.values.get("scenario");
-  const scenario = scenarioName ? await loadScenario(scenarioName) : undefined;
+  const scenario = scenarioName ? findScenario(scenarioName) : undefined;
 
   const userInput =
     args.values.get("input") ??

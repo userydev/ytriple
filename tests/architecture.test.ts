@@ -12,18 +12,24 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 const ENVIRONMENT_AGNOSTIC_PACKAGES = ["packages/core/src", "packages/shared/src"];
 
-function collectTypeScriptFiles(directory: string): string[] {
+function collectFiles(directory: string, ...extensions: string[]): string[] {
   const files: string[] = [];
   for (const entry of readdirSync(directory)) {
     const absolute = join(directory, entry);
     if (statSync(absolute).isDirectory()) {
-      if (entry === "node_modules" || entry === "dist") continue;
-      files.push(...collectTypeScriptFiles(absolute));
+      if (entry === "node_modules" || entry === "dist" || entry === "dist-web" || entry === "target") {
+        continue;
+      }
+      files.push(...collectFiles(absolute, ...extensions));
       continue;
     }
-    if (entry.endsWith(".ts")) files.push(absolute);
+    if (extensions.some((extension) => entry.endsWith(extension))) files.push(absolute);
   }
   return files;
+}
+
+function collectTypeScriptFiles(directory: string): string[] {
+  return collectFiles(directory, ".ts", ".tsx");
 }
 
 const IMPORT_PATTERN = /(?:from|import)\s*\(?\s*["']([^"']+)["']/g;
@@ -114,32 +120,69 @@ describe("environment-agnostic core", () => {
 });
 
 describe("single source of orchestration truth", () => {
-  it("keeps orchestration out of every host", () => {
-    const hostDirectories = ["apps/desktop/src", "apps/cli/src", "src-tauri"];
-    const orchestrationMarkers = [
-      /task_brief_updated/,
-      /intake_brief_dispatch_merge/,
-      /createTaskRuntime\s*\(/,
-    ];
+  /**
+   * A host may call into core and render its events. What it may not do is
+   * produce those events itself, implement the workflow, or assemble prompts —
+   * that is how a second, competing runtime appears.
+   */
+  const ORCHESTRATION_MARKERS = [
+    { pattern: /intake_brief_dispatch_merge/, why: "implements the workflow" },
+    { pattern: /systemSections/, why: "assembles prompts" },
+    { pattern: /\bemit\s*\(\s*\{\s*type:/, why: "synthesises runtime events" },
+    { pattern: /responseSchema\s*:/, why: "talks to a model directly" },
+  ];
 
+  it("keeps orchestration out of every TypeScript host", () => {
     const offenders: string[] = [];
-    for (const directory of hostDirectories) {
-      let files: string[];
-      try {
-        files = collectTypeScriptFiles(join(repoRoot, directory));
-      } catch {
-        continue;
-      }
-      for (const file of files) {
+    for (const directory of ["apps/desktop/src", "apps/cli/src"]) {
+      for (const file of collectTypeScriptFiles(join(repoRoot, directory))) {
         const source = readFileSync(file, "utf8");
-        // Calling into core is the point; re-implementing its states is not.
-        if (source.includes("from \"@ytriple/core\"")) continue;
-        for (const marker of orchestrationMarkers) {
-          if (marker.test(source)) offenders.push(`${file.replace(repoRoot, "")}: ${marker.source}`);
+        for (const { pattern, why } of ORCHESTRATION_MARKERS) {
+          if (pattern.test(source)) {
+            offenders.push(`${file.replace(repoRoot, "")}: ${why}`);
+          }
         }
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it("keeps orchestration out of the Tauri shell", () => {
+    const rustMarkers = [
+      /task_brief/i,
+      /orchestrat/i,
+      /system_prompt/i,
+      /agent_definition/i,
+      /dispatch/i,
+    ];
+
+    let files: string[];
+    try {
+      files = collectFiles(join(repoRoot, "src-tauri/src"), ".rs");
+    } catch {
+      return;
+    }
+
+    const offenders: string[] = [];
+    for (const file of files) {
+      const source = readFileSync(file, "utf8");
+      for (const marker of rustMarkers) {
+        if (marker.test(source)) offenders.push(`${file.replace(repoRoot, "")}: ${marker.source}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("defines the runtime in exactly one place", () => {
+    const definitions: string[] = [];
+    for (const directory of ["packages", "apps"]) {
+      for (const file of collectTypeScriptFiles(join(repoRoot, directory))) {
+        if (/export function createTaskRuntime/.test(readFileSync(file, "utf8"))) {
+          definitions.push(file.replace(repoRoot, ""));
+        }
+      }
+    }
+    expect(definitions).toEqual(["packages/core/src/runtime/taskRuntime.ts"]);
   });
 
   it("gives FsPort no write method", () => {

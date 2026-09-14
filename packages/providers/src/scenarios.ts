@@ -1,4 +1,42 @@
-{
+import type { ProviderCapabilities, SourceNote, ToolCall, TokenUsage } from "@ytriple/shared";
+import type { ProviderRecording } from "./testing.js";
+
+/**
+ * Recorded runs.
+ *
+ * A scenario is one complete task captured in the shape `createRecordingAdapter`
+ * produces: readable payloads plus the tool calls, sources and usage that came
+ * back. Replaying one drives the whole runtime with no key and no network, which
+ * is what lets the CLI harness, CI and the desktop demo host all exercise a real
+ * task offline.
+ *
+ * It lives here because it is recording data, and it is a module rather than a
+ * JSON file so a browser renderer can import it too.
+ */
+export interface RecordedScenarioEntry {
+  key: string;
+  agentId: string;
+  phase: string;
+  /** Serialised into the model reply. */
+  payload?: Record<string, unknown>;
+  text?: string;
+  toolCalls?: ToolCall[];
+  sources?: SourceNote[];
+  usage?: TokenUsage;
+}
+
+export interface RecordedScenario {
+  name: string;
+  description: string;
+  userInput: string;
+  title?: string;
+  /** Answers the scripted user gives, keyed by agentId or questionId. */
+  answers: Record<string, string>;
+  capabilities: ProviderCapabilities;
+  entries: RecordedScenarioEntry[];
+}
+
+export const DEMO_SCENARIO: RecordedScenario = {
   "name": "demo",
   "description": "Recorded PRD run used by the offline harness and by CI. Model responses were captured once and are replayed verbatim, so this scenario needs no API key and no network.",
   "userInput": "我想做一个工具，把模糊的产品想法变成可以给开发看的 PRD，但是我现在还没想清楚具体流程。",
@@ -66,7 +104,17 @@
       "agentId": "conductor",
       "phase": "question_gate",
       "payload": {
-        "approved": [{ "questionId": "q-1" }, { "questionId": "q-2" }, { "questionId": "q-3" }],
+        "approved": [
+          {
+            "questionId": "q-1"
+          },
+          {
+            "questionId": "q-2"
+          },
+          {
+            "questionId": "q-3"
+          }
+        ],
         "dropped_reason": "三个问题各自指向不同的决策，都值得问。"
       }
     },
@@ -100,7 +148,9 @@
           "用户自带模型 key，第一版不做托管额度",
           "第一批用户就是作者本人这类独立开发者"
         ],
-        "openQuestions": ["PRD 之后第二个值得做的模板是什么"],
+        "openQuestions": [
+          "PRD 之后第二个值得做的模板是什么"
+        ],
         "memberTasks": [
           {
             "agentId": "researcher",
@@ -110,7 +160,10 @@
               "这些工具各自把重心放在哪一步",
               "事实与推断分开"
             ],
-            "outOfScope": ["成功指标与 V1 范围的取舍", "撰写 PRD 正文"]
+            "outOfScope": [
+              "成功指标与 V1 范围的取舍",
+              "撰写 PRD 正文"
+            ]
           },
           {
             "agentId": "specialist",
@@ -120,7 +173,10 @@
               "最大的产品风险和对应取舍",
               "缺失的 PRD 章节"
             ],
-            "outOfScope": ["竞品清单与市场数据", "撰写 PRD 正文"]
+            "outOfScope": [
+              "竞品清单与市场数据",
+              "撰写 PRD 正文"
+            ]
           }
         ]
       }
@@ -133,10 +189,15 @@
         {
           "toolCallId": "call_search_1",
           "name": "web_search",
-          "arguments": { "query": "把产品想法转成 PRD 的工具 独立开发者 2026" }
+          "arguments": {
+            "query": "把产品想法转成 PRD 的工具 独立开发者 2026"
+          }
         }
       ],
-      "usage": { "inputTokens": 1840, "outputTokens": 96 }
+      "usage": {
+        "inputTokens": 1840,
+        "outputTokens": 96
+      }
     },
     {
       "key": "researcher#-#member_work#1",
@@ -156,7 +217,10 @@
           "origin": "native_provider_search"
         }
       ],
-      "usage": { "inputTokens": 2610, "outputTokens": 742 },
+      "usage": {
+        "inputTokens": 2610,
+        "outputTokens": 742
+      },
       "payload": {
         "summary": "把想法变成规格这一步有两类工具在做：模板型（给你一张空表）和对话型（陪你问出答案）。面向独立开发者、并且以单一可交付文件收尾的那一档基本是空的。",
         "facts": [
@@ -175,9 +239,18 @@
           "以单一文件收尾，比生成一整包报告更贴近独立开发者的真实下游动作：把文件丢给开发或 AI coding agent。"
         ],
         "competitive_set": [
-          { "name": "Notion / Confluence PRD 模板", "angle": "提供结构，但不帮你想清楚内容" },
-          { "name": "通用聊天助手", "angle": "能对话，但不收敛，产出散落在对话里" },
-          { "name": "团队向产品管理工具", "angle": "围绕路线图和评审流程，单人场景太重" }
+          {
+            "name": "Notion / Confluence PRD 模板",
+            "angle": "提供结构，但不帮你想清楚内容"
+          },
+          {
+            "name": "通用聊天助手",
+            "angle": "能对话，但不收敛，产出散落在对话里"
+          },
+          {
+            "name": "团队向产品管理工具",
+            "angle": "围绕路线图和评审流程，单人场景太重"
+          }
         ],
         "proposed_sections": [
           {
@@ -185,7 +258,9 @@
             "body": "不与团队向产品管理工具争评审流程，而是占住「一个人把模糊想法收敛成一份可交付规格」这一步。"
           }
         ],
-        "assumptions": ["竞品价格带以公开页面为准，未做逐家验证"],
+        "assumptions": [
+          "竞品价格带以公开页面为准，未做逐家验证"
+        ],
         "open_questions": [
           "中文市场是否已有同类对话型工具，本轮检索未覆盖到独立开发者社区内部的自建工具"
         ]
@@ -195,15 +270,38 @@
       "key": "specialist#-#member_work#0",
       "agentId": "specialist",
       "phase": "member_work",
-      "usage": { "inputTokens": 2480, "outputTokens": 690 },
+      "usage": {
+        "inputTokens": 2480,
+        "outputTokens": 690
+      },
       "payload": {
         "summary": "方向成立，但 V1 的风险不在功能少，而在流程太重。只要提问超过三个、或者交付物超过一个文件，这个工具就退化成又一个需要维护的表单。",
         "checklist": [
-          { "item": "目标用户是否具体", "verdict": "ok", "note": "独立开发者，一人分饰两角" },
-          { "item": "核心场景是否单一", "verdict": "ok", "note": "粘贴想法到拿到 prd.md" },
-          { "item": "成功标准是否可测", "verdict": "ok", "note": "十分钟内拿到可交付初稿" },
-          { "item": "非目标是否明确", "verdict": "weak", "note": "需要写死「不做第二种模板」" },
-          { "item": "失败路径是否覆盖", "verdict": "missing", "note": "没写没有联网能力时怎么办" }
+          {
+            "item": "目标用户是否具体",
+            "verdict": "ok",
+            "note": "独立开发者，一人分饰两角"
+          },
+          {
+            "item": "核心场景是否单一",
+            "verdict": "ok",
+            "note": "粘贴想法到拿到 prd.md"
+          },
+          {
+            "item": "成功标准是否可测",
+            "verdict": "ok",
+            "note": "十分钟内拿到可交付初稿"
+          },
+          {
+            "item": "非目标是否明确",
+            "verdict": "weak",
+            "note": "需要写死「不做第二种模板」"
+          },
+          {
+            "item": "失败路径是否覆盖",
+            "verdict": "missing",
+            "note": "没写没有联网能力时怎么办"
+          }
         ],
         "missing_sections": [
           "联网或工作区不可用时的降级表现",
@@ -238,15 +336,22 @@
             "body": "联网不可用时继续产出 PRD，但在假设一节声明「本轮无外部来源支撑」；工作区不可用时不安排读代码的子任务。"
           }
         ],
-        "assumptions": ["桌面端优先，手机端本轮不考虑"],
-        "open_questions": ["用户对初稿不满意时，是重跑还是在同一个对话里追加修改"]
+        "assumptions": [
+          "桌面端优先，手机端本轮不考虑"
+        ],
+        "open_questions": [
+          "用户对初稿不满意时，是重跑还是在同一个对话里追加修改"
+        ]
       }
     },
     {
       "key": "conductor#-#merge#0",
       "agentId": "conductor",
       "phase": "merge",
-      "usage": { "inputTokens": 4120, "outputTokens": 1180 },
+      "usage": {
+        "inputTokens": 4120,
+        "outputTokens": 1180
+      },
       "payload": {
         "merge_notes": "调研给出了定位空档，审查给出了 V1 的边界。我把两边合成了一份 PRD 初稿，并把没有来源支撑的判断放进了假设一节。",
         "product_summary": "yTriple 是一个桌面端 PRD 工作台。用户粘贴一段模糊的产品想法，一个小型 Agent 团队在同一个对话里回问最多两三个关键问题，然后产出一份可以直接交给开发或 AI coding agent 的 prd.md。产品承诺是一份干净的初稿，不是一包报告。",
@@ -320,4 +425,42 @@
       }
     }
   ]
+};
+
+export const SCENARIOS: Readonly<Record<string, RecordedScenario>> = Object.freeze({
+  [DEMO_SCENARIO.name]: DEMO_SCENARIO,
+});
+
+export function scenarioNames(): string[] {
+  return Object.keys(SCENARIOS);
+}
+
+export function findScenario(scenarioName: string): RecordedScenario {
+  const scenario = SCENARIOS[scenarioName];
+  if (!scenario) {
+    throw new Error(
+      `Unknown scenario "${scenarioName}". Available: ${scenarioNames().join(", ")}`,
+    );
+  }
+  return scenario;
+}
+
+export function scenarioToRecording(scenario: RecordedScenario): ProviderRecording {
+  return {
+    providerId: "recorded",
+    adapterId: "openai_compatible",
+    capabilities: scenario.capabilities,
+    entries: scenario.entries.map((entry) => ({
+      key: entry.key,
+      agentId: entry.agentId,
+      phase: entry.phase,
+      result: {
+        text: entry.text ?? (entry.payload ? JSON.stringify(entry.payload) : ""),
+        toolCalls: entry.toolCalls ?? [],
+        usage: entry.usage ?? { inputTokens: 0, outputTokens: 0 },
+        ...(entry.sources ? { sources: entry.sources } : {}),
+        degradations: [],
+      },
+    })),
+  };
 }

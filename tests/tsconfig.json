@@ -3,7 +3,25 @@
   "compilerOptions": {
     "rootDir": ".",
     "outDir": "dist",
-    "types": ["node"]
+    "types": [
+      "node"
+    ]
   },
-  "include": ["**/*.ts"]
+  "include": [
+    "**/*.ts"
+  ],
+  "references": [
+    {
+      "path": "../packages/shared"
+    },
+    {
+      "path": "../packages/providers"
+    },
+    {
+      "path": "../packages/core"
+    },
+    {
+      "path": "../apps/desktop"
+    }
+  ]
 }

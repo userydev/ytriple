@@ -19,6 +19,8 @@ export type SubAgentAbortReason =
  */
 export type RuntimeEventBody =
   | { type: "task_status"; status: TaskStatus }
+  /** The human's own turn. A UI must be able to render the chat from events alone. */
+  | { type: "user_message"; text: string }
   | { type: "agent_message"; agentId: AgentId; text: string }
   | { type: "agent_question"; agentId: AgentId; questionId: string; question: string; reason: string }
   | { type: "user_answer"; questionId: string; text: string }
@@ -124,6 +126,8 @@ export function formatEvent(event: RuntimeEvent): string {
   switch (body.type) {
     case "task_status":
       return `[status] ${body.status}`;
+    case "user_message":
+      return `[you] ${body.text}`;
     case "agent_message":
       return `[${body.agentId}] ${body.text}`;
     case "agent_question":

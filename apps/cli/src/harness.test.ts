@@ -2,10 +2,11 @@ import { mkdtemp, readFile, readdir, symlink, writeFile, mkdir } from "node:fs/p
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { DEMO_SCENARIO, scenarioToRecording } from "@ytriple/providers";
 import { parseArgs } from "./args.js";
 import { runHarness, type HarnessIo } from "./main.js";
 import { createNodeFsPort, createNodeOutputPort } from "./nodePorts.js";
-import { loadScenario, scenarioToRecording } from "./scenario.js";
+
 
 function collectingIo(): HarnessIo & { readonly text: string } {
   const chunks: string[] = [];
@@ -101,8 +102,7 @@ describe("the demo scenario", () => {
   });
 
   it("keeps the recorded scenario in step with the runtime's phases", async () => {
-    const scenario = await loadScenario("demo");
-    const recording = scenarioToRecording(scenario);
+    const recording = scenarioToRecording(DEMO_SCENARIO);
     const out = await tempDir("ytriple-harness-");
 
     const outcome = await runHarness(["--scenario", "demo", "--out", out], collectingIo(), {});

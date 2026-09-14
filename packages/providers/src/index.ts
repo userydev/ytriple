@@ -56,3 +56,15 @@ export {
   createScriptedAdapter,
   recordingKey,
 } from "./testing.js";
+
+export type { RecordedScenario, RecordedScenarioEntry } from "./scenarios.js";
+export {
+  DEMO_SCENARIO,
+  SCENARIOS,
+  findScenario,
+  scenarioNames,
+  scenarioToRecording,
+} from "./scenarios.js";
+
+export type { DefaultModelOverrides } from "./defaults.js";
+export { defaultModelBinding, defaultProviderConfigs } from "./defaults.js";

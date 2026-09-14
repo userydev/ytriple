@@ -12,6 +12,7 @@ export default defineConfig({
       "@ytriple/shared": fromRoot("./packages/shared/src/index.ts"),
       "@ytriple/providers": fromRoot("./packages/providers/src/index.ts"),
       "@ytriple/core": fromRoot("./packages/core/src/index.ts"),
+      "@ytriple/desktop": fromRoot("./apps/desktop/src/index.ts"),
     },
   },
   test: {

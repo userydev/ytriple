@@ -178,6 +178,7 @@ export function createTaskRuntime(options: TaskRuntimeOptions): TaskRuntime {
 
         status("chatting");
         session.addUserMessage(input.userInput);
+        emit({ type: "user_message", text: input.userInput });
 
         const intake = await runIntake(capabilities);
         const questions = await runQuestionGate(intake, capabilities);

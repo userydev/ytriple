@@ -10,3 +10,20 @@
 export type { DesktopBridge, DesktopSession } from "./session.js";
 export { createDesktopSession, desktopCapabilities } from "./session.js";
 export { DESKTOP_PACKAGE_VERSION } from "./version.js";
+
+export type {
+  ChatEntry,
+  MemberStatus,
+  MemberView,
+  StageView,
+  SubAgentView,
+  TaskView,
+  ToolCallView,
+} from "./state/taskView.js";
+export { buildTaskView, memberStatusLabel, taskStatusLabel } from "./state/taskView.js";
+
+export type { SideBay, ThreeBayLayout } from "./state/layout.js";
+export { layoutMembers } from "./state/layout.js";
+
+export type { DesktopHost, DesktopSettings, HistoryRecord, HostInfo } from "./host/types.js";
+export { teamFromSettings } from "./state/settings.js";

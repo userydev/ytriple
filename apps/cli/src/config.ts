@@ -1,64 +1,33 @@
 import { readFile } from "node:fs/promises";
+import { defaultModelBinding, defaultProviderConfigs } from "@ytriple/providers";
 import type { ModelBinding, ProviderConfig, YtripleConfig } from "@ytriple/shared";
 
 /**
- * Provider configuration for the harness.
- *
- * Everything here is data: adding a vendor means adding an entry, never
- * touching core. Credentials are referenced by environment variable name and
- * resolved through the SecretPort at call time.
+ * Provider configuration for the harness. The catalog itself is shared data
+ * from `@ytriple/providers`; the harness only decides which model ids the
+ * environment overrides and which credential each one refers to.
  */
-export const BUILT_IN_PROVIDERS: ProviderConfig[] = [
-  {
-    providerId: "ark",
-    adapterId: "ark",
-    displayName: "Volcengine Ark",
-    credentialRef: "ARK_API_KEY",
-    models: [
-      {
-        modelId: process.env.ARK_MODEL ?? "doubao-seed-1-6-250615",
-        displayName: "Ark default model",
-        capabilities: { nativeWebSearch: true, structuredOutput: "json_schema" },
-      },
-    ],
-  },
-  {
-    providerId: "google",
-    adapterId: "google",
-    displayName: "Google Gemini",
-    credentialRef: "GOOGLE_API_KEY",
-    models: [
-      {
-        modelId: process.env.GOOGLE_MODEL ?? "gemini-2.5-flash",
-        displayName: "Gemini Flash",
-      },
-    ],
-  },
-  {
-    providerId: "deepseek",
-    adapterId: "openai_compatible",
-    displayName: "DeepSeek",
-    baseUrl: "https://api.deepseek.com/v1",
-    credentialRef: "DEEPSEEK_API_KEY",
-    models: [
-      {
-        modelId: process.env.DEEPSEEK_MODEL ?? "deepseek-chat",
-        displayName: "DeepSeek Chat",
-        capabilities: { structuredOutput: "json_mode", toolCalling: "sequential" },
-      },
-    ],
-  },
-];
-
-export function defaultConfig(defaultModel?: ModelBinding): YtripleConfig {
-  return {
-    providers: BUILT_IN_PROVIDERS,
-    defaultModel: defaultModel ?? { providerId: "ark", modelId: BUILT_IN_PROVIDERS[0]!.models[0]!.modelId },
-  };
+export function builtInProviders(env: NodeJS.ProcessEnv = process.env): ProviderConfig[] {
+  return defaultProviderConfigs({
+    arkModelId: env.ARK_MODEL,
+    googleModelId: env.GOOGLE_MODEL,
+    deepseekModelId: env.DEEPSEEK_MODEL,
+  });
 }
 
-export async function loadConfig(path: string | undefined): Promise<YtripleConfig> {
-  if (!path) return defaultConfig();
+export function defaultConfig(
+  env: NodeJS.ProcessEnv = process.env,
+  defaultModel?: ModelBinding,
+): YtripleConfig {
+  const providers = builtInProviders(env);
+  return { providers, defaultModel: defaultModel ?? defaultModelBinding(providers) };
+}
+
+export async function loadConfig(
+  path: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<YtripleConfig> {
+  if (!path) return defaultConfig(env);
 
   const raw = await readFile(path, "utf8");
   const parsed: unknown = JSON.parse(raw);
