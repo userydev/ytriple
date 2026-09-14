@@ -82,17 +82,20 @@ export function createArkAdapter(options: ArkAdapterOptions): ProviderAdapter {
       if (maxOutputTokens !== undefined) body.max_output_tokens = maxOutputTokens;
 
       if (request.responseSchema) {
-        body.text = {
-          format:
-            structured.mode === "json_schema"
-              ? {
-                  type: "json_schema",
-                  name: request.responseSchema.name,
-                  strict: true,
-                  schema: request.responseSchema.schema,
-                }
-              : { type: "json_object" },
-        };
+        if (structured.mode === "json_schema") {
+          body.text = {
+            format: {
+              type: "json_schema",
+              name: request.responseSchema.name,
+              strict: true,
+              schema: request.responseSchema.schema,
+            },
+          };
+        } else if (structured.mode === "json_mode") {
+          body.text = { format: { type: "json_object" } };
+        }
+        // `none` means prompt-only: sending json_object anyway would make the
+        // reported degradation a lie about what was actually requested.
       }
 
       const tools: Array<Record<string, unknown>> = [];

@@ -1,4 +1,5 @@
 import type { SourceNote, TaskBrief } from "@ytriple/shared";
+import { isSafeHttpUrl } from "../safety.js";
 
 /**
  * Renders the single deliverable.
@@ -106,6 +107,13 @@ function sourceNotes(sources: readonly SourceNote[]): string {
     if (!unique.has(source.url)) unique.set(source.url, source);
   }
   return [...unique.values()]
-    .map((source) => `- [${source.title}](${source.url})${source.snippet ? ` — ${source.snippet}` : ""}`)
+    .map((source) => {
+      const suffix = source.snippet ? ` — ${source.snippet}` : "";
+      // A model can return any string as a URL. Only link the ones a webview
+      // can safely follow; show the rest as text so nothing is hidden.
+      return isSafeHttpUrl(source.url)
+        ? `- [${source.title}](${source.url})${suffix}`
+        : `- ${source.title} (unsupported link: ${source.url})${suffix}`;
+    })
     .join("\n");
 }

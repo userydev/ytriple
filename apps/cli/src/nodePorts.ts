@@ -17,7 +17,7 @@ import type {
   TextMatch,
   UserPort,
 } from "@ytriple/shared";
-import { matchesAnyGlob } from "@ytriple/core";
+import { assertSafePathSegment, matchesAnyGlob } from "@ytriple/core";
 
 /**
  * Node implementations of the ports core needs. All host knowledge lives here;
@@ -164,12 +164,18 @@ export interface NodeOutputPortOptions {
 export function createNodeOutputPort(options: NodeOutputPortOptions): OutputPort & {
   directoryFor(taskId: string): string;
 } {
-  const directoryFor = (taskId: string) => resolve(options.outputRoot, "ytriple-outputs", taskId);
+  const directoryFor = (taskId: string) => {
+    // Defence in depth: core checks this too, but a host must never resolve an
+    // unvalidated id into a path.
+    assertSafePathSegment(taskId, "taskId");
+    return resolve(options.outputRoot, "ytriple-outputs", taskId);
+  };
 
   return {
     directoryFor,
     async writeDocument(request) {
       const directory = directoryFor(request.taskId);
+      assertSafePathSegment(request.filename, "filename");
       const path = join(directory, request.filename);
       if (existsSync(path)) {
         throw new Error(`${path} already exists; yTriple never overwrites an output`);

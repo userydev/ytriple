@@ -1,5 +1,6 @@
 import type {
   AgentDefinition,
+  ClockPort,
   ModelBinding,
   RuntimeEventBody,
   SourceNote,
@@ -36,14 +37,21 @@ export interface SubAgentOutcome {
 
 export interface SubAgentDeps {
   parent: AgentDefinition;
+  /** Depth of whoever is spawning: 0 for the member, 1 for its own sub-agent. */
   parentDepth: number;
   binding: ModelBinding;
   ledger: SubAgentLedger;
+  /**
+   * Built for the child's depth, so a child that may still nest gets a working
+   * spawn tool and one at the limit does not.
+   */
   registry: ToolRegistry;
   modelCaller: ModelCaller;
+  /** The child's own flag. Sharing the parent's leaks grounding upward. */
   grounding: GroundingFlag;
   maxRounds: number;
   maxToolCallsPerRound: number;
+  clock: ClockPort;
   emit(body: RuntimeEventBody): void;
   nextSubAgentId(): string;
 }
@@ -163,8 +171,27 @@ export async function runSubAgent(
     },
   ];
 
+  /**
+   * The wall-clock budget has to be able to interrupt a call that never
+   * returns. Checking it after each provider response cannot do that, so the
+   * run races a deadline driven by the injected clock.
+   */
+  let finished = false;
+  const watchdog = async (): Promise<never> => {
+    const remaining = deps.ledger.remainingWallClockMs;
+    if (remaining > 0) await deps.clock.sleep(remaining);
+    if (finished) {
+      // The run already returned; block here rather than rejecting a settled race.
+      await new Promise<never>(() => {});
+    }
+    throw new SubAgentBudgetError({
+      reason: "wall_clock_exceeded",
+      detail: `${subAgentId} passed the ${budget.maxWallClockMs}ms sub-agent wall clock budget`,
+    });
+  };
+
   try {
-    const result = await runAgentLoop({
+    const work = runAgentLoop({
       agentId: deps.parent.agentId,
       subAgentId,
       depth,
@@ -183,6 +210,9 @@ export async function runSubAgent(
       onStage: stage,
       onUsage: (usage) => child.charge(usage),
     });
+
+    const result = await Promise.race([work, watchdog()]);
+    finished = true;
 
     const outcome: SubAgentOutcome = {
       subAgentId,
@@ -205,6 +235,7 @@ export async function runSubAgent(
 
     return outcome;
   } catch (error) {
+    finished = true;
     const reason: SubAgentAbortReason =
       error instanceof SubAgentBudgetError ? error.reason : "provider_error";
     const detail = error instanceof Error ? error.message : "unknown error";

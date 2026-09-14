@@ -34,6 +34,8 @@ export interface SubAgentLedger {
   readonly usedTokens: number;
   readonly remainingTokens: number;
   readonly spawnCount: number;
+  /** Milliseconds left before the wall-clock budget is spent. */
+  readonly remainingWallClockMs: number;
   check(requestedTokens: number): BudgetRejection | undefined;
   openChild(subAgentId: string, requestedTokens: number): ChildBudget;
 }
@@ -56,6 +58,9 @@ export function createSubAgentLedger(
     },
     get spawnCount() {
       return spawnCount;
+    },
+    get remainingWallClockMs() {
+      return Math.max(0, budget.maxWallClockMs - (now() - startedAt));
     },
     check(requestedTokens) {
       if (spawnCount >= budget.maxSpawns) {

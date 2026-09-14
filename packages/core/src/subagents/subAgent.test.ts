@@ -180,6 +180,7 @@ describe("runSubAgent", () => {
       grounding: { requested: false },
       maxRounds: 1,
       maxToolCallsPerRound: 2,
+      clock,
       emit: (body) => events.push(body),
       nextSubAgentId: () => `researcher.sub-${++counter}`,
       ...overrides,
@@ -253,6 +254,65 @@ describe("runSubAgent", () => {
     expect(events.find((event) => event.type === "subagent_aborted")).toMatchObject({
       reason: "token_budget_exhausted",
     });
+  });
+
+  /**
+   * The budget contract promises a wall-clock limit, but it used to be checked
+   * only after a provider call returned, so a call that never returned was
+   * never interrupted. The deadline now races the run.
+   */
+  it("aborts a run whose provider call never returns", async () => {
+    const events: RuntimeEventBody[] = [];
+    const clock = createFakeClock();
+    const hangingAdapter = createScriptedProviderAdapter({
+      handlers: { subagent_work: () => new Promise<never>(() => {}) as never },
+    });
+
+    const deps: SubAgentDeps = {
+      parent: parentAgent(),
+      parentDepth: 0,
+      binding: { providerId: "p", modelId: "m" },
+      ledger: createSubAgentLedger(budget, () => clock.now()),
+      registry: createToolRegistry([]),
+      modelCaller: createModelCaller({
+        resolveBinding: async () => ({ adapter: hangingAdapter, model: { modelId: "m", displayName: "M" } }),
+        limits: DEFAULT_RUNTIME_LIMITS,
+        emit: (body) => events.push(body),
+      }),
+      grounding: { requested: false },
+      maxRounds: 1,
+      maxToolCallsPerRound: 2,
+      clock,
+      emit: (body) => events.push(body),
+      nextSubAgentId: () => "researcher.sub-1",
+    };
+
+    const running = runSubAgent(
+      { objective: "hang", instructions: "never return", tools: [], maxTokens: 2_000 },
+      deps,
+    );
+
+    // Nothing has resolved yet: the run is genuinely waiting on the provider.
+    await clock.advance(budget.maxWallClockMs - 1);
+    expect(events.some((event) => event.type === "subagent_aborted")).toBe(false);
+
+    await clock.advance(2);
+    const outcome = await running;
+
+    expect(outcome).toMatchObject({ incomplete: true, abortReason: "wall_clock_exceeded" });
+    expect(events.find((event) => event.type === "subagent_aborted")).toMatchObject({
+      reason: "wall_clock_exceeded",
+    });
+  });
+
+  it("leaves no pending deadline behind when the run finishes in time", async () => {
+    const { deps } = depsFor({ subagent_work: () => ({ summary: "quick", findings: [] }) });
+    const outcome = await runSubAgent(
+      { objective: "quick", instructions: "be fast", tools: [], maxTokens: 2_000 },
+      deps,
+    );
+
+    expect(outcome).toMatchObject({ incomplete: false });
   });
 
   it("returns the rejection instead of spawning when a constraint fails", async () => {

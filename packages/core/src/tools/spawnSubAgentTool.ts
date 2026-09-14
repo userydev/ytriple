@@ -14,12 +14,20 @@ export interface SpawnSubAgentToolOptions {
   parent: AgentDefinition;
   /** Default slice when the model does not ask for a specific budget. */
   defaultTokenBudget: number;
+  /**
+   * Whether the child would itself be allowed to spawn. When it is, the spawn
+   * tool has to be offered as inheritable, or a `maxDepth` above 1 is
+   * unreachable in practice.
+   */
+  childCanNest: boolean;
   run(request: SpawnRequest): Promise<SubAgentOutcome | SpawnRejection>;
   onOutcome(outcome: SubAgentOutcome): void;
 }
 
 export function createSpawnSubAgentTool(options: SpawnSubAgentToolOptions): ToolDefinition {
-  const inheritable = options.parent.tools.filter((tool) => tool !== TOOL_NAMES.spawnSubAgent);
+  const inheritable = options.parent.tools.filter(
+    (tool) => tool !== TOOL_NAMES.spawnSubAgent || options.childCanNest,
+  );
 
   return {
     name: TOOL_NAMES.spawnSubAgent,

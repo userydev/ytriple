@@ -1,5 +1,5 @@
 import type { FsPort, WorkspacePolicy } from "@ytriple/shared";
-import { matchesAnyGlob, normalizeRelativePath } from "./glob.js";
+import { createGlobMatcher, normalizeRelativePath } from "./glob.js";
 import { TOOL_NAMES } from "./toolNames.js";
 import {
   readNumberArg,
@@ -26,11 +26,24 @@ export function createWorkspaceTools(options: WorkspaceToolsOptions): ToolDefini
 }
 
 export function isPathAllowed(policy: WorkspacePolicy, path: string): boolean {
-  const normalized = normalizeRelativePath(path);
-  if (normalized.length === 0) return false;
-  if (normalized.startsWith("../") || normalized.includes("/../")) return false;
-  if (matchesAnyGlob(policy.excludeGlobs, normalized)) return false;
-  return matchesAnyGlob(policy.includeGlobs, normalized);
+  return createPathFilter(policy)(path);
+}
+
+/**
+ * Compiles the policy once for callers that check many paths, which is every
+ * listing and every search.
+ */
+export function createPathFilter(policy: WorkspacePolicy): (path: string) => boolean {
+  const excluded = createGlobMatcher(policy.excludeGlobs);
+  const included = createGlobMatcher(policy.includeGlobs);
+
+  return (path: string) => {
+    const normalized = normalizeRelativePath(path);
+    if (normalized.length === 0) return false;
+    if (normalized.startsWith("../") || normalized.includes("/../")) return false;
+    if (excluded(normalized)) return false;
+    return included(normalized);
+  };
 }
 
 function createListTool(options: WorkspaceToolsOptions): ToolDefinition {
@@ -52,9 +65,10 @@ function createListTool(options: WorkspaceToolsOptions): ToolDefinition {
         maxResults: options.policy.maxFiles,
       });
 
+      const allowed = createPathFilter(options.policy);
       const files = entries
         .map((entry) => ({ ...entry, path: normalizeRelativePath(entry.path) }))
-        .filter((entry) => isPathAllowed(options.policy, entry.path))
+        .filter((entry) => allowed(entry.path))
         .sort((left, right) => left.path.localeCompare(right.path));
       const shown = files.slice(0, limit);
 
@@ -161,7 +175,7 @@ function createSearchTool(options: WorkspaceToolsOptions): ToolDefinition {
           excludeGlobs: options.policy.excludeGlobs,
           maxResults: limit,
         })
-      ).filter((match) => isPathAllowed(options.policy, match.path));
+      ).filter(createPathFilterOn(options.policy));
 
       if (matches.length === 0) {
         return {
@@ -181,6 +195,11 @@ function createSearchTool(options: WorkspaceToolsOptions): ToolDefinition {
       };
     },
   };
+}
+
+function createPathFilterOn(policy: WorkspacePolicy) {
+  const allowed = createPathFilter(policy);
+  return (match: { path: string }) => allowed(match.path);
 }
 
 function clamp(value: number, min: number, max: number): number {

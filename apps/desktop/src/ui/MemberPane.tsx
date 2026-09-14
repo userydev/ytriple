@@ -1,3 +1,4 @@
+import { isSafeHttpUrl } from "@ytriple/core";
 import { useState, type JSX } from "react";
 import { memberStatusLabel, type MemberView, type SubAgentView } from "../state/taskView.js";
 import { groupDegradations } from "./DegradationBar.js";
@@ -80,9 +81,16 @@ export function MemberPane({ member }: { member: MemberView }): JSX.Element {
             <ul className="source-list">
               {member.sources.map((source) => (
                 <li key={source.url}>
-                  <a href={source.url} target="_blank" rel="noreferrer">
-                    {source.title}
-                  </a>
+                  {/* Search results are untrusted input; only link http(s). */}
+                  {isSafeHttpUrl(source.url) ? (
+                    <a href={source.url} target="_blank" rel="noreferrer noopener">
+                      {source.title}
+                    </a>
+                  ) : (
+                    <span>
+                      {source.title} <span className="muted">(unsupported link: {source.url})</span>
+                    </span>
+                  )}
                   {source.snippet && <p className="muted">{source.snippet}</p>}
                   <span className="tag">{source.origin.replace(/_/g, " ")}</span>
                 </li>

@@ -117,6 +117,34 @@ export interface ReplayAdapterOptions {
   allowPhaseFallback?: boolean;
 }
 
+/**
+ * Replays a run that used several providers, picking the recording that
+ * matches the provider a binding resolves to. A multi-provider run records one
+ * entry set per provider, so replaying one of them would put another member's
+ * answers in front of the wrong model.
+ */
+export function createReplayRouter(
+  recordings: readonly ProviderRecording[],
+  options: ReplayAdapterOptions = {},
+): (providerId: string) => ProviderAdapter {
+  const adapters = new Map<string, ProviderAdapter>();
+  for (const recording of recordings) {
+    adapters.set(recording.providerId, createReplayAdapter(recording, options));
+  }
+
+  return (providerId: string) => {
+    const adapter = adapters.get(providerId);
+    if (adapter) return adapter;
+    // A single-provider recording replays whatever binding asks for it; that is
+    // what makes an old fixture usable after a provider is renamed.
+    if (adapters.size === 1) return [...adapters.values()][0]!;
+    throw new ProviderError(
+      `No recording for provider "${providerId}". Recorded providers: ${[...adapters.keys()].join(", ")}`,
+      { providerId, code: "unsupported" },
+    );
+  };
+}
+
 export function createReplayAdapter(
   recording: ProviderRecording,
   options: ReplayAdapterOptions = {},

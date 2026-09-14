@@ -1,5 +1,7 @@
 export { CORE_PACKAGE_VERSION } from "./version.js";
 
+export { assertSafePathSegment, isSafeHttpUrl, isSafePathSegment } from "./safety.js";
+
 export type { IdFactory } from "./ids.js";
 export { createIdFactory } from "./ids.js";
 
@@ -29,12 +31,17 @@ export { assertValidTeam, validateTeam } from "./team/validation.js";
 
 export type { ToolName } from "./tools/toolNames.js";
 export { TOOL_NAMES, WORKSPACE_TOOLS, isKnownTool } from "./tools/toolNames.js";
-export { matchGlob, matchesAnyGlob, normalizeRelativePath } from "./tools/glob.js";
+export {
+  createGlobMatcher,
+  matchGlob,
+  matchesAnyGlob,
+  normalizeRelativePath,
+} from "./tools/glob.js";
 
 export type { ToolContext, ToolDefinition, ToolResult } from "./tools/types.js";
 export type { ToolRegistry } from "./tools/registry.js";
 export { createToolRegistry } from "./tools/registry.js";
-export { createWorkspaceTools, isPathAllowed } from "./tools/workspaceTools.js";
+export { createPathFilter, createWorkspaceTools, isPathAllowed } from "./tools/workspaceTools.js";
 export type { WebSearchStrategy } from "./tools/webSearchTool.js";
 export { createWebSearchTool, resolveWebSearchStrategy } from "./tools/webSearchTool.js";
 export { createOutputTool } from "./tools/outputTool.js";

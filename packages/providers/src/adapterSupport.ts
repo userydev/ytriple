@@ -33,7 +33,16 @@ export interface StructuredOutputPlan {
 export function planStructuredOutput(
   request: GenerateRequest,
   capabilities: ProviderCapabilities,
-  options: { nativeSchemaAvailable?: boolean; nativeUnavailableReason?: string } = {},
+  options: {
+    nativeSchemaAvailable?: boolean;
+    nativeUnavailableReason?: string;
+    /**
+     * What the adapter can actually fall back to for this request. Reporting
+     * `json_mode` while sending nothing but a prompt is a false degradation
+     * record, so an adapter that cannot even set a JSON response type says so.
+     */
+    fallbackMode?: "json_mode" | "none";
+  } = {},
 ): StructuredOutputPlan {
   if (!request.responseSchema) {
     return { mode: "none", system: request.system, degradations: [] };
@@ -42,7 +51,7 @@ export function planStructuredOutput(
   const nativeSchemaAvailable = options.nativeSchemaAvailable ?? true;
   const effective: ProviderCapabilities["structuredOutput"] =
     capabilities.structuredOutput === "json_schema" && !nativeSchemaAvailable
-      ? "json_mode"
+      ? (options.fallbackMode ?? "json_mode")
       : capabilities.structuredOutput;
 
   if (effective === "json_schema") {

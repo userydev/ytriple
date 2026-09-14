@@ -9,7 +9,7 @@ export const TOOL_NAMES = {
 
 export type ToolName = (typeof TOOL_NAMES)[keyof typeof TOOL_NAMES];
 
-const KNOWN_TOOLS = new Set<string>(Object.values(TOOL_NAMES));
+const KNOWN_TOOLS: ReadonlySet<string> = new Set<string>(Object.values(TOOL_NAMES));
 
 export function isKnownTool(name: string): name is ToolName {
   return KNOWN_TOOLS.has(name);

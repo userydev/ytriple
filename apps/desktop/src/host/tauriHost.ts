@@ -91,6 +91,10 @@ function systemClock(): ClockPort {
 export function createTauriHost(): DesktopHost {
   const http = tauriHttpPort();
   const secrets = tauriSecretPort();
+  // Resolved at startup: a host with no search backend must not offer a
+  // SearchPort, so the runtime reports the capability gap instead of seeing an
+  // empty result set that looks like a successful search.
+  let searchConfigured = false;
 
   return {
     info: {
@@ -103,6 +107,7 @@ export function createTauriHost(): DesktopHost {
     async loadConfig() {
       // The catalog is shared data, not something the shell has to know about;
       // Rust only persists whatever the user changed.
+      searchConfigured = await invoke<boolean>("search_configured");
       const stored = await invoke<YtripleConfig | null>("store_get", { key: "providers" });
       if (stored && stored.providers.length > 0) return stored;
 
@@ -133,7 +138,7 @@ export function createTauriHost(): DesktopHost {
         output: tauriOutputPort(),
         clock: systemClock(),
         user: input.user,
-        search: tauriSearchPort(),
+        ...(searchConfigured ? { search: tauriSearchPort() } : {}),
         capabilityOverrides: { streaming: false },
         ...(input.workspaceRoot ? { fs: tauriFsPort(input.workspaceRoot) } : {}),
       }).runtime;

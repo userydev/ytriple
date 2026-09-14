@@ -12,6 +12,29 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 const ENVIRONMENT_AGNOSTIC_PACKAGES = ["packages/core/src", "packages/shared/src"];
 
+/**
+ * Module scope in core must hold nothing that can change. A `const cache = new
+ * Map()` is process-wide mutable state just as much as a `let`, and the earlier
+ * rule only looked for `let`, so a compiled-glob cache sat in core unnoticed.
+ */
+const MODULE_STATE_RULES: ReadonlyArray<{ pattern: RegExp; why: string }> = [
+  { pattern: /^(export\s+)?let\s/, why: "module-level let" },
+  { pattern: /^(export\s+)?var\s/, why: "module-level var" },
+  {
+    pattern:
+      /^(export\s+)?const\s+\w+\s*(?::(?!\s*(?:Readonly|readonly))[^=]+)?=\s*new\s+(Map|Set|WeakMap|WeakSet)\b/,
+    why: "module-level mutable container",
+  },
+  {
+    pattern: /^(export\s+)?const\s+\w+\s*(?::(?!\s*(?:Readonly|readonly))[^=]+)?=\s*\[\s*\]/,
+    why: "module-level mutable array",
+  },
+];
+
+function moduleStateViolation(line: string): string | undefined {
+  return MODULE_STATE_RULES.find((rule) => rule.pattern.test(line))?.why;
+}
+
 function collectFiles(directory: string, ...extensions: string[]): string[] {
   const files: string[] = [];
   for (const entry of readdirSync(directory)) {
@@ -105,17 +128,46 @@ describe("environment-agnostic core", () => {
     expect(dependenciesOf("packages/shared")).toEqual({});
   });
 
-  it("core holds no module-level mutable singleton", () => {
+  /**
+   * A module-level `const cache = new Map()` is process-wide mutable state just
+   * as much as a `let` is, and the earlier version of this rule only looked for
+   * `let` — so a compiled-glob cache sat in core unnoticed. The rule now covers
+   * mutable containers and top-level `var` too.
+   */
+  it("core holds no module-level mutable state", () => {
     const offenders: string[] = [];
     for (const file of collectTypeScriptFiles(join(repoRoot, "packages/core/src"))) {
-      if (file.endsWith(".test.ts")) continue;
+      if (file.endsWith(".test.ts") || file.includes("/testing/")) continue;
       for (const line of readFileSync(file, "utf8").split("\n")) {
-        if (/^(export\s+)?let\s/.test(line)) {
-          offenders.push(`${file.replace(repoRoot, "")}: ${line.trim()}`);
-        }
+        const violated = moduleStateViolation(line);
+        if (violated) offenders.push(`${file.replace(repoRoot, "")}: ${violated} — ${line.trim()}`);
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it("the module-level-state rule catches the cache shape it used to miss", () => {
+    // Guards the guard, against the real rule rather than a copy of it.
+    expect(moduleStateViolation("const cache = new Map<string, RegExp>();")).toBe(
+      "module-level mutable container",
+    );
+    expect(moduleStateViolation("export const seen = new Set();")).toBe(
+      "module-level mutable container",
+    );
+    expect(moduleStateViolation("let counter = 0;")).toBe("module-level let");
+    expect(moduleStateViolation("const pending: string[] = [];")).toBe(
+      "module-level mutable array",
+    );
+
+    // A container whose type forbids mutation is a lookup table, not state.
+    expect(moduleStateViolation('const S: ReadonlySet<string> = new Set(["a"]);')).toBeUndefined();
+    expect(moduleStateViolation("const ROLES = Object.freeze({});")).toBeUndefined();
+    expect(moduleStateViolation("  const local = new Map();")).toBeUndefined();
+    expect(moduleStateViolation("const x: readonly string[] = [];")).toBeUndefined();
+    // A typed-but-mutable container is still state.
+    expect(moduleStateViolation("const c: Map<string, string> = new Map();")).toBe(
+      "module-level mutable container",
+    );
   });
 });
 

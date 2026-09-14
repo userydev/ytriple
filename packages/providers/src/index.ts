@@ -53,6 +53,7 @@ export {
   createJsonScriptedAdapter,
   createRecordingAdapter,
   createReplayAdapter,
+  createReplayRouter,
   createScriptedAdapter,
   recordingKey,
 } from "./testing.js";

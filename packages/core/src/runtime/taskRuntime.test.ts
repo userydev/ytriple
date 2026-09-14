@@ -6,10 +6,11 @@ import type {
   TeamDefinition,
   YtripleConfig,
 } from "@ytriple/shared";
-import { eventsOfType, isEventOfType } from "@ytriple/shared";
+import { DEFAULT_RUNTIME_LIMITS, eventsOfType, isEventOfType } from "@ytriple/shared";
 import { describe, expect, it } from "vitest";
 import { requireRole } from "../team/roleLibrary.js";
 import { createDefaultTeam } from "../team/presets.js";
+import { validateTeam } from "../team/validation.js";
 import {
   FULL_CAPABILITIES,
   HOSTED_CAPABILITIES,
@@ -457,6 +458,170 @@ describe("sub-agents stay an implementation detail", () => {
     expect(mergeRequest?.system).not.toContain("researcher.sub-1");
   });
 
+  /**
+   * The three constraints were advertised as independently tested, but depth
+   * was being reset on every spawn, so a nested sub-agent reported depth 1
+   * forever and `maxDepth` above 1 could never be reached.
+   */
+  it("carries depth down so nesting accumulates rather than resetting", async () => {
+    const nestingTeam = (() => {
+      const base = createDefaultTeam(binding);
+      return {
+        ...base,
+        members: base.members.map((member) =>
+          member.agentId === "researcher"
+            ? {
+                ...member,
+                subAgentBudget: {
+                  maxDepth: 2,
+                  maxSpawns: 3,
+                  maxTokens: 40_000,
+                  maxWallClockMs: 120_000,
+                },
+              }
+            : member,
+        ),
+      };
+    })();
+
+    const spawnCall = (objective: string) => ({
+      text: "",
+      toolCalls: [
+        {
+          toolCallId: "c1",
+          name: TOOL_NAMES.spawnSubAgent,
+          arguments: {
+            objective,
+            instructions: "go",
+            tools: [TOOL_NAMES.spawnSubAgent],
+            max_tokens: 5_000,
+          },
+        },
+      ],
+      usage: { inputTokens: 20, outputTokens: 5 },
+      degradations: [],
+    });
+
+    const { runtime } = harness({
+      team: nestingTeam,
+      handlers: defaultHandlers({
+        "researcher:member_work": (request: GenerateRequest) =>
+          request.metadata.round === 0 ? spawnCall("outer") : contributionFor(request),
+        subagent_work: (request: GenerateRequest) => {
+          // The depth-1 child spawns once; the depth-2 grandchild answers.
+          const isFirstChild = request.metadata.subAgentId === "researcher.sub-1";
+          if (isFirstChild && request.metadata.round === 0) return spawnCall("inner");
+          return { summary: `${request.metadata.subAgentId} done`, findings: [] };
+        },
+      }),
+    });
+
+    const result = await runtime.run({ userInput: "idea" });
+    const spawned = eventsOfType(result.events, "subagent_spawned");
+
+    expect(spawned.map((body) => body.depth)).toEqual([1, 2]);
+    expect(spawned[1]?.subAgentId).toBe("researcher.sub-2");
+    // The depth-1 child could only spawn because it inherited the spawn tool.
+    expect(spawned[0]?.tools).toContain(TOOL_NAMES.spawnSubAgent);
+    // The depth-2 grandchild is at the limit, so it must not carry it.
+    expect(spawned[1]?.tools).not.toContain(TOOL_NAMES.spawnSubAgent);
+    expect(result.status).toBe("completed");
+  });
+
+  it("refuses to spawn past the depth limit instead of resetting the count", async () => {
+    const { runtime } = harness({
+      handlers: defaultHandlers({
+        "researcher:member_work": (request: GenerateRequest) =>
+          request.metadata.round === 0
+            ? {
+                text: "",
+                toolCalls: [
+                  {
+                    toolCallId: "c1",
+                    name: TOOL_NAMES.spawnSubAgent,
+                    arguments: {
+                      objective: "outer",
+                      instructions: "go",
+                      tools: [TOOL_NAMES.spawnSubAgent],
+                      max_tokens: 5_000,
+                    },
+                  },
+                ],
+                usage: { inputTokens: 20, outputTokens: 5 },
+                degradations: [],
+              }
+            : contributionFor(request),
+        subagent_work: () => ({ summary: "done", findings: [] }),
+      }),
+    });
+
+    const result = await runtime.run({ userInput: "idea" });
+    const spawned = eventsOfType(result.events, "subagent_spawned");
+
+    // prd.default allows one level, so the child gets no spawn tool at all.
+    expect(spawned).toHaveLength(1);
+    expect(spawned[0]?.depth).toBe(1);
+    expect(spawned[0]?.tools).not.toContain(TOOL_NAMES.spawnSubAgent);
+  });
+
+  it("does not let a sub-agent's grounding leak into its parent's next call", async () => {
+    const { runtime, adapter } = harness({
+      handlers: defaultHandlers({
+        "researcher:member_work": (request: GenerateRequest) =>
+          request.metadata.round === 0
+            ? {
+                text: "",
+                toolCalls: [
+                  {
+                    toolCallId: "c1",
+                    name: TOOL_NAMES.spawnSubAgent,
+                    arguments: {
+                      objective: "look it up",
+                      instructions: "search first",
+                      tools: [TOOL_NAMES.webSearch],
+                      max_tokens: 5_000,
+                    },
+                  },
+                ],
+                usage: { inputTokens: 20, outputTokens: 5 },
+                degradations: [],
+              }
+            : contributionFor(request),
+        subagent_work: (request: GenerateRequest) =>
+          request.metadata.round === 0
+            ? {
+                text: "",
+                toolCalls: [
+                  {
+                    toolCallId: "c2",
+                    name: TOOL_NAMES.webSearch,
+                    arguments: { query: "prd tooling" },
+                  },
+                ],
+                usage: { inputTokens: 10, outputTokens: 5 },
+                degradations: [],
+              }
+            : { summary: "found things", findings: ["a"] },
+      }),
+      modelCapabilities: { nativeWebSearch: true },
+    });
+
+    await runtime.run({ userInput: "idea" });
+
+    const subAgentGrounded = adapter.requests.filter(
+      (request) => request.metadata.subAgentId !== undefined && request.nativeWebSearch === true,
+    );
+    const parentGrounded = adapter.requests.filter(
+      (request) =>
+        request.metadata.subAgentId === undefined &&
+        request.metadata.agentId === "researcher" &&
+        request.nativeWebSearch === true,
+    );
+
+    expect(subAgentGrounded.length).toBeGreaterThan(0);
+    expect(parentGrounded).toEqual([]);
+  });
+
   it("folds the sub-agent's cost into its parent", async () => {
     const { runtime } = harness({ handlers });
     const result = await runtime.run({ userInput: "idea" });
@@ -464,6 +629,41 @@ describe("sub-agents stay an implementation detail", () => {
     const outcome = result.subAgentOutcomes[0];
     expect(outcome?.usage.inputTokens).toBeGreaterThan(0);
     expect(result.usage.inputTokens).toBeGreaterThan(outcome!.usage.inputTokens);
+  });
+});
+
+describe("sources and links", () => {
+  it("puts sources a tool returned onto the event stream", async () => {
+    const { runtime } = harness();
+    const result = await runtime.run({ userInput: "idea" });
+
+    const sourceStages = eventsOfType(result.events, "agent_stage").filter(
+      (body) => body.sources !== undefined && body.sources.length > 0,
+    );
+
+    expect(sourceStages.length).toBeGreaterThan(0);
+    expect(sourceStages[0]?.agentId).toBe("researcher");
+    expect(sourceStages[0]?.sources?.[0]?.origin).toBe("search_port");
+  });
+
+  it("writes an unsafe source URL as text rather than a link", async () => {
+    const { runtime } = harness({
+      withSearch: false,
+      handlers: defaultHandlers({
+        "researcher:member_work": (request: GenerateRequest) => {
+          const canSearch = (request.tools ?? []).some(
+            (tool) => tool.name === TOOL_NAMES.webSearch,
+          );
+          expect(canSearch).toBe(false);
+          return contributionFor(request);
+        },
+      }),
+    });
+
+    const result = await runtime.run({ userInput: "idea" });
+    // Nothing hostile can reach the document through the source list, and the
+    // absence of sources means no section at all.
+    expect(result.prd?.markdown).not.toContain("javascript:");
   });
 });
 
@@ -503,6 +703,180 @@ describe("capability negotiation", () => {
     });
     const result = await runtime.run({ userInput: "idea" });
     expect(result.brief?.contextAvailability.webSearch).toBe(true);
+  });
+});
+
+describe("the brief is normalised before it is published", () => {
+  const duplicateBrief = (request: GenerateRequest) => {
+    const ids = memberIdsFrom(request);
+    const task = (agentId: string) => ({
+      agentId,
+      objective: `Cover the ${agentId} angle`,
+      mustCover: [],
+      outOfScope: [],
+    });
+    // The same member twice. An id outside the team is already impossible: the
+    // brief schema constrains agentId to an enum of the team's members.
+    return {
+      ...(defaultHandlers().brief(request) as Record<string, unknown>),
+      memberTasks: [task(ids[0]!), task(ids[0]!), task(ids[1]!)],
+    };
+  };
+
+  it("dispatches a member once even when the brief lists it twice", async () => {
+    const { runtime } = harness({ handlers: defaultHandlers({ brief: duplicateBrief }) });
+    const result = await runtime.run({ userInput: "idea" });
+
+    const dispatched = eventsOfType(result.events, "agent_dispatched").map((body) => body.agentId);
+    expect(dispatched).toEqual(["researcher", "specialist"]);
+    expect(new Set(dispatched).size).toBe(dispatched.length);
+    expect(result.contributions.map((entry) => entry.agentId)).toEqual([
+      "researcher",
+      "specialist",
+    ]);
+  });
+
+  /**
+   * A consumer reading the stream incrementally must never see a brief that is
+   * later contradicted, so normalisation happens before the event is emitted.
+   */
+  it("publishes the dispatched member list, not the raw one", async () => {
+    const { runtime } = harness({ handlers: defaultHandlers({ brief: duplicateBrief }) });
+    const result = await runtime.run({ userInput: "idea" });
+
+    const published = eventsOfType(result.events, "task_brief_updated")[0]?.brief;
+    expect(published?.memberTasks.map((task) => task.agentId)).toEqual([
+      "researcher",
+      "specialist",
+    ]);
+  });
+
+  it("emits the fallback brief before the brief event, not after", async () => {
+    const { runtime } = harness({
+      handlers: defaultHandlers({
+        brief: (request: GenerateRequest) => ({
+          ...(defaultHandlers().brief(request) as Record<string, unknown>),
+          memberTasks: [],
+        }),
+      }),
+    });
+    const result = await runtime.run({ userInput: "idea" });
+
+    const briefIndex = result.events.findIndex((event) => event.body.type === "task_brief_updated");
+    const noticeIndex = result.events.findIndex(
+      (event) => event.body.type === "agent_stage" && event.body.stage === "dispatch",
+    );
+
+    expect(noticeIndex).toBeGreaterThanOrEqual(0);
+    expect(noticeIndex).toBeLessThan(briefIndex);
+    // And the published brief already carries the substituted tasks.
+    expect(
+      eventsOfType(result.events, "task_brief_updated")[0]?.brief.memberTasks.length,
+    ).toBe(2);
+  });
+});
+
+describe("the question gate", () => {
+  const fourCandidates = defaultHandlers({
+    intake: () => ({
+      understanding: "understood",
+      readiness: "needs_questions",
+      questions: [
+        { question: "one?", reason: "r" },
+        { question: "two?", reason: "r" },
+      ],
+    }),
+    question_gate: () => ({
+      // More than the cap, and the same id twice under different phrasings.
+      approved: [
+        { questionId: "q-1" },
+        { questionId: "q-1", rewritten: "one, rephrased?" },
+        { questionId: "q-2" },
+        { questionId: "q-3" },
+        { questionId: "q-4" },
+      ],
+      dropped_reason: "none",
+    }),
+  });
+
+  it("asks a question once even when the gate approves its id twice", async () => {
+    const { runtime, user } = harness({ handlers: fourCandidates });
+    const result = await runtime.run({ userInput: "idea" });
+
+    const asked = eventsOfType(result.events, "agent_question").map((body) => body.questionId);
+    expect(new Set(asked).size).toBe(asked.length);
+    expect(new Set(user.asked.map((question) => question.questionId)).size).toBe(user.asked.length);
+  });
+
+  it("never forwards more questions than the configured cap", async () => {
+    const { runtime } = harness({ handlers: fourCandidates });
+    const result = await runtime.run({ userInput: "idea" });
+
+    expect(eventsOfType(result.events, "agent_question").length).toBeLessThanOrEqual(
+      DEFAULT_RUNTIME_LIMITS.maxApprovedQuestions,
+    );
+  });
+
+  it("offers the model a schema that matches the runtime cap", async () => {
+    const { runtime, adapter } = harness({ handlers: fourCandidates });
+    await runtime.run({ userInput: "idea" });
+
+    const gate = adapter.requests.find((request) => request.metadata.phase === "question_gate");
+    expect(gate?.responseSchema?.schema.properties?.approved?.maxItems).toBe(
+      DEFAULT_RUNTIME_LIMITS.maxApprovedQuestions,
+    );
+  });
+});
+
+describe("the output step honours the host", () => {
+  /**
+   * The orchestrator registry used to force `outputWrite: true`, so a host that
+   * had switched output off still got a file written behind its back.
+   */
+  it("writes nothing when the host disabled output, and fails the task", async () => {
+    const { runtime, output } = harness({
+      capabilities: { ...FULL_CAPABILITIES, outputWrite: false },
+    });
+    const result = await runtime.run({ userInput: "idea" });
+
+    expect(output.documents.size).toBe(0);
+    expect(result.status).toBe("failed");
+    expect(result.error).toMatch(/cannot write output/);
+  });
+
+  /**
+   * Writing the deliverable is the runtime's own step, so it must not depend on
+   * the orchestrator's model-facing tool list, which validateTeam does not
+   * require to contain it.
+   */
+  it("writes the deliverable even when the orchestrator lists no tools", async () => {
+    const base = createDefaultTeam(binding);
+    const toollessOrchestrator: TeamDefinition = {
+      ...base,
+      members: base.members.map((member) =>
+        member.agentId === base.orchestratorId ? { ...member, tools: [] } : member,
+      ),
+    };
+
+    const { runtime, output } = harness({ team: toollessOrchestrator });
+    const result = await runtime.run({ userInput: "idea" });
+
+    expect(result.status).toBe("completed");
+    expect(output.documents.size).toBe(1);
+  });
+
+  it("still refuses to give a member the output tool", () => {
+    const base = createDefaultTeam(binding);
+    const leaky: TeamDefinition = {
+      ...base,
+      members: base.members.map((member) =>
+        member.agentId === "researcher"
+          ? { ...member, tools: [...member.tools, TOOL_NAMES.createOutputDocument] }
+          : member,
+      ),
+    };
+
+    expect(validateTeam(leaky).map((issue) => issue.rule)).toContain("tools.outputOwnership");
   });
 });
 

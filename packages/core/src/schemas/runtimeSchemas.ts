@@ -64,7 +64,8 @@ export const MEMBER_QUESTIONS_SCHEMA: NamedJsonSchema = {
   },
 };
 
-export const QUESTION_GATE_SCHEMA: NamedJsonSchema = {
+export function buildQuestionGateSchema(maxApproved: number): NamedJsonSchema {
+  return {
   name: "question_gate",
   schema: {
     type: "object",
@@ -72,7 +73,7 @@ export const QUESTION_GATE_SCHEMA: NamedJsonSchema = {
     properties: {
       approved: {
         type: "array",
-        maxItems: 4,
+        maxItems: maxApproved,
         description: "The questions actually worth the user's time, in asking order.",
         items: {
           type: "object",
@@ -92,7 +93,11 @@ export const QUESTION_GATE_SCHEMA: NamedJsonSchema = {
       },
     },
   },
-};
+  };
+}
+
+/** Default gate schema, matching DEFAULT_RUNTIME_LIMITS.maxApprovedQuestions. */
+export const QUESTION_GATE_SCHEMA: NamedJsonSchema = buildQuestionGateSchema(3);
 
 export function buildBriefSchema(agentIds: readonly string[]): NamedJsonSchema {
   return {

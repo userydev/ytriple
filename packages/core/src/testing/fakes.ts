@@ -31,23 +31,51 @@ import { matchesAnyGlob, normalizeRelativePath } from "../tools/glob.js";
  */
 
 export interface FakeClock extends ClockPort {
-  advance(ms: number): void;
+  /** Moves virtual time forward, waking any sleeper whose deadline passed. */
+  advance(ms: number): Promise<void>;
+  readonly pendingSleepers: number;
 }
 
-/** Deterministic clock: the whole event stream is reproducible without it. */
-export function createFakeClock(start = 1_700_000_000_000, step = 1_000): FakeClock {
+/**
+ * Deterministic virtual clock.
+ *
+ * `sleep` genuinely waits: it resolves only once `advance` carries virtual time
+ * past its deadline. A clock whose `sleep` resolved immediately would make
+ * every deadline in the runtime fire at once, which is the opposite of what a
+ * timeout test needs to prove.
+ */
+export function createFakeClock(start = 1_700_000_000_000, step = 0): FakeClock {
   let current = start;
+  const sleepers: Array<{ wakeAt: number; resolve: () => void }> = [];
+
+  const wake = () => {
+    for (const sleeper of [...sleepers]) {
+      if (sleeper.wakeAt > current) continue;
+      sleepers.splice(sleepers.indexOf(sleeper), 1);
+      sleeper.resolve();
+    }
+  };
+
   return {
     now() {
       const value = current;
       current += step;
       return value;
     },
-    async sleep(ms) {
-      current += ms;
+    sleep(ms) {
+      return new Promise<void>((resolve) => {
+        sleepers.push({ wakeAt: current + ms, resolve });
+        wake();
+      });
     },
-    advance(ms) {
+    async advance(ms) {
       current += ms;
+      wake();
+      // Let the woken continuations run before the caller carries on.
+      await Promise.resolve();
+    },
+    get pendingSleepers() {
+      return sleepers.length;
     },
   };
 }

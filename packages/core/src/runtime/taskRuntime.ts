@@ -48,12 +48,13 @@ import type { ContextSection } from "../context/contextBudget.js";
 import { CONTEXT_PRIORITY } from "../context/contextBudget.js";
 import { createEventBus, type EventBus } from "../events/bus.js";
 import { createIdFactory, type IdFactory } from "../ids.js";
+import { assertSafePathSegment } from "../safety.js";
 import {
   INTAKE_SCHEMA,
   MEMBER_QUESTIONS_SCHEMA,
   MERGE_SCHEMA,
-  QUESTION_GATE_SCHEMA,
   buildBriefSchema,
+  buildQuestionGateSchema,
 } from "../schemas/runtimeSchemas.js";
 import { createSession, type Session } from "../session/session.js";
 import { createSubAgentLedger } from "../subagents/budget.js";
@@ -136,6 +137,10 @@ export function createTaskRuntime(options: TaskRuntimeOptions): TaskRuntime {
   const limits = resolveLimits(config);
   const workspacePolicy = resolveWorkspacePolicy(config);
 
+  // The task id becomes a directory name in every host, so it is checked once
+  // here rather than trusted by each OutputPort implementation.
+  assertSafePathSegment(options.taskId, "taskId");
+
   const bus: EventBus = createEventBus(options.taskId, ports.clock);
   const ids: IdFactory = createIdFactory();
   const session: Session = createSession(ports.clock, ids);
@@ -186,10 +191,12 @@ export function createTaskRuntime(options: TaskRuntimeOptions): TaskRuntime {
 
         status("brief_ready");
         brief = await buildBrief(capabilities);
+        // Normalise before publishing: the brief a consumer sees is the brief
+        // that was actually dispatched.
+        const memberTasks = resolveMemberTasks(brief);
         emit({ type: "task_brief_updated", brief });
 
         status("dispatching");
-        const memberTasks = resolveMemberTasks(brief);
         for (const task of memberTasks) {
           emit({ type: "agent_dispatched", agentId: task.agentId, objective: task.objective });
         }
@@ -215,7 +222,7 @@ export function createTaskRuntime(options: TaskRuntimeOptions): TaskRuntime {
           merge,
           sources,
         });
-        const path = await writeDeliverable(markdown);
+        const path = await writeDeliverable(markdown, capabilities);
 
         status("completed");
         return {
@@ -378,13 +385,14 @@ export function createTaskRuntime(options: TaskRuntimeOptions): TaskRuntime {
   ): Promise<AgentQuestion[]> {
     const value = await callOrchestrator(
       "question_gate",
-      QUESTION_GATE_SCHEMA,
+      buildQuestionGateSchema(limits.maxApprovedQuestions),
       capabilities,
       [
         phaseSection(
           "question_gate",
           [
             "Your members proposed these questions. Keep only the ones worth the user's time.",
+            `Approve at most ${limits.maxApprovedQuestions}.`,
             "Drop duplicates and anything you can reasonably assume. Order what remains.",
             "",
             ...candidates.map(
@@ -399,12 +407,19 @@ export function createTaskRuntime(options: TaskRuntimeOptions): TaskRuntime {
 
     const approvals = Array.isArray(value.approved) ? value.approved : [];
     const selected: AgentQuestion[] = [];
+    // Track by id: a rewritten approval is a new object, so comparing object
+    // identity let the same question through twice.
+    const taken = new Set<string>();
 
     for (const approval of approvals) {
+      if (selected.length >= limits.maxApprovedQuestions) break;
       if (typeof approval !== "object" || approval === null) continue;
+
       const record = approval as Record<string, unknown>;
       const candidate = candidates.find((entry) => entry.questionId === record.questionId);
-      if (!candidate || selected.includes(candidate)) continue;
+      if (!candidate || taken.has(candidate.questionId)) continue;
+
+      taken.add(candidate.questionId);
       const rewritten = typeof record.rewritten === "string" ? record.rewritten.trim() : "";
       selected.push(rewritten.length > 0 ? { ...candidate, question: rewritten } : candidate);
     }
@@ -464,11 +479,37 @@ export function createTaskRuntime(options: TaskRuntimeOptions): TaskRuntime {
     };
   }
 
+  /**
+   * Normalises the dispatch list, and is called *before* `task_brief_updated`
+   * is emitted so a consumer reading the stream incrementally never sees an
+   * empty member list that a later brief contradicts.
+   */
   function resolveMemberTasks(taskBrief: TaskBrief): MemberTask[] {
     const known = new Set(members.map((member) => member.agentId));
-    const tasks = taskBrief.memberTasks.filter((task) => known.has(task.agentId));
+    const seen = new Set<string>();
+    const tasks: MemberTask[] = [];
 
-    if (tasks.length > 0) return tasks;
+    for (const task of taskBrief.memberTasks) {
+      if (!known.has(task.agentId)) continue;
+      // A repeated agentId would dispatch the same member twice, against the
+      // same brief, and merge two contributions from one seat.
+      if (seen.has(task.agentId)) {
+        emit({
+          type: "agent_stage",
+          agentId: orchestrator.agentId,
+          stage: "dispatch",
+          detail: `brief listed ${task.agentId} more than once; keeping the first task only`,
+        });
+        continue;
+      }
+      seen.add(task.agentId);
+      tasks.push(task);
+    }
+
+    if (tasks.length > 0) {
+      taskBrief.memberTasks = tasks;
+      return tasks;
+    }
 
     // The orchestrator left the dispatch list empty. Fall back to one task per
     // member derived from its role, and say so rather than running an empty team.
@@ -629,10 +670,21 @@ export function createTaskRuntime(options: TaskRuntimeOptions): TaskRuntime {
     return value;
   }
 
-  async function writeDeliverable(markdown: string): Promise<string> {
+  async function writeDeliverable(
+    markdown: string,
+    capabilities: RuntimeCapabilities,
+  ): Promise<string> {
     const filename = team.outputContract.primaryDocument;
-    const result = await orchestratorRegistry().execute(
-      orchestrator.tools,
+
+    if (!capabilities.outputWrite) {
+      throw new Error(
+        `This host cannot write output, so ${filename} was not produced. The document is in the run result.`,
+      );
+    }
+
+    const { registry, allowlist } = outputRegistry(capabilities);
+    const result = await registry.execute(
+      allowlist,
       TOOL_NAMES.createOutputDocument,
       { content: markdown },
       { agentId: orchestrator.agentId, depth: 0, emit },
@@ -703,10 +755,24 @@ export function createTaskRuntime(options: TaskRuntimeOptions): TaskRuntime {
     return tools;
   }
 
-  function orchestratorRegistry(): ToolRegistry {
-    return createToolRegistry(
-      baseTools({ ...options.capabilities, workspaceRead: false, outputWrite: true }),
-    );
+  /**
+   * The registry used to materialise the deliverable.
+   *
+   * It honours the negotiated capabilities rather than forcing `outputWrite`
+   * on: a host that switched output off must not have a file written anyway.
+   * The allowlist is internal because writing the deliverable is the runtime's
+   * own step, not a tool the orchestrator's model chose — a team whose
+   * orchestrator does not happen to list `create_output_document` would
+   * otherwise fail at the last stage of every run.
+   */
+  function outputRegistry(capabilities: RuntimeCapabilities): {
+    registry: ToolRegistry;
+    allowlist: readonly string[];
+  } {
+    return {
+      registry: createToolRegistry(baseTools({ ...capabilities, workspaceRead: false })),
+      allowlist: [TOOL_NAMES.createOutputDocument],
+    };
   }
 
   /**
@@ -724,63 +790,96 @@ export function createTaskRuntime(options: TaskRuntimeOptions): TaskRuntime {
     const sources: SourceNote[] = [];
     const subAgentOutcomes: SubAgentOutcome[] = [];
 
-    const tools = baseTools(capabilities);
+    const ledger =
+      agent.canSpawnSubAgents && agent.subAgentBudget
+        ? createSubAgentLedger(agent.subAgentBudget, () => ports.clock.now())
+        : undefined;
 
-    if (capabilities.webSearch) {
-      tools.push(
-        createWebSearchTool({
-          strategy: resolveWebSearchStrategy({
-            capabilities: modelCapabilities,
+    /**
+     * Tools are built per depth and the builder recurses, so a sub-agent at
+     * depth 1 with `maxDepth: 2` gets its own working spawn tool and passes its
+     * own depth down. Building one registry for every level, as this used to,
+     * both reset the depth and handed the child a registry that predated the
+     * spawn tool being added to it.
+     */
+    const toolsForDepth = (
+      depth: number,
+      depthGrounding: GroundingFlag,
+      onSources: (found: SourceNote[]) => void,
+    ): ToolDefinition[] => {
+      const tools = baseTools(capabilities);
+
+      if (capabilities.webSearch) {
+        tools.push(
+          createWebSearchTool({
+            strategy: resolveWebSearchStrategy({
+              capabilities: modelCapabilities,
+              searchPort: ports.search,
+            }),
             searchPort: ports.search,
+            maxResults: 5,
+            onNativeSearchRequested: () => {
+              depthGrounding.requested = true;
+            },
+            onSourcesFound: onSources,
           }),
-          searchPort: ports.search,
-          maxResults: 5,
-          onNativeSearchRequested: () => {
-            grounding.requested = true;
-          },
-          onSourcesFound: (found) => sources.push(...found),
-        }),
-      );
-    }
+        );
+      }
 
-    if (agent.canSpawnSubAgents && agent.subAgentBudget) {
-      const ledger = createSubAgentLedger(agent.subAgentBudget, () => ports.clock.now());
-      const subRegistry = createToolRegistry(tools);
+      const budget = agent.subAgentBudget;
+      if (!ledger || !budget || depth >= budget.maxDepth) return tools;
 
       tools.push(
         createSpawnSubAgentTool({
           parent: agent,
+          // A child one level down may nest again only if the budget allows it.
+          childCanNest: depth + 1 < budget.maxDepth,
           defaultTokenBudget: Math.max(
             1,
-            Math.floor(agent.subAgentBudget.maxTokens / agent.subAgentBudget.maxSpawns),
+            Math.floor(budget.maxTokens / Math.max(1, budget.maxSpawns)),
           ),
-          run: (request) =>
-            runSubAgent(request, {
+          run: (request) => {
+            // The child gets its own grounding flag: sharing the parent's made
+            // the parent's next call grounded for no reason, which on Gemini
+            // also suspends its schema and tools.
+            const childGrounding: GroundingFlag = { requested: false };
+            const childSources: SourceNote[] = [];
+
+            return runSubAgent(request, {
               parent: agent,
-              parentDepth: 0,
+              parentDepth: depth,
               binding,
               ledger,
-              registry: subRegistry,
+              registry: createToolRegistry(
+                toolsForDepth(depth + 1, childGrounding, (found) => childSources.push(...found)),
+              ),
               modelCaller,
-              grounding,
+              grounding: childGrounding,
               maxRounds: limits.maxToolRounds,
               maxToolCallsPerRound: limits.maxToolCallsPerRound,
+              clock: ports.clock,
               emit,
               nextSubAgentId: () => ids.next(`${agent.agentId}.sub`),
-            }),
+            });
+          },
           onOutcome: (outcome) => {
             subAgentOutcomes.push(outcome);
+            // Only what the child reported flows up, never its grounding state.
             sources.push(...outcome.sources);
           },
         }),
       );
-    }
+
+      return tools;
+    };
 
     return {
       agent,
       binding,
       capabilities: modelCapabilities,
-      registry: createToolRegistry(tools),
+      registry: createToolRegistry(
+        toolsForDepth(0, grounding, (found) => sources.push(...found)),
+      ),
       grounding,
       sources,
       subAgentOutcomes,

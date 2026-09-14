@@ -116,7 +116,17 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
         emit: options.emit,
       });
 
-      if (result.sources) sources.push(...result.sources);
+      if (result.sources && result.sources.length > 0) {
+        sources.push(...result.sources);
+        // Without this the SearchPort fallback produced sources that reached
+        // the contribution but never the event stream, so a UI built from
+        // events showed an empty source list for a member that had cited work.
+        options.onStage(
+          "sources",
+          `${result.sources.length} source(s) from ${call.name}`,
+          result.sources,
+        );
+      }
       observations.push(`[${call.name}] ${result.detail}`);
       messages.push({
         role: "tool",

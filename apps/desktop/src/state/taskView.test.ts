@@ -258,6 +258,37 @@ describe("buildTaskView shows only what happened", () => {
   });
 });
 
+describe("sources found by a tool reach the panel", () => {
+  /**
+   * The SearchPort fallback returned sources on the ToolResult, which reached
+   * the contribution but never the event stream, so the research panel — which
+   * is built from events alone — showed nothing.
+   */
+  it("shows sources a tool returned, not only ones the provider grounded", () => {
+    const view = buildTaskView(team, "task-1", [
+      {
+        taskId: "task-1",
+        seq: 0,
+        at: 0,
+        body: {
+          type: "agent_stage",
+          agentId: "researcher",
+          stage: "sources",
+          detail: "2 source(s) from web_search",
+          sources: [
+            { title: "One", url: "https://example.com/one", origin: "search_port" },
+            { title: "Two", url: "https://example.com/two", origin: "search_port" },
+          ],
+        },
+      },
+    ]);
+
+    const researcher = view.members.find((member) => member.agentId === "researcher");
+    expect(researcher?.sources).toHaveLength(2);
+    expect(researcher?.sources[0]?.origin).toBe("search_port");
+  });
+});
+
 describe("sub-agents render inside their parent", () => {
   const nested: RuntimeEvent[] = [
     {

@@ -289,6 +289,47 @@ describe("ark adapter", () => {
     ]);
   });
 
+  /**
+   * A model with no JSON mode was still sent `json_object`, so the degradation
+   * it reported ("prompt_only") did not describe the request that went out.
+   */
+  it("sends no response format at all for a model with no JSON mode", async () => {
+    const http = createFakeHttpPort(() => ({ body: { output_text: "{}" } }));
+    const adapter = createArkAdapter({ providerId: "ark-personal", apiKey: "ark-key", http });
+
+    const result = await adapter.generate(
+      requestWith({
+        model: model({ capabilities: { structuredOutput: "none" } }),
+        responseSchema,
+      }),
+    );
+
+    expect(http.lastBody.text).toBeUndefined();
+    expect(result.degradations).toEqual([
+      {
+        kind: "structured_output",
+        from: "json_schema",
+        to: "prompt_only",
+        detail:
+          "model declares structuredOutput=none; schema moved into the prompt and validated locally with repair retries",
+      },
+    ]);
+  });
+
+  it("still sends json_object for a model that declares json_mode", async () => {
+    const http = createFakeHttpPort(() => ({ body: { output_text: "{}" } }));
+    const adapter = createArkAdapter({ providerId: "ark-personal", apiKey: "ark-key", http });
+
+    await adapter.generate(
+      requestWith({
+        model: model({ capabilities: { structuredOutput: "json_mode" } }),
+        responseSchema,
+      }),
+    );
+
+    expect(http.lastBody.text).toEqual({ format: { type: "json_object" } });
+  });
+
   it("parses function calls and sends tool output back in Ark's shape", async () => {
     const http = createFakeHttpPort(() => ({
       body: {
@@ -354,17 +395,38 @@ describe("google adapter", () => {
       requestWith({ responseSchema, tools: [searchTool], nativeWebSearch: true }),
     );
 
+    const grounded = (http.lastBody.generationConfig ?? {}) as Record<string, unknown>;
     expect(http.lastBody.tools).toEqual([{ google_search: {} }]);
-    expect(
-      ((http.lastBody.generationConfig ?? {}) as Record<string, unknown>).responseSchema,
-    ).toBeUndefined();
-    expect(result.degradations.map((entry) => entry.kind)).toEqual([
-      "structured_output",
-      "tool_calling",
+    expect(grounded.responseSchema).toBeUndefined();
+    // Grounding rules out the JSON response type too, so the degradation must
+    // say prompt_only rather than claiming a json_mode it never set.
+    expect(grounded.responseMimeType).toBeUndefined();
+    expect(result.degradations.map((entry) => `${entry.kind}:${entry.to}`)).toEqual([
+      "structured_output:prompt_only",
+      "tool_calling:search_only",
     ]);
     expect(result.sources).toEqual([
       { title: "B", url: "https://example.com/b", origin: "native_provider_search" },
     ]);
+  });
+
+  it("sets a JSON response type for a model that declares json_mode", async () => {
+    const http = createFakeHttpPort(() => ({
+      body: { candidates: [{ content: { parts: [{ text: '{"summary":"ok"}' }] } }] },
+    }));
+
+    const adapter = createGoogleAdapter({ providerId: "gemini", apiKey: "g-key", http });
+    const result = await adapter.generate(
+      requestWith({
+        model: model({ capabilities: { structuredOutput: "json_mode" } }),
+        responseSchema,
+      }),
+    );
+
+    const config = http.lastBody.generationConfig as Record<string, unknown>;
+    expect(config.responseMimeType).toBe("application/json");
+    expect(config.responseSchema).toBeUndefined();
+    expect(result.degradations[0]).toMatchObject({ to: "json_mode" });
   });
 
   it("declares functions and parses functionCall parts when not grounded", async () => {

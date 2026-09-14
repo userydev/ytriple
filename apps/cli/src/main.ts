@@ -10,7 +10,7 @@ import {
 import {
   createModelRouter,
   createRecordingAdapter,
-  createReplayAdapter,
+  createReplayRouter,
   formatPreflightReport,
   preflightConfig,
   findScenario,
@@ -118,17 +118,25 @@ export async function runHarness(
 
   const recordings: ProviderRecording[] = [];
   const resolveBinding = scenario
-    ? replayResolver(scenarioToRecording(scenario))
+    ? replayResolver([scenarioToRecording(scenario)])
     : liveResolver();
 
-  const runtime = createTaskRuntime({
-    taskId,
-    team: createDefaultTeam(config.defaultModel),
-    config,
-    capabilities,
-    ports,
-    resolveBinding,
-  });
+  let runtime;
+  try {
+    runtime = createTaskRuntime({
+      taskId,
+      team: createDefaultTeam(config.defaultModel),
+      config,
+      capabilities,
+      ports,
+      resolveBinding,
+    });
+  } catch (error) {
+    // Rejected configuration, such as a task id that is not a path segment.
+    // Report it rather than letting a stack trace out of the harness.
+    io.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    return { exitCode: 2 };
+  }
 
   runtime.subscribe((event) => {
     if (args.flags.has("json")) {
@@ -148,18 +156,24 @@ export async function runHarness(
   io.write(`${renderSummary(summaryFor(result))}\n`);
 
   const recordPath = args.values.get("record");
-  if (recordPath && recordings[0]) {
-    await writeFile(recordPath, `${JSON.stringify(recordings[0], null, 2)}\n`, "utf8");
-    io.write(`recording      ${recordPath}\n`);
+  if (recordPath && recordings.length > 0) {
+    // Every provider the run touched, not just the first: a task with a
+    // different model per member was previously unreplayable.
+    await writeFile(recordPath, `${JSON.stringify(recordings, null, 2)}\n`, "utf8");
+    io.write(
+      `recording      ${recordPath} (${recordings.length} provider(s): ${recordings
+        .map((recording) => recording.providerId)
+        .join(", ")})\n`,
+    );
   }
 
   return { exitCode: result.status === "completed" ? 0 : 1, result };
 
-  function replayResolver(recording: ProviderRecording) {
-    const adapter = createReplayAdapter(recording);
-    return async () => ({
-      adapter,
-      model: { modelId: "recorded", displayName: "Recorded model" },
+  function replayResolver(recordings: readonly ProviderRecording[]) {
+    const route = createReplayRouter(recordings);
+    return async (binding: { providerId: string; modelId: string }) => ({
+      adapter: route(binding.providerId),
+      model: { modelId: binding.modelId, displayName: "Recorded model" },
     });
   }
 

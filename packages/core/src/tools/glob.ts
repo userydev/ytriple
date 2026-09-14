@@ -14,12 +14,20 @@ export function matchesAnyGlob(patterns: readonly string[], path: string): boole
   return patterns.some((pattern) => matchGlob(pattern, path));
 }
 
-const cache = new Map<string, RegExp>();
+/**
+ * Compiles a pattern set once and returns a predicate over paths.
+ *
+ * This exists because the compiled-pattern cache used to be a module-level
+ * `Map`, which is process-wide mutable state and against the core purity rule.
+ * Callers that match many paths against the same patterns — every workspace
+ * listing — should hold one of these instead.
+ */
+export function createGlobMatcher(patterns: readonly string[]): (path: string) => boolean {
+  const compiled = patterns.map(globToRegExp);
+  return (path: string) => compiled.some((expression) => expression.test(path));
+}
 
 function globToRegExp(pattern: string): RegExp {
-  const cached = cache.get(pattern);
-  if (cached) return cached;
-
   let source = "";
   for (let index = 0; index < pattern.length; index += 1) {
     const char = pattern[index]!;
@@ -44,9 +52,7 @@ function globToRegExp(pattern: string): RegExp {
     source += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
   }
 
-  const regExp = new RegExp(`^${source}$`);
-  cache.set(pattern, regExp);
-  return regExp;
+  return new RegExp(`^${source}$`);
 }
 
 /** Normalises a host path to the relative POSIX form core works with. */

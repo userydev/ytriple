@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, readdir, symlink, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -124,6 +125,54 @@ describe("the demo scenario", () => {
     // Every recorded response was consumed: no phase silently fell back.
     expect(outcome.result?.events.filter((event) => event.body.type === "error")).toEqual([]);
     expect(recording.entries.map((entry) => entry.key)).toContain("conductor#-#merge#0");
+  });
+});
+
+describe("task id cannot escape the output directory", () => {
+  /**
+   * `--task-id` is user input that becomes a directory name. It was resolved
+   * straight into a path, so `../outside` wrote above ytriple-outputs.
+   */
+  it.each(["../outside", "../../etc", "a/b", "..\\outside", "a\\b", ".", "CON", "task."])(
+    "refuses %j",
+    async (taskId) => {
+      const out = await tempDir("ytriple-escape-");
+      const io = collectingIo();
+
+      const outcome = await runHarness(
+        ["--scenario", "demo", "--out", out, "--task-id", taskId],
+        io,
+        {},
+      );
+
+      expect(outcome.exitCode).toBe(2);
+      expect(outcome.result).toBeUndefined();
+      expect(io.text).toMatch(/taskId must be a single path segment/);
+
+      // Rejected before any work, so nothing exists near the escape target.
+      expect(existsSync(join(out, "ytriple-outputs"))).toBe(false);
+    },
+  );
+
+  it("accepts an ordinary task id", async () => {
+    const out = await tempDir("ytriple-ok-");
+    const outcome = await runHarness(
+      ["--scenario", "demo", "--out", out, "--task-id", "task-1"],
+      collectingIo(),
+      {},
+    );
+
+    expect(outcome.exitCode).toBe(0);
+    expect(existsSync(join(out, "ytriple-outputs", "task-1", "prd.md"))).toBe(true);
+  });
+
+  it("rejects a traversing task id at the port too, not only in core", async () => {
+    const outputRoot = await tempDir("ytriple-port-");
+    const output = createNodeOutputPort({ outputRoot });
+
+    await expect(
+      output.writeDocument({ taskId: "../outside", filename: "prd.md", content: "x" }),
+    ).rejects.toThrowError(/taskId must be a single path segment/);
   });
 });
 

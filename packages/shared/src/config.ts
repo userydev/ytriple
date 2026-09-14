@@ -14,6 +14,8 @@ export interface RuntimeLimits {
   /** Retries when a model returns JSON that fails schema validation. */
   maxSchemaRepairAttempts: number;
   maxQuestionRounds: number;
+  /** Upper bound on questions the orchestrator may forward in one round. */
+  maxApprovedQuestions: number;
   /** Characters per token used by the context estimator. */
   charsPerToken: number;
 }
@@ -23,6 +25,7 @@ export const DEFAULT_RUNTIME_LIMITS: RuntimeLimits = {
   maxToolCallsPerRound: 3,
   maxSchemaRepairAttempts: 2,
   maxQuestionRounds: 1,
+  maxApprovedQuestions: 3,
   charsPerToken: 4,
 };
 

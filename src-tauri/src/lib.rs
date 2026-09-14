@@ -48,6 +48,11 @@ async fn web_search(request: net::SearchRequest) -> Result<Vec<net::SearchResult
 }
 
 #[tauri::command]
+fn search_configured() -> bool {
+    net::search_configured()
+}
+
+#[tauri::command]
 fn credential_set(credential_ref: String, value: String) -> Result<(), ShellError> {
     credentials::set(&credential_ref, &value)
 }
@@ -129,6 +134,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             http_request,
             web_search,
+            search_configured,
             credential_set,
             credential_exists,
             credential_status,

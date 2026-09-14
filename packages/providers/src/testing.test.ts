@@ -5,6 +5,7 @@ import {
   createJsonScriptedAdapter,
   createRecordingAdapter,
   createReplayAdapter,
+  createReplayRouter,
   recordingKey,
   type ProviderRecording,
 } from "./testing.js";
@@ -103,6 +104,54 @@ describe("record then replay", () => {
 
     expect(recorder.recording.entries[0]?.key).toBe("member-a#-#synthesis#0");
     expect((await replayed.generate(requestFor("synthesis"))).text).toBe('{"summary":"live"}');
+  });
+
+  /**
+   * A run where members use different providers records one entry set per
+   * provider. Replaying only the first put one member's answers in front of
+   * another member's model.
+   */
+  it("routes a multi-provider recording to the right adapter", async () => {
+    const second: ProviderRecording = {
+      ...recording,
+      providerId: "gemini-fast",
+      entries: [
+        {
+          key: recordingKey({ agentId: "member-b", phase: "synthesis", round: 0 }),
+          phase: "synthesis",
+          agentId: "member-b",
+          result: {
+            text: '{"summary":"from the second provider"}',
+            toolCalls: [],
+            usage: { inputTokens: 1, outputTokens: 1 },
+            degradations: [],
+          },
+        },
+      ],
+    };
+
+    const route = createReplayRouter([recording, second]);
+
+    expect((await route("ark-personal").generate(requestFor("synthesis"))).text).toBe(
+      '{"summary":"from recording"}',
+    );
+    expect(
+      (await route("gemini-fast").generate(requestFor("synthesis", 0, "member-b"))).text,
+    ).toBe('{"summary":"from the second provider"}');
+  });
+
+  it("names the recorded providers when a binding matches none of them", () => {
+    const route = createReplayRouter([recording, { ...recording, providerId: "other" }]);
+    expect(() => route("missing")).toThrowError(
+      /No recording for provider "missing". Recorded providers: ark-personal, other/,
+    );
+  });
+
+  it("lets a single-provider recording answer any binding", async () => {
+    const route = createReplayRouter([recording]);
+    expect((await route("renamed-provider").generate(requestFor("synthesis"))).text).toBe(
+      '{"summary":"from recording"}',
+    );
   });
 
   it("keys sub-agent calls separately from their parent", () => {

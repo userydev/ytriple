@@ -59,8 +59,11 @@ export function createGoogleAdapter(options: GoogleAdapterOptions): ProviderAdap
       const grounded = nativeSearch.enabled;
       const structured = planStructuredOutput(request, capabilities, {
         nativeSchemaAvailable: !grounded,
+        // Grounding rules out responseSchema *and* responseMimeType, so the
+        // honest fallback is prompt-only rather than a JSON mode we cannot set.
+        fallbackMode: "none",
         nativeUnavailableReason:
-          "Gemini cannot combine search grounding with a response schema; the schema moved into the prompt for this grounded call",
+          "Gemini cannot combine search grounding with a response schema or a JSON response type; the schema moved into the prompt for this grounded call",
       });
 
       const degradations: Degradation[] = [
@@ -72,9 +75,15 @@ export function createGoogleAdapter(options: GoogleAdapterOptions): ProviderAdap
       if (request.temperature !== undefined) generationConfig.temperature = request.temperature;
       const maxOutputTokens = request.maxOutputTokens ?? request.model.capabilities?.maxOutputTokens;
       if (maxOutputTokens !== undefined) generationConfig.maxOutputTokens = maxOutputTokens;
-      if (structured.mode === "json_schema" && request.responseSchema) {
-        generationConfig.responseMimeType = "application/json";
-        generationConfig.responseSchema = toGeminiSchema(request.responseSchema.schema);
+      if (request.responseSchema) {
+        if (structured.mode === "json_schema") {
+          generationConfig.responseMimeType = "application/json";
+          generationConfig.responseSchema = toGeminiSchema(request.responseSchema.schema);
+        } else if (structured.mode === "json_mode") {
+          // A model declared json_mode still gets a JSON response type, which
+          // is what "json_mode" is supposed to mean.
+          generationConfig.responseMimeType = "application/json";
+        }
       }
 
       const body: Record<string, unknown> = {

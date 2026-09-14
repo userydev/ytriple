@@ -1,3 +1,4 @@
+import { isSafeHttpUrl } from "@ytriple/core";
 import { Fragment, type JSX } from "react";
 import { parseInline, parseMarkdown } from "./markdown.js";
 
@@ -7,10 +8,16 @@ function Inline({ text }: { text: string }): JSX.Element {
       {parseInline(text).map((span, index) => {
         if (span.kind === "strong") return <strong key={index}>{span.text}</strong>;
         if (span.kind === "link") {
-          return (
-            <a key={index} href={span.href} target="_blank" rel="noreferrer">
+          // The document is model output rendered inside a webview, where a
+          // javascript: href executes. Anything not http(s) becomes text.
+          return isSafeHttpUrl(span.href) ? (
+            <a key={index} href={span.href} target="_blank" rel="noreferrer noopener">
               {span.text}
             </a>
+          ) : (
+            <Fragment key={index}>
+              {span.text} ({span.href})
+            </Fragment>
           );
         }
         return <Fragment key={index}>{span.text}</Fragment>;
