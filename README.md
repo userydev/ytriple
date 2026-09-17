@@ -2,7 +2,7 @@
 
 面向个人开发者与创作者的 AI 工作台。首页、雷达与项目承接不同工作入口；同一工作可以展开决策、过程、结果，保留草稿、材料与成果版本。
 
-当前为重新开发中的桌面工程，尚未完成产品全部功能。真实进度与未完成项见 [交付记录](docs/DELIVERY.md)，界面和交互依据见 [UI 确认稿](docs/UI-BASELINE.md)。
+当前为重新开发中的桌面工程，尚未完成产品全部功能。当前功能开发暂停；阶段结果见 [开发盘点](docs/DEVELOPMENT-AUDIT.md)，后续顺序见 [开发计划](docs/PLAN.md)，历史验证见 [交付记录](docs/DELIVERY.md)，界面和交互依据见 [UI 确认稿](docs/UI-BASELINE.md)。
 
 ## 本机开发
 
@@ -18,7 +18,7 @@ npm start
 
 完整检查需要 Docker 启动专用 `ytriple_test` Postgres（loopback 55441），与 ycore 的测试库隔离；`npm run check:desktop` 可单独验证桌面，不依赖数据库容器。
 
-正常启动打开本地工作空间。设置支持已有邮箱账号登录，也保留独立客户端令牌方式；凭据由 Electron main 使用系统安全存储保存，不进入 renderer 或安装包。`https://core.ydev.work` 是正式服务地址；公网尚未验证畅通时，受控开发环境可按 ycore 文档通过现有 SSH 隧道联调。
+正常启动打开本地工作空间。设置支持已有邮箱账号登录，也保留独立客户端令牌方式；凭据由 Electron main 使用系统安全存储保存，不进入 renderer 或安装包。`https://core.ydev.work` 是正式服务地址；公网 HTTPS 已完成安装版核心路径验证；个人日常连接仍需在设置中配置。受控开发环境可按 ycore 文档使用 SSH 隧道排障。
 
 运行时可通过 `YTRIPLE_DATA_DIR` 指定隔离测试数据目录；`YCORE_BASE_URL` 和 `YCORE_TOKEN` 仅在 main 进程读取。不要把凭据写入脚本、源码、截图或提交。不要把开发令牌用于公众分发。
 
