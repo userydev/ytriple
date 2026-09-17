@@ -1,0 +1,41 @@
+{
+  "name": "ytriple-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "build/main.cjs",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "check": "npm run typecheck && npm test",
+    "build": "node scripts/build.mjs",
+    "start": "electron .",
+    "package:mac": "node scripts/package-mac.mjs"
+  },
+  "dependencies": {
+    "@supabase/auth-js": "2.116.0",
+    "diff": "9.0.0",
+    "eventsource-parser": "3.0.6",
+    "lucide-react": "1.46.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "yaml": "2.9.1",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@electron/asar": "4.3.0",
+    "@electron/packager": "20.0.4",
+    "@resvg/resvg-js": "2.6.2",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "electron": "44.4.1",
+    "esbuild": "0.28.2",
+    "prettier": "3.9.7",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "vite": "8.3.0"
+  }
+}

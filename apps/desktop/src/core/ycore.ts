@@ -1,0 +1,484 @@
+import { createHash } from "node:crypto";
+import { z } from "zod";
+import { feedReadResult } from "./feed-contract";
+import { Store } from "./store";
+import type { Material, Source } from "./types";
+const documentSchema = z.object({
+  id: z.string(),
+  revision: z.number().int().positive(),
+  url: z.string(),
+  published_at: z.string().nullable(),
+  content: z.object({
+    title: z.string(),
+    summary: z.string().nullable(),
+    body: z.string().nullable(),
+    format: z.enum(["text", "html"]),
+    coverage: z.enum(["title_only", "summary", "feed_content"]),
+    full_article: z.literal(false),
+  }),
+});
+const refSchema = z.object({
+  id: z.string(),
+  revision: z.number().int().positive(),
+});
+const userIdentity = z.object({
+  id: z.string().min(1).max(200),
+  user_id: z.string().uuid(),
+  product_id: z.string(),
+  authentication: z.literal("supabase"),
+});
+export function managedServiceScope(baseUrl: string, subject: string) {
+  return createHash("sha256")
+    .update(baseUrl.replace(/\/$/, "") + "\0managed\0" + subject)
+    .digest("hex");
+}
+export type Prompt = {
+  messages: { role: "system" | "user" | "assistant"; content: string }[];
+  refs: { id: string; revision: number }[];
+  taskId: string;
+};
+export type StreamEvent = {
+  type: "run.started" | "text.delta" | "run.completed" | "run.failed";
+  run_id: string;
+  text?: string;
+  error?: { code: string; message: string };
+};
+export interface Model {
+  readonly identity?: import("./model-contract").ModelIdentity;
+  readonly recovery?: "remote" | "local";
+  readonly scope?: string;
+  lookupByKey?(key: string): Promise<{
+    id: string;
+    status: string;
+    result: unknown;
+    error: { message: string } | null;
+  }>;
+  lookup?(id: string): Promise<{
+    status: string;
+    result: unknown;
+    error: { message: string } | null;
+  }>;
+  stream(
+    prompt: Prompt,
+    key: string,
+    signal: AbortSignal,
+  ): AsyncGenerator<StreamEvent>;
+}
+export class ServiceError extends Error {
+  constructor(
+    public code: string,
+    message: string,
+    public runId?: string,
+  ) {
+    super(message);
+  }
+}
+export class YCore implements Model {
+  readonly identity: import("./model-contract").ModelIdentity;
+  private readonly clientScope: string;
+  private user?: {
+    id: string;
+    product: string;
+    scope: string;
+    verifiedToken: string;
+    accessToken: (signal?: AbortSignal) => Promise<string>;
+  };
+  get scope() {
+    return this.user?.scope ?? this.clientScope;
+  }
+
+  /** Managed sessions are verified before use; a refreshed token must retain
+   * the same service subject before any private read or billable request. */
+  static async forUser(
+    baseUrl: string,
+    product: string,
+    accessToken: (signal?: AbortSignal) => Promise<string>,
+    fetcher: typeof fetch = fetch,
+  ) {
+    if (!/^[a-z][a-z0-9_-]{0,63}$/.test(product)) throw Error("产品标识无效");
+    const token = await accessToken();
+    const service = new YCore(baseUrl, token, fetcher);
+    const identity = await service.verifyUser(token, product);
+    service.user = {
+      id: identity.id,
+      product,
+      verifiedToken: token,
+      accessToken,
+      scope: managedServiceScope(baseUrl, identity.id),
+    };
+    return service;
+  }
+  constructor(
+    readonly baseUrl: string,
+    private token: string,
+    private fetcher: typeof fetch = fetch,
+  ) {
+    const url = new URL(baseUrl);
+    if (
+      url.protocol !== "https:" &&
+      !(
+        url.protocol === "http:" &&
+        ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
+      )
+    )
+      throw Error("服务地址需要 HTTPS，本机隧道可使用 HTTP");
+    if (url.username || url.password || url.search || url.hash)
+      throw Error("服务地址不能包含凭据或查询参数");
+    this.identity = {
+      kind: "service",
+      label: "ycore 共享模型",
+      endpoint: baseUrl,
+    };
+    this.clientScope = createHash("sha256")
+      .update(baseUrl.replace(/\/$/, "") + "\0" + token)
+      .digest("hex");
+  }
+  async request(path: string, init: RequestInit = {}) {
+    let token = this.token;
+    if (this.user) {
+      token = await this.user.accessToken(init.signal ?? undefined);
+      init.signal?.throwIfAborted();
+      if (token !== this.user.verifiedToken) {
+        const current = await this.verifyUser(
+          token,
+          this.user.product,
+          init.signal ?? undefined,
+        );
+        if (current.id !== this.user.id)
+          throw new ServiceError(
+            "ACCOUNT_CHANGED",
+            "当前账号已变化，请回到原账号接续；未发送本次工作请求",
+          );
+        this.user.verifiedToken = token;
+      }
+    }
+    return this.send(path, token, this.user?.product, init);
+  }
+  private async verifyUser(
+    token: string,
+    product: string,
+    signal?: AbortSignal,
+  ) {
+    const identity = userIdentity.parse(
+      await (
+        await this.send("/v1/identity", token, product, { signal })
+      ).json(),
+    );
+    if (identity.product_id !== product)
+      throw new ServiceError("ACCOUNT_CHANGED", "服务返回的产品身份不匹配");
+    return identity;
+  }
+  private async send(
+    path: string,
+    token: string,
+    product: string | undefined,
+    init: RequestInit,
+  ) {
+    if (!token || token.length > 16384 || /\s/.test(token))
+      throw new ServiceError("UNAUTHORIZED", "登录状态不可用，请重新登录");
+    const headers = new Headers(init.headers);
+    headers.set("Authorization", `Bearer ${token}`);
+    headers.set("Content-Type", "application/json");
+    if (product) headers.set("X-YCore-Product", product);
+    else headers.delete("X-YCore-Product");
+    const response = await this.fetcher(
+      this.baseUrl.replace(/\/$/, "") + path,
+      {
+        ...init,
+        redirect: "error",
+        headers,
+        signal: init.signal ?? AbortSignal.timeout(15000),
+      },
+    );
+    if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as {
+        error?: { code?: string; message?: string; run_id?: string };
+      };
+      throw new ServiceError(
+        data.error?.code ?? "HTTP_ERROR",
+        data.error?.message ?? `服务请求失败 (${response.status})`,
+        data.error?.run_id,
+      );
+    }
+    if (response.headers.get("X-YCore-Contract") !== "0.1.0")
+      throw new ServiceError("CONTRACT_MISMATCH", "服务协议版本不兼容");
+    return response;
+  }
+  async capabilities() {
+    return (await this.request("/v1/capabilities")).json();
+  }
+  async readFeed(url: string, signal?: AbortSignal) {
+    try {
+      return feedReadResult.parse(
+        await (
+          await this.request("/v1/feeds/read", {
+            method: "POST",
+            body: JSON.stringify({ url }),
+            signal: signal
+              ? AbortSignal.any([signal, AbortSignal.timeout(30000)])
+              : AbortSignal.timeout(30000),
+          })
+        ).json(),
+      );
+    } catch (error) {
+      if (error instanceof ServiceError) {
+        const messages: Record<string, string> = {
+          NOT_FOUND: "当前服务版本尚未提供个人订阅读取，请更新 ycore 后重试",
+          NOT_A_FEED:
+            "这是普通网页，请填写 RSS 或 Atom 订阅地址；网页尚未作为正文读取",
+          FEED_PARSE_FAILED: "订阅格式无法解析，已有材料保持不变",
+          SOURCE_URL_REJECTED:
+            "仅支持不含凭据的公开 HTTPS 订阅，不支持本机或私有网络地址",
+          SOURCE_UNAVAILABLE: "来源暂不可达或需要登录，请稍后刷新",
+          SOURCE_TOO_LARGE: "订阅响应超过读取范围（2 MiB）",
+          FEED_READ_LIMIT: "来源读取较频繁，请稍后刷新",
+        };
+        if (messages[error.code]) throw Error(messages[error.code]);
+      }
+      throw error;
+    }
+  }
+  async run(id: string) {
+    return (await this.request("/v1/ai/runs/" + encodeURIComponent(id))).json();
+  }
+  async lookup(id: string) {
+    return z
+      .object({
+        status: z.string(),
+        result: z.unknown(),
+        error: z.object({ message: z.string() }).nullable(),
+      })
+      .parse(await this.run(id));
+  }
+  async lookupByKey(key: string) {
+    return z
+      .object({
+        id: z.string().uuid(),
+        status: z.string(),
+        result: z.unknown(),
+        error: z.object({ message: z.string() }).nullable(),
+      })
+      .parse(
+        await (
+          await this.request("/v1/ai/runs/by-key/" + encodeURIComponent(key))
+        ).json(),
+      );
+  }
+  async createJson(
+    prompt: Prompt,
+    key: string,
+    outputSchema: Record<string, unknown>,
+  ) {
+    return (
+      await this.request("/v1/ai/runs", {
+        method: "POST",
+        headers: { "Idempotency-Key": key },
+        body: JSON.stringify({
+          mode: "json",
+          model_profile: "default",
+          task_id: prompt.taskId,
+          messages: prompt.messages,
+          document_refs: prompt.refs,
+          max_output_tokens: 1024,
+          output_schema: outputSchema,
+        }),
+      })
+    ).json();
+  }
+  async *stream(
+    prompt: Prompt,
+    key: string,
+    signal: AbortSignal,
+  ): AsyncGenerator<StreamEvent> {
+    const response = await this.request("/v1/ai/runs", {
+      method: "POST",
+      headers: { "Idempotency-Key": key },
+      body: JSON.stringify({
+        mode: "stream",
+        model_profile: "default",
+        task_id: prompt.taskId,
+        messages: prompt.messages,
+        document_refs: prompt.refs,
+        max_output_tokens: 4096,
+      }),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(180000)]),
+    });
+    if (
+      !response.headers.get("content-type")?.includes("text/event-stream") ||
+      !response.body
+    )
+      throw new ServiceError("INVALID_STREAM", "服务没有返回有效数据流");
+    const reader = response.body.getReader(),
+      decoder = new TextDecoder();
+    let buffer = "",
+      runId: string | undefined,
+      terminal = false;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        buffer += done
+          ? decoder.decode()
+          : decoder.decode(value, { stream: true });
+        let match: RegExpExecArray | null;
+        while ((match = /\r?\n\r?\n/.exec(buffer))) {
+          const frame = buffer.slice(0, match.index);
+          buffer = buffer.slice(match.index + match[0].length);
+          const lines = frame.split(/\r?\n/);
+          const type = lines
+            .find((l) => l.startsWith("event:"))
+            ?.slice(6)
+            .trim();
+          const data = lines
+            .filter((l) => l.startsWith("data:"))
+            .map((l) => l.slice(5).trimStart())
+            .join("\n");
+          if (!type || !data) continue;
+          if (
+            ![
+              "run.started",
+              "text.delta",
+              "run.completed",
+              "run.failed",
+            ].includes(type)
+          )
+            continue;
+          const parsed = z
+            .object({
+              run_id: z.string(),
+              text: z.string().optional(),
+              error: z
+                .object({ code: z.string(), message: z.string() })
+                .passthrough()
+                .optional(),
+            })
+            .parse(JSON.parse(data));
+          if (runId && runId !== parsed.run_id)
+            throw new ServiceError(
+              "INVALID_STREAM",
+              "数据流的运行标识发生变化",
+            );
+          runId = parsed.run_id;
+          if (terminal)
+            throw new ServiceError("INVALID_STREAM", "终态后收到额外输出");
+          if (type === "text.delta" && parsed.text === undefined)
+            throw new ServiceError("INVALID_STREAM", "输出片段缺少正文");
+          terminal = type === "run.completed" || type === "run.failed";
+          yield { ...parsed, type: type as StreamEvent["type"] };
+        }
+        if (done) break;
+      }
+      if (!terminal)
+        throw new ServiceError(
+          "STREAM_INTERRUPTED",
+          "连接中断，尚未确认完成；请核对原运行",
+          runId,
+        );
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
+  }
+  async sync(store: Store) {
+    const save = (raw: z.infer<typeof documentSchema>) => {
+      const id = `ycore:${this.scope}:${raw.id}`;
+      const body = raw.content.body ?? raw.content.summary ?? raw.content.title;
+      const m: Material = {
+        id,
+        version: raw.revision,
+        title: raw.content.title,
+        body:
+          raw.content.format === "html"
+            ? body.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ")
+            : body,
+        coverage: raw.content.coverage,
+        url: raw.url,
+        upstream: { scope: this.scope, id: raw.id, revision: raw.revision },
+        createdAt: raw.published_at ?? new Date().toISOString(),
+      };
+      store.put("material", `${id}@${m.version}`, m);
+    };
+    const key = `sync:${this.scope}`;
+    let cursor = store.get<string>("meta", key);
+    const sources = z
+      .object({
+        data: z.array(
+          z.object({
+            id: z.string(),
+            name: z.string(),
+            status: z.string(),
+            last_error: z.string().nullable(),
+          }),
+        ),
+      })
+      .parse(await (await this.request("/v1/sources")).json());
+    store.put<Source[]>("meta", "sources", sources.data);
+    if (!cursor) {
+      let next: string | null = null;
+      let sync: string | undefined;
+      do {
+        const p = z
+          .object({
+            data: z.array(documentSchema),
+            next_cursor: z.string().nullable(),
+            sync_cursor: z.string(),
+          })
+          .parse(
+            await (
+              await this.request(
+                "/v1/documents?limit=50" +
+                  (next ? "&cursor=" + encodeURIComponent(next) : ""),
+              )
+            ).json(),
+          );
+        store.transaction(() => p.data.forEach(save));
+        sync ??= p.sync_cursor;
+        if (sync !== p.sync_cursor) throw Error("材料快照在分页间发生变化");
+        next = p.next_cursor;
+      } while (next);
+      cursor = sync!;
+      store.put("meta", key, cursor);
+    }
+    try {
+      let more = true;
+      while (more) {
+        const p = z
+          .object({
+            data: z.array(
+              z.object({
+                sequence: z.string(),
+                operation: z.literal("upsert"),
+                document: documentSchema,
+              }),
+            ),
+            next_cursor: z.string(),
+            has_more: z.boolean(),
+          })
+          .parse(
+            await (
+              await this.request(
+                "/v1/changes?limit=50&cursor=" + encodeURIComponent(cursor),
+              )
+            ).json(),
+          );
+        store.transaction(() => {
+          p.data.forEach((c) => save(c.document));
+          store.put("meta", key, p.next_cursor);
+        });
+        cursor = p.next_cursor;
+        more = p.has_more;
+      }
+    } catch (e) {
+      if (e instanceof ServiceError && e.code === "CURSOR_EXPIRED") {
+        store.remove("meta", key);
+        throw new ServiceError(
+          "CURSOR_EXPIRED",
+          "资料快照已过期，请再次同步以建立新快照",
+        );
+      }
+      throw e;
+    }
+    return store
+      .all<Material>("material")
+      .filter((m) => m.upstream?.scope === this.scope).length;
+  }
+}

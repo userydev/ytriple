@@ -1,0 +1,16 @@
+{
+  "name": "ytriple",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "setup": "npm --prefix apps/desktop ci && npm --prefix apps/service ci",
+    "test:db": "docker compose -f compose.test.yaml up -d --wait postgres",
+    "check": "npm run check:desktop && npm run check:service",
+    "check:desktop": "npm --prefix apps/desktop run check",
+    "check:service": "npm --prefix apps/service run check",
+    "build": "npm --prefix apps/desktop run build && npm --prefix apps/service run typecheck",
+    "start": "npm --prefix apps/desktop start",
+    "start:service": "npm --prefix apps/service start",
+    "package:mac": "npm --prefix apps/desktop run package:mac"
+  }
+}

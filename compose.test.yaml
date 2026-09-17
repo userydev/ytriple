@@ -1,0 +1,15 @@
+name: ytriple-test
+services:
+  postgres:
+    image: postgres:17.6
+    environment:
+      POSTGRES_DB: ytriple_test
+      POSTGRES_USER: ytriple_owner
+      POSTGRES_PASSWORD: local-test-only
+    ports: ["127.0.0.1:55441:5432"]
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U ytriple_owner -d ytriple_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
