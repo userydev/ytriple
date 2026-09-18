@@ -1,5 +1,19 @@
 # ytriple 开发与验证记录
 
+## 2026-09-18 · F3 信息与雷达输入完成
+
+**交付组合**：ycore `c3c5ba9` 已部署为 `dev-20260918-c3c5ba9`；ytriple `e2936ce`、`3efcff7` 完成客户端元数据、恢复及展示修复。两仓库只提交 dev，未推送、未改 main。F4/F5 未启动。
+
+- **真实独立来源**：Ars Technica RSS 与 HN 官方 Firebase JSON API。TrendRadar/NewsNow 在 VPS 上仍不可用，按 M0 有界替换规则停用其调度，保留来源、失败记录及旧资料。HN 最多 20 项、并发 4、总时限 20 秒、capture 合计 2 MiB；不抓取外链正文，外链 publisher/published_at 保持未知，覆盖仅 title_only；RSS 为实际 feed 节选，全部 full_article=false。
+- **两轮实际调度**：暂将周期设为每 2 分钟，由现有 pg-boss 调度而非手动 refresh/直接入库。2026-09-18 UTC RSS 于 07:22:38、07:24:08 成功，HN 于 07:22:43、07:24:12 成功，四个任务均 completed、retry_count=0。首轮新增 20 个 HN 修订；第二轮 RSS 原始响应相同、HN 原始排名响应变化，两者均无重复修订。07:25:10 核验配置及实际调度均已恢复每 30 分钟；没有声称等待了两个 30 分钟周期。
+- **服务与契约**：公开 HTTPS 快照以每页 7 项读取，共 56 个当前文档（36 RSS、20 HN），无遗漏重复；快照后增量为空。旧采集 attempt 迟到会记录 superseded，不覆盖新版本或健康状态；正文变化产生修订、并发乱序、游标过期等由独立测试数据库验证，未向线上插入模拟文章或修改 epoch。
+- **客户端实测**：独立 SQLite 消费真实 HTTPS 两次保持 60 条版本记录（40 RSS 历史版本、20 HN），出处、时间、话题、内容哈希与修订均落盘。客户端传输层分别注入一次 CURSOR_EXPIRED 和断网：前者经真实 HTTPS 快照恢复，后者保留材料、游标、原议题引用及已读/收藏。快照签名令牌每页可能不同，客户端按不透明游标保留首屏水位，完整落盘后再推进。
+- **现场消费**：既有安装版登录用户同步后可见两条来源和健康状态，旧议题及阅读状态保留；原生证据在 ytriple `.local/f3/native-sources.png`、`native-materials.png`。历史开发凭据与个人账号 scope 留有同一公共材料的两份本地记录；新源码仅合并 Radar 列表展示，按最高修订及更完整出处选择原对象，保留所有持久记录和旧引用，不合并不同文档或私人 feed。
+- **检查与发布边界**：ycore 类型检查及 42 项测试、ytriple 桌面类型检查及 177 项测试、桌面构建均通过。本轮付费模型调用为 0。本机仍安装 `6f637e3c33ce257d`，未重装/重启、未访问钥匙串；新客户端代码已联测但未完成新版原生安装验收。跨版本钥匙串授权尚未解决，后续集中处理，不能声称固定本地证书已修复。
+- **部署与回退**：仅 API/worker 替换镜像，无迁移，Caddy、数据库、认证凭据不变。归档 SHA-256 `ccf5e3533fa62128c26087badf30894f2d6fc922978b7b7c6ccb7f0ac6d5e3b2`；镜像 ID `sha256:bedc59bdf937ec9196156f8b223fad7155dbac9cd83d636f22e5ca4fc4b9b334`。API healthy、公网 ready、worker running。上一镜像 `dev-20260918-cb0bf36` 保留；旧二进制不识别新 adapter，回退前必须按 OPERATIONS 暂停 worker 并做来源配置兼容处理，不删除材料历史。
+
+脱敏证据：ycore `.local/f3/two-cycles.json`、`final.json`；ytriple `.local/f3/consumer-evidence.json`（60 是存储修订数，56 是当前文档数）。故障注入与隔离数据库测试不冒充上游真实事故，既有安装版验证不冒充新源码已安装。
+
 ## 2026-09-18 · 设置与页面层级整理
 
 安装构建 `6f637e3c33ce257d`，仅在 ytriple dev 修改；后端与 main 未改动。
