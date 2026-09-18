@@ -113,10 +113,10 @@ export function RadarHighlights({
       <Radar size={29} />
       <h2>围绕关心的问题，读懂变化</h2>
       <p>
-        选择一个议题和已有材料，整理出认识、分歧与证据范围。之后从这里直接阅读。
+        说清想持续关注的目标，团队会选择可用来源，整理认识、分歧与证据范围。
       </p>
       <button onClick={onExplore}>
-        {data.radar.topics.length ? "查看议题整理" : "开始整理议题"}
+        {data.radar.topics.length ? "查看议题整理" : "关注一个议题"}
       </button>
     </div>
   );

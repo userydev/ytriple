@@ -411,12 +411,14 @@ export function SchedulesPage({
   onWork,
   selectedId,
   onSelect,
+  onPrepare,
 }: {
   data: Snapshot;
   onRadar: (id: string | null) => void;
   onWork: (id: string, versionId?: string) => void;
   selectedId: string | null;
   onSelect: (id: string | null) => void;
+  onPrepare: (text: string, schedule?: Schedule) => void;
 }) {
   const [editor, setEditor] = useState<Schedule | "new" | null>(null);
   const [filter, setFilter] = useState("all"),
@@ -457,11 +459,21 @@ export function SchedulesPage({
           <h1>定时任务</h1>
           <p>把重复的工作交给团队，结果回到原处。</p>
         </div>
-        <button className="primary" onClick={() => setEditor("new")}>
+        <button
+          className="primary"
+          onClick={() =>
+            onPrepare(
+              "帮我添加一个定时任务。我会说明要做什么和希望什么时候运行。",
+            )
+          }
+        >
           <Plus size={17} />
-          新建任务
+          添加定时任务
         </button>
       </div>
+      <button className="text-action" onClick={() => setEditor("new")}>
+        高级设置
+      </button>
       <div className="schedule-runtime-note">
         <Clock size={15} />
         <span>本机执行 · 应用保持运行、电脑保持唤醒时触发</span>
@@ -504,7 +516,7 @@ export function SchedulesPage({
               ? "没有符合筛选的任务"
               : "安排下一次团队工作"}
           </h2>
-          <p>选择目标和已有材料，设定首次时间与周期。</p>
+          <p>告诉团队要做什么和希望何时运行，团队会生成一份可确认的安排。</p>
         </div>
       ) : null}
       <div className="schedule-list">
@@ -558,6 +570,17 @@ export function SchedulesPage({
                 </p>
               </div>
               <div className="schedule-actions">
+                <button
+                  className="text-action"
+                  onClick={() =>
+                    onPrepare(
+                      `调整定时任务「${s.name}」v${s.revision}。当前委托：${s.text}`,
+                      s,
+                    )
+                  }
+                >
+                  跟团队调整
+                </button>
                 <IconButton
                   label={`立即运行 ${s.name}`}
                   disabled={busy}

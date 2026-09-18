@@ -44,6 +44,7 @@ import { randomUUID } from "node:crypto";
 import { Store } from "../core/store";
 import { Runtime } from "../core/runtime";
 import { Radar } from "../core/radar";
+import { WorkspaceActions } from "../core/workspace-actions";
 import { Artifacts } from "../core/artifacts";
 import { YCore } from "../core/ycore";
 import { commandSchema } from "../core/commands";
@@ -94,6 +95,7 @@ let window: BrowserWindow,
   feeds: Feeds,
   radarWatches: RadarWatches,
   radar: Radar,
+  workspaceActions: WorkspaceActions,
   client: YCore | undefined;
 let models: ModelConnections;
 let accounts: Accounts;
@@ -190,6 +192,16 @@ async function connect() {
       ai: data.ai === true,
       error: null,
     };
+    // Public material reads are independent of paid model execution. A source
+    // outage leaves the model connection and the last readable editions usable.
+    try {
+      const sourceClient = client;
+      await sourceClient.sync(store);
+      if (sourceClient === client)
+        store.put("meta", "source-sync", { lastSuccessAt: new Date().toISOString(), error: null });
+    } catch {
+      store.put("meta", "source-sync", { error: "公开材料同步未完成，保留已有材料；可在雷达重试" });
+    }
   } catch (e) {
     service = {
       ...service,
@@ -337,9 +349,18 @@ app
           }
         : undefined,
     );
-    runtime = new Runtime(store, () => models.model(), changed);
     radar = new Radar(store, () => models.model(), changed);
     radar.recover();
+    workspaceActions = new WorkspaceActions(store, {
+      radar,
+      schedules: {
+        save: (input) => schedules.save(input),
+        setEnabled: (id, revision, enabled) => schedules.setEnabled(id, revision, enabled),
+      },
+      radarWatches: { save: (input) => radarWatches.save(input) },
+      currentScope: () => modelScope(),
+    });
+    runtime = new Runtime(store, () => models.model(), changed, workspaceActions);
     schedules = new Schedules(store, runtime, () => modelScope(), changed);
     feeds = new Feeds(
       store,
@@ -350,7 +371,14 @@ app
       changed,
     );
     feeds.recover();
-    radarWatches = new RadarWatches(store, radar, () => modelScope(), changed);
+    radarWatches = new RadarWatches(store, radar, () => modelScope(), changed, Date.now,
+      async () => {
+        if (configuring || !client) throw Error("信息服务尚未连接");
+        const sourceClient = client;
+        await sourceClient.sync(store);
+        if (sourceClient !== client || configuring) throw Error("信息服务已变化");
+        changed();
+      });
     radarWatches.recover();
     const out = resolve(__dirname, "../out");
     protocol.handle("ytriple", async (request) => {
@@ -722,6 +750,23 @@ app
             result = store.saveDraft(draft);
             break;
           }
+          case "prepare-workspace-chat":
+            result = store.prepareWorkspaceChat(input.context, input.text, input.workspaceContext);
+            break;
+          case "workspace-policy":
+            result = store.put("meta", "workspace-policy", { direct: input.direct });
+            break;
+          case "workspace-action-apply":
+            if (configuring) throw Error("服务连接正在更新，请稍后办理");
+            result = workspaceActions.apply(input.id);
+            break;
+          case "workspace-action-dismiss":
+            result = workspaceActions.dismiss(input.id);
+            break;
+          case "workspace-action-undo":
+            if (configuring) throw Error("服务连接正在更新，请稍后撤销");
+            result = workspaceActions.undo(input.id);
+            break;
           case "choose-suggestion-document": {
             const suggestions = new ProjectSuggestions(store);
             const root = await suggestions.root(input.projectId);

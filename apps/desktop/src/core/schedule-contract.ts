@@ -30,7 +30,10 @@ export const scheduleInput = z
       "readiness",
       "method",
     ]),
-    firstAt: z.string().datetime(),
+    firstAt: z
+      .string()
+      .datetime({ offset: true })
+      .transform((value) => new Date(value).toISOString()),
     intervalHours: z.number().int().min(1).max(8760).nullable(),
     timezone: z
       .string()

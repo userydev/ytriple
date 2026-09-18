@@ -255,6 +255,7 @@ export function RadarPanel({
   onSync,
   syncing,
   onError,
+  onPrepare,
 }: {
   data: Snapshot;
   selectedId: string | null;
@@ -265,6 +266,7 @@ export function RadarPanel({
   onSync: () => void;
   syncing: boolean;
   onError: (e: unknown) => void;
+  onPrepare: (text: string, topic?: RadarTopic) => void;
 }) {
   const [editing, setEditing] = useState<RadarTopic | null | undefined>(
       undefined,
@@ -379,13 +381,13 @@ export function RadarPanel({
           </button>
         )}
         <IconButton
-          label={`调整议题 ${topic.title}`}
+          label={`高级设置：调整议题 ${topic.title}`}
           onClick={() => setEditing(topic)}
         >
           <Pencil size={16} />
         </IconButton>
         <IconButton
-          label={`自动整理 ${topic.title}`}
+          label={`高级设置：自动整理 ${topic.title}`}
           onClick={() => setAutomation(topic)}
         >
           <Clock size={16} />
@@ -398,6 +400,19 @@ export function RadarPanel({
                 : "自动整理已暂停")}
           </span>
         ) : null}
+        <button
+          className="text-action"
+          onClick={() =>
+            onPrepare(
+              watch
+                ? `调整雷达议题「${topic.title}」v${topic.revision} 的持续跟进。当前关注范围：${topic.focus}`
+                : `让团队持续跟进雷达议题「${topic.title}」v${topic.revision}。当前关注范围：${topic.focus}`,
+              topic,
+            )
+          }
+        >
+          {watch ? "跟团队调整" : "让团队持续跟进"}
+        </button>
         {job?.error ? (
           <span className="error-inline">{job.error}</span>
         ) : job?.status === "succeeded" ? (
@@ -628,10 +643,16 @@ export function RadarPanel({
                 <SlidersHorizontal size={17} />
                 来源与议题
               </button>
-              <button onClick={() => setEditing(null)}>
+              <button
+                className="primary"
+                onClick={() =>
+                  onPrepare("帮我关注一个议题，我会补充想关注的内容。")
+                }
+              >
                 <Plus size={16} />
                 关注议题
               </button>
+              <button onClick={() => setEditing(null)}>高级设置</button>
             </div>
           </div>
           <div className="radar-filter">
@@ -675,7 +696,7 @@ export function RadarPanel({
               <p>
                 {savedOnly
                   ? "在解读中收藏准确版本，之后可继续阅读。"
-                  : "选择已有来源材料，围绕议题整理证据、不同观点和限制。阅读与收藏不会启动模型。"}
+                  : "说清想持续关注的目标，团队会从可用来源中选择证据；缺少关键条件时再向你确认。阅读与收藏不会启动模型。"}
               </p>
             </div>
           ) : null}
@@ -690,11 +711,21 @@ export function RadarPanel({
                 <h3>{t.title}</h3>
                 <p>{t.focus}</p>
                 <small>
-                  {t.sources.length} 项固定材料
-                  {t.feedIds?.length
-                    ? ` · ${t.feedIds.length} 个持续订阅（最多 ${t.feedLimit ?? 8} 篇）`
-                    : ""}{" "}
-                  · 规则 v{t.revision}
+                  {[
+                    t.sources.length ? `${t.sources.length} 项固定材料` : null,
+                    t.sourceIds?.length
+                      ? `${t.sourceIds.length} 个持续公开来源`
+                      : null,
+                    t.feedIds?.length
+                      ? `${t.feedIds.length} 个个人订阅（最多 ${t.feedLimit ?? 8} 篇）`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                  {t.sources.length || t.sourceIds?.length || t.feedIds?.length
+                    ? " · "
+                    : ""}
+                  规则 v{t.revision}
                 </small>
                 {jobActions(t)}
               </section>

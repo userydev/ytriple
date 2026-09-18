@@ -1,6 +1,7 @@
 import type { Contribution, Snapshot } from "../core/types";
 import type { ToolReceipt } from "../core/tool-contract";
 import { calculationOutput, materialOutput } from "../core/tool-contract";
+import type { WorkspaceToolInput } from "../core/workspace-action-contract";
 import { References } from "./References";
 const operations = {
   add: "求和",
@@ -35,6 +36,48 @@ export function ToolEvidence({
     receipt.request.key === "builtin.material@1"
       ? refs[receipt.request.input.reference - 1]
       : undefined;
+  if (receipt.request.key === "builtin.workspace@1") {
+    const workspaceInput = input as WorkspaceToolInput;
+    const proposal =
+      result && typeof result === "object" && "proposal" in result
+        ? (result as { proposal?: { status?: string; summary?: string } })
+            .proposal
+        : undefined;
+    return (
+      <details className="method-provenance">
+        <summary>查看工作台读取与实际返回</summary>
+        <p>
+          {workspaceInput.mode === "inspect"
+            ? workspaceInput.query
+              ? `核对“${workspaceInput.query}”相关的实际对象`
+              : "核对当前可用的雷达、来源、定时任务与团队能力"
+            : (proposal?.summary ?? "提出一项工作台变更")}
+        </p>
+        {receipt.status === "failed" ? (
+          <p className="error-inline">{receipt.output}</p>
+        ) : workspaceInput.mode === "act" ? (
+          <small>
+            {proposal?.status === "pending"
+              ? "变更仍等待确认，尚未写入。"
+              : proposal?.status === "applied"
+                ? "变更已经实际应用，可在对话中的回执查看或撤销。"
+                : "实际状态请以对话中的操作回执为准。"}
+          </small>
+        ) : (
+          <small>这是本次运行读取到的状态，不代表之后不会变化。</small>
+        )}
+        <details>
+          <summary>原始记录与执行时间</summary>
+          <small>
+            {receipt.request.key} ·{" "}
+            {new Date(receipt.createdAt).toLocaleString()}
+          </small>
+          <pre>{JSON.stringify(input, null, 2)}</pre>
+          <pre>{receipt.output}</pre>
+        </details>
+      </details>
+    );
+  }
   return (
     <details className="method-provenance">
       <summary>查看工具输入与实际返回</summary>

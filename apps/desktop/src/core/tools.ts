@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Store } from "./store";
 import type { Run, Member, Reference } from "./types";
+import type { WorkspaceActions } from "./workspace-actions";
 import {
   memberTools,
   toolRequestSchema,
@@ -11,7 +12,10 @@ const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 // These adapters are deterministic and have no external effects. External/MCP
 // adapters must provide their own authorization and recovery, not reuse this guarantee.
 export class LocalTools {
-  constructor(private store: Store) {}
+  constructor(
+    private store: Store,
+    private workspaceActions?: WorkspaceActions,
+  ) {}
   execute(
     run: Run,
     member: Member,
@@ -78,7 +82,7 @@ export class LocalTools {
       let output: string,
         status: ToolReceipt["status"] = "succeeded";
       try {
-        output = this.perform(request, refs);
+        output = this.perform(request, refs, run, contributionId, member.id);
         if (output.length > 16000)
           throw Error(
             "工具返回超过 16000 字符，请缩小读取范围；未返回截断结果",
@@ -104,7 +108,25 @@ export class LocalTools {
       } satisfies ToolReceipt);
     });
   }
-  private perform(request: ToolRequest, refs: Reference[]) {
+  private perform(
+    request: ToolRequest,
+    refs: Reference[],
+    run: Run,
+    contributionId: string,
+    memberId: string,
+  ) {
+    if (request.key === "builtin.workspace@1") {
+      if (!this.workspaceActions)
+        throw Error("当前运行未连接工作台操作能力；没有创建或修改任何设置");
+      return JSON.stringify(
+        this.workspaceActions.executeRequest(
+          run,
+          contributionId,
+          memberId,
+          request.input,
+        ),
+      );
+    }
     if (request.key === "builtin.calculate@1") {
       const { operation, values } = request.input;
       if (!["add", "multiply"].includes(operation) && values.length !== 2)

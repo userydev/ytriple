@@ -19,7 +19,8 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID, createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { defaultTeam, defaultWorkflow, adaptiveWorkflow } from "./types";
+import { defaultTeam, defaultWorkflow, adaptiveWorkflow, workbenchTeam, workbenchWorkflow } from "./types";
+import { workspaceContextSchema, type WorkspaceContext } from "./workspace-context";
 import {
   teamSchema,
   workflowSchema,
@@ -58,18 +59,23 @@ export class Store {
       PRAGMA user_version=1;`);
   }
   initializeConfiguration() {
-    // Existing work keeps its original defaults; only a fresh workspace starts adaptively.
-    if (
-      this.all<Run>("run").length ||
-      this.get("meta", "workflow") ||
-      this.get("meta", "team")
-    )
-      return;
-    this.selectConfiguration(
-      null,
-      versionKey(defaultTeam),
-      versionKey(adaptiveWorkflow),
-    );
+    const { team, workflow } = this.configuration();
+    const untouched = JSON.stringify(team) === JSON.stringify(defaultTeam) &&
+      [defaultWorkflow, adaptiveWorkflow].some((w) => JSON.stringify(w) === JSON.stringify(workflow));
+    // Upgrade only the untouched built-in default. Existing work and custom
+    // teams retain their own definitions; schedules keep their authorization.
+    if (!untouched) return;
+    this.transaction(() => {
+      for (const work of this.all<Work>("work")) {
+        const pinned = this.configuration(work.id);
+        this.put("team", versionKey(pinned.team), pinned.team);
+        this.put("workflow", versionKey(pinned.workflow), pinned.workflow);
+        this.put("work", work.id, { ...work,
+          teamKey: work.teamKey ?? versionKey(pinned.team),
+          workflowKey: work.workflowKey ?? versionKey(pinned.workflow) });
+      }
+      this.selectConfiguration(null, versionKey(workbenchTeam), versionKey(workbenchWorkflow));
+    });
   }
   configuration(workId?: string) {
     const work = workId ? this.require<Work>("work", workId) : undefined;
@@ -94,6 +100,7 @@ export class Store {
     const teams = new Map(
       [
         defaultTeam,
+        workbenchTeam,
         current.team,
         ...this.all<Run>("run").map((r) => r.team),
         ...this.all<Team>("team"),
@@ -103,6 +110,7 @@ export class Store {
       [
         defaultWorkflow,
         adaptiveWorkflow,
+        workbenchWorkflow,
         current.workflow,
         ...this.all<Run>("run").map((r) => r.workflow),
         ...this.all<Workflow>("workflow"),
@@ -314,6 +322,8 @@ export class Store {
   }
   snapshot(): Omit<Snapshot, "service"> {
     return {
+      workspaceActions: this.all("workspace-action"),
+      workspacePolicy: this.get("meta", "workspace-policy") ?? { direct: false },
       feeds: this.all("feed"),
       feedChecks: this.all("feed-check"),
       schedules: this.all("schedule"),
@@ -375,9 +385,65 @@ export class Store {
         : undefined;
     return this.put("draft", input.id, {
       ...input,
+      workspaceContext: input.workspaceContext ?? previous?.workspaceContext,
+      teamKey: input.teamKey ?? previous?.teamKey,
+      workflowKey: input.workflowKey ?? previous?.workflowKey,
       skillKeys: input.skillKeys ?? previous?.skillKeys,
       preparedProcess,
       updatedAt: now(),
+    });
+  }
+  captureWorkspaceContext(raw?: WorkspaceContext): WorkspaceContext | undefined {
+    if (!raw) return undefined;
+    const context = workspaceContextSchema.parse(raw);
+    const current = this.require<{ revision: number }>(context.kind, context.id);
+    return { ...context, revision: current.revision };
+  }
+  prepareWorkspaceChat(context: string, text: string, target?: WorkspaceContext) {
+    return this.transaction(() => {
+      const existing = this.get<Draft>("draft", context);
+      if (existing?.text.trim() && existing.text !== text)
+        throw Error("这里还有未发送的草稿，请先发送或另开一次交流");
+      const isNew = context === "new" || context.startsWith("new:");
+      const work = isNew ? undefined : this.require<Work>("work", context);
+      if (work?.workspaceContext && target &&
+          (work.workspaceContext.id !== target.id || work.workspaceContext.kind !== target.kind))
+        throw Error("这段交流已关联其他对象，请另开交流");
+      const selected = this.configuration(work?.id);
+      let { team, workflow } = selected;
+      const coordinator = workflow.stages.at(-1)?.role ?? team.members[0].id;
+      if (!team.members.some((m) => m.id === coordinator && m.toolKeys?.includes("builtin.workspace@1"))) {
+        const id = `${team.id.slice(0, 65)}-workbench`;
+        const latest = this.configurationVersions().teams.filter((t) => t.id === id).sort((a,b) => b.version-a.version)[0];
+        team = teamSchema.parse({ ...team, id, version: (latest?.version ?? 0) + 1,
+          members: team.members.map((m) => m.id === coordinator ? {
+            ...m, toolKeys: [...new Set([...(m.toolKeys ?? []), "builtin.workspace@1" as const])],
+            instruction: `${m.instruction}\n作为本次工作的对接者，简单操作先读取真实状态并使用工作台能力办理，只在需要时委派，不用文字代替执行结果。`,
+          } : m),
+        });
+        this.put("team", versionKey(team), team);
+      }
+      // This conversation opts into the new capability; historical runs and
+      // user-customized workspace defaults keep their pinned definitions.
+      const flowId = `${workflow.id.slice(0, 65)}-workbench`;
+      const latestFlow = this.configurationVersions().workflows.filter((w) => w.id === flowId).sort((a,b) => b.version-a.version)[0];
+      workflow = workflowSchema.parse({ ...workbenchWorkflow, id: flowId,
+        version: (latestFlow?.version ?? 0) + 1,
+        stages: [{ ...workbenchWorkflow.stages[0], role: coordinator }],
+      });
+      this.put("workflow", versionKey(workflow), workflow);
+      const workspaceContext = this.captureWorkspaceContext(target ?? work?.workspaceContext ?? existing?.workspaceContext);
+      if (work) {
+        if (this.all<Run>("run").some((r) => r.workId === work.id && ["queued","running","waiting","unknown"].includes(r.status)))
+          throw Error("原工作尚未结束，请先处理当前运行");
+        this.selectConfiguration(work.id, versionKey(team), versionKey(workflow));
+        this.put("work", work.id, { ...this.require<Work>("work", work.id), workspaceContext });
+      }
+      return this.saveDraft({ id: context, text, refs: existing?.refs ?? [],
+        recipient: null, projectId: work?.projectId ?? existing?.projectId ?? null,
+        outputMode: "explanation", workspaceContext,
+        teamKey: versionKey(team), workflowKey: versionKey(workflow),
+      });
     });
   }
   setWorkState(
@@ -502,6 +568,7 @@ export class Store {
       });
       if (input.projectId) this.require("project", input.projectId);
       const isNew = input.context === "new" || input.context.startsWith("new:");
+      const prepared = this.get<Draft>("draft", input.context);
       const work: Work = isNew
         ? {
             id: randomUUID(),
@@ -516,6 +583,8 @@ export class Store {
             updatedAt: now(),
             archived: false,
             queuePaused: false,
+            teamKey: prepared?.teamKey,
+            workflowKey: prepared?.workflowKey,
           }
         : this.require("work", input.context);
       if (
@@ -530,9 +599,14 @@ export class Store {
         const d = this.require<Delivery>("delivery", work.deliveryId);
         if (d.projectId !== work.projectId) throw Error("交付不属于该项目");
       }
-      const { team, workflow } = this.configuration(
-        isNew ? undefined : work.id,
-      );
+      const selected = this.configuration(isNew ? undefined : work.id);
+      const team = work.teamKey ? this.require<Team>("team", work.teamKey) : selected.team;
+      const workflow = work.workflowKey ? this.require<Workflow>("workflow", work.workflowKey) : selected.workflow;
+      const requestedContext = input.workspaceContext ?? prepared?.workspaceContext;
+      if (work.workspaceContext && requestedContext &&
+          (work.workspaceContext.id !== requestedContext.id || work.workspaceContext.kind !== requestedContext.kind))
+        throw Error("这段交流的对象不能在发送时切换，请另开交流");
+      work.workspaceContext = this.captureWorkspaceContext(work.workspaceContext ?? requestedContext);
       checkCompatibility(team, workflow);
       // New work pins both definitions. Later default edits do not migrate it.
       work.teamKey ??= versionKey(team);
@@ -554,6 +628,8 @@ export class Store {
           (v.kind ?? "result") === resultKind(input.outputMode),
       );
       const run: Run = {
+        workspacePolicy: this.get("meta", "workspace-policy") ?? { direct: false },
+        workspaceContext: work.workspaceContext ? structuredClone(work.workspaceContext) : undefined,
         tools: captureTools(team),
         schedule: input.schedule,
         id: randomUUID(),

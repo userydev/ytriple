@@ -68,6 +68,8 @@ export function Composer({
   onWork,
   onContext,
   onManage,
+  onTeam,
+  onSettings,
   onClose,
   onError,
   extraRefs = [],
@@ -82,11 +84,16 @@ export function Composer({
   onWork: (id: string) => void;
   onContext: (id: string) => void;
   onManage: () => void;
+  onTeam?: () => void;
+  onSettings?: () => void;
   onClose?: () => void;
   onError: (e: unknown) => void;
   extraRefs?: Reference[];
 }) {
   const initial = data.drafts.find((d) => d.id === context);
+  const workspaceContext =
+    data.works.find((w) => w.id === context)?.workspaceContext ??
+    initial?.workspaceContext;
   const [skillKeys, setSkillKeys] = useState<string[]>(
     initial?.skillKeys ?? [],
   );
@@ -155,6 +162,7 @@ export function Composer({
       recipient,
       skillKeys,
       projectId,
+      workspaceContext,
       ...next,
     });
   }
@@ -177,8 +185,16 @@ export function Composer({
     const skill = data.skills.find((s) => skillKey(s) === key);
     return !skill || skillAvailability(skill, data.skillStates) !== "ready";
   });
+  const modelReady = data.model?.configured ?? data.service.configured;
   async function send() {
-    if (busy || importing || missing || unavailableSkills || !text.trim())
+    if (
+      busy ||
+      importing ||
+      missing ||
+      unavailableSkills ||
+      !modelReady ||
+      !text.trim()
+    )
       return;
     setBusy(true);
     try {
@@ -195,9 +211,10 @@ export function Composer({
         skillKeys,
         projectId,
         deliveryId,
+        workspaceContext,
       });
       setText("");
-      setOutputMode("result");
+      setOutputMode(workspaceContext ? "explanation" : "result");
       setRefs([]);
       setSkillKeys([]);
       submitKey.current = null;
@@ -271,11 +288,20 @@ export function Composer({
           ? "project"
           : "new";
   const delivery = data.deliveries.find((d) => d.id === actualDeliveryId);
+  const workspaceOperation = context.startsWith("new:workspace:");
   const contextLabel =
-    work?.title ??
-    (surface === "radar"
-      ? "围绕这篇解读"
-      : (delivery?.title ?? project?.name ?? "新工作"));
+    workspaceContext?.kind === "radar-topic"
+      ? `雷达议题 · ${data.radar.topics.find((topic) => topic.id === workspaceContext.id)?.title ?? workspaceContext.id} · v${workspaceContext.revision}`
+      : workspaceContext?.kind === "schedule"
+        ? `定时任务 · ${data.schedules.find((schedule) => schedule.id === workspaceContext.id)?.name ?? workspaceContext.id} · v${workspaceContext.revision}`
+        : workspaceOperation
+          ? surface === "radar"
+            ? "雷达委托"
+            : "定时任务委托"
+          : (work?.title ??
+            (surface === "radar"
+              ? "围绕这篇解读"
+              : (delivery?.title ?? project?.name ?? "新工作")));
   const placeholder = running
     ? "补充下一轮要处理的内容…"
     : recipient
@@ -364,7 +390,7 @@ export function Composer({
         ) : null}
         {outputMode !== "result" ? (
           <span className="output-mode">
-            {outputLabels[outputMode]}
+            {workspaceOperation ? "团队办理" : outputLabels[outputMode]}
             <IconButton
               label="改为普通成果任务"
               disabled={busy}
@@ -443,6 +469,19 @@ export function Composer({
             ))}
         </div>
       ) : null}
+      {workspaceContext ? (
+        <div className="workspace-team-ready">
+          <small>
+            {team.members.map((member) => member.name).join("、")} ·
+            可读取当前工作台并提出明确变更
+          </small>
+          {onTeam ? (
+            <button className="text-action" onClick={onTeam}>
+              查看团队配置
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <References
         refs={refs}
         data={data}
@@ -472,6 +511,16 @@ export function Composer({
       {unavailableSkills ? (
         <p className="error-inline" role="status">
           指定方法已停用或缺少依赖，请更换或移除后发送。
+        </p>
+      ) : null}
+      {!modelReady ? (
+        <p className="error-inline" role="status">
+          先连接 AI 服务，团队才能处理这项请求。{" "}
+          {onSettings ? (
+            <button className="text-action" onClick={onSettings}>
+              打开模型设置
+            </button>
+          ) : null}
         </p>
       ) : null}
       {showSkills ? (
@@ -575,6 +624,7 @@ export function Composer({
                   importing ||
                   missing ||
                   unavailableSkills ||
+                  !modelReady ||
                   !text.trim()
                 }
                 onClick={() => void send()}

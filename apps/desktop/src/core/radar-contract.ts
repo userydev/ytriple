@@ -5,6 +5,9 @@ import type { Reference, RunStatus } from "./types";
 export const topicInputSchema = z
   .object({
     id: z.string().uuid().optional(),
+    // Accepted so a persisted topic can pass through an editor; saveTopic
+    // preserves the stored value and archiveTopic is the only mutator.
+    archived: z.boolean().optional(),
     revision: z.number().int().nonnegative(),
     title: z.string().trim().min(1).max(120),
     focus: z.string().trim().max(2000),
@@ -14,6 +17,21 @@ export const topicInputSchema = z
       .refine((a) => new Set(a).size === a.length, "订阅只需选择一次")
       .optional(),
     feedLimit: z.number().int().min(1).max(18).optional(),
+    sourceIds: z
+      .array(z.string().trim().min(1).max(160))
+      .max(10)
+      .refine((a) => new Set(a).size === a.length, "同一公开来源只需选择一次")
+      .optional(),
+    keywords: z
+      .array(z.string().trim().min(1).max(120))
+      .max(12)
+      .refine(
+        (a) =>
+          new Set(a.map((value) => value.toLocaleLowerCase())).size ===
+          a.length,
+        "同一关键词只需填写一次",
+      )
+      .optional(),
     sources: z
       .array(
         z
@@ -32,10 +50,14 @@ export const topicInputSchema = z
       ),
   })
   .strict()
-  .refine((t) => t.sources.length || t.feedIds?.length, "请选择材料或持续订阅");
+  .refine(
+    (t) => t.sources.length || t.feedIds?.length || t.sourceIds?.length,
+    "请选择材料、持续订阅或公开来源",
+  );
 export type TopicInput = z.infer<typeof topicInputSchema>;
-export type RadarTopic = Omit<TopicInput, "id"> & {
+export type RadarTopic = Omit<TopicInput, "id" | "archived"> & {
   id: string;
+  archived?: boolean;
   updatedAt: string;
 };
 export type RadarSource = {
@@ -100,6 +122,8 @@ export type RadarJob = {
   automatic?: { watchId: string; watchRevision: number; checkId: string };
   supply?: {
     feedIds: string[];
+    sourceIds?: string[];
+    keywords?: string[];
     available: number;
     included: number;
     omitted: number;

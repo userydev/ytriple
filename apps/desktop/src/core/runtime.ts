@@ -21,6 +21,7 @@ import type {
 } from "./types";
 import type { ModelCall } from "./schedule-contract";
 import { createHash } from "node:crypto";
+import type { WorkspaceActions } from "./workspace-actions";
 export class Runtime {
   private active = new Map<string, AbortController>();
   private jobs = new Map<string, Promise<void>>();
@@ -28,6 +29,7 @@ export class Runtime {
     readonly store: Store,
     private model: () => Model,
     private changed: () => void = () => {},
+    private workspaceActions?: WorkspaceActions,
   ) {}
   submit(input: SubmitInput) {
     const model = this.model();
@@ -414,12 +416,18 @@ export class Runtime {
               contribution = current;
               this.changed();
             },
+            this.workspaceActions,
           ).execute(context);
           if (execution.waiting) return;
+          const hasWorkspaceAction = this.store
+            .all<{ runId: string }>("workspace-action")
+            .some((action) => action.runId === run.id);
           this.store.finish(
             run.id,
             execution.final,
-            execution.result && run.outputMode !== "explanation",
+            execution.result &&
+              run.outputMode !== "explanation" &&
+              !hasWorkspaceAction,
           );
           this.changed();
           continue;

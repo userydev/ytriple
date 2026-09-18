@@ -14,17 +14,22 @@ const day = 86400000;
 export class RadarWatches {
   private timer?: ReturnType<typeof setInterval>;
   private pending = new Set<Promise<void>>();
+  private syncing = false;
+  private generation = 0;
   constructor(
     readonly store: Store,
     readonly radar: Radar,
     private scope: () => string | undefined,
     private changed: () => void = () => {},
     private clock = Date.now,
+    private syncPublicSources?: () => Promise<unknown>,
   ) {}
 
   save(raw: RadarWatchInput) {
     const input = radarWatchInput.parse(raw);
     const topic = this.store.require<RadarTopic>("radar-topic", input.topicId);
+    if (input.enabled && topic.archived)
+      throw Error("先恢复议题，再启用自动整理");
     const old = this.store.get<RadarWatch>("radar-watch", input.topicId);
     if (
       (old?.revision ?? 0) !== input.expectedRevision ||
@@ -226,6 +231,17 @@ export class RadarWatches {
       });
     });
     try {
+      if (!this.radar.hasReadableEvidence(watch.id)) {
+        this.store.put("radar-auto-check", id, {
+          ...check,
+          status: "unchanged",
+          finishedAt: at,
+          error:
+            "暂无足够的可读材料，继续等待来源更新；仅标题线索不会生成正式解读",
+        });
+        this.changed();
+        return;
+      }
       const same = this.radar.matchingJob(watch.id);
       const recent = this.store
         .all<RadarJob>("radar-job")
@@ -290,16 +306,61 @@ export class RadarWatches {
   }
   start() {
     if (!this.timer) {
-      this.tick();
-      this.timer = setInterval(() => this.tick(), 30000);
+      this.scheduledTick();
+      this.timer = setInterval(() => this.scheduledTick(), 30000);
       this.timer.unref();
     }
   }
   shutdown() {
+    this.generation++;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
   }
+  scheduledTick() {
+    if (this.syncing) return;
+    const due = this.store
+      .all<RadarWatch>("radar-watch")
+      .filter(
+        (w) =>
+          w.enabled &&
+          w.nextAt &&
+          Date.parse(w.nextAt) <= this.clock() &&
+          this.store.get<RadarTopic>("radar-topic", w.id)?.sourceIds?.length,
+      );
+    if (!due.length || !this.syncPublicSources) {
+      this.tick();
+      return;
+    }
+    const generation = this.generation;
+    this.syncing = true;
+    const pending = this.syncPublicSources()
+      .then(() => {
+        if (generation === this.generation) this.tick();
+      })
+      .catch(() => {
+        if (generation !== this.generation) return;
+        for (const saved of due) {
+          const current = this.store.require<RadarWatch>(
+            "radar-watch",
+            saved.id,
+          );
+          if (current.revision !== saved.revision || !current.enabled) continue;
+          this.store.put("radar-watch", saved.id, {
+            ...current,
+            error:
+              "公开材料同步失败，保留原解读；五分钟后重试同步，本次未调用模型",
+            nextAt: new Date(this.clock() + 300000).toISOString(),
+          });
+        }
+        this.changed();
+      })
+      .finally(() => {
+        this.syncing = false;
+        this.pending.delete(pending);
+      });
+    this.pending.add(pending);
+  }
   async settled() {
-    await Promise.all([...this.pending]);
+    while (this.pending.size) await Promise.all([...this.pending]);
   }
 }

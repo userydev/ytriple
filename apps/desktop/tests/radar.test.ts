@@ -14,6 +14,7 @@ import {
   type StreamEvent,
 } from "../src/core/ycore";
 import type { RadarJob, Insight } from "../src/core/radar-contract";
+import type { Material, Source } from "../src/core/types";
 
 class EditorialFixture implements Model {
   scope = "fixture-a";
@@ -24,6 +25,7 @@ class EditorialFixture implements Model {
   terminalError?: "EXECUTION_LOST" | "PROVIDER_ERROR";
   noChange = false;
   corrupt = false;
+  extraMetadata = false;
   output = "";
   prompts: Prompt[] = [];
   async *stream(
@@ -59,7 +61,12 @@ class EditorialFixture implements Model {
         reason: "与当前问题有关",
       })),
     };
-    this.output = JSON.stringify(insight);
+    this.output = JSON.stringify({
+      ...insight,
+      ...(this.extraMetadata
+        ? { sections_count: insight.sections.length }
+        : {}),
+    });
     yield { type: "run.started", run_id: key };
     yield {
       type: "text.delta",
@@ -116,6 +123,242 @@ function setup(store = new Store(":memory:")) {
   });
   return { store, model, radar, topic, first, duplicate, second };
 }
+
+const publicMaterial = (
+  localId: string,
+  upstreamId: string,
+  sourceId: string,
+  version: number,
+  title: string,
+  body: string,
+  updatedAt: string,
+  scope = "managed",
+): Material => ({
+  id: localId,
+  version,
+  title,
+  body,
+  coverage: "summary",
+  url: `https://publisher.example/${upstreamId}`,
+  upstream: {
+    scope,
+    id: upstreamId,
+    revision: version,
+    publisher: "Publisher",
+    publishedAt: null,
+    discoveredAt: updatedAt,
+    updatedAt,
+    topics: [],
+    provenance: [
+      {
+        sourceId,
+        adapter: "rss",
+        upstreamId: `${upstreamId}-${version}`,
+        discoveredAt: updatedAt,
+        rawRef: `raw-${version}`,
+      },
+    ],
+    contentHash: `${upstreamId}-${version}`,
+    fullArticle: false,
+  },
+  createdAt: updatedAt,
+});
+
+function addPublicSource(store: Store, source: Partial<Source> = {}) {
+  const value: Source = {
+    id: "source-rss",
+    name: "Public RSS",
+    status: "active",
+    last_error: null,
+    ...source,
+  };
+  store.put("meta", "sources", [value]);
+  return value;
+}
+
+test("a public-source topic picks up newly synced material without editing eighteen fixed references", async () => {
+  const store = new Store(":memory:");
+  const source = addPublicSource(store);
+  const first = publicMaterial(
+    "ycore:managed:first",
+    "first",
+    source.id,
+    1,
+    "Agent launch",
+    "An agent product launched with measured limitations.",
+    "2026-09-18T01:00:00Z",
+  );
+  store.put("material", `${first.id}@${first.version}`, first);
+  const model = new EditorialFixture();
+  const radar = new Radar(store, () => model);
+  const topic = radar.saveTopic({
+    revision: 0,
+    title: "Agent products",
+    focus: "Track evidence",
+    sourceIds: [source.id],
+    keywords: ["agent"],
+    sources: [],
+  });
+  const initial = radar.refresh(topic.id);
+  await radar.settled(initial.id);
+  assert.deepEqual(
+    store
+      .require<RadarJob>("radar-job", initial.id)
+      .sources.map((item) => item.reference.materialId),
+    [first.id],
+  );
+
+  const next = publicMaterial(
+    "ycore:managed:next",
+    "next",
+    source.id,
+    1,
+    "Another agent release",
+    "New evidence arrived in the next completed sync.",
+    "2026-09-18T02:00:00Z",
+  );
+  store.put("material", `${next.id}@${next.version}`, next);
+  const refreshed = radar.refresh(topic.id);
+  await radar.settled(refreshed.id);
+  assert.deepEqual(
+    store
+      .require<RadarJob>("radar-job", refreshed.id)
+      .sources.map((item) => item.reference.materialId),
+    [next.id, first.id],
+  );
+  assert.equal(model.calls, 2);
+  store.close();
+});
+
+test("public supply matches literal keywords, keeps the latest revision, and deduplicates an upstream document across scopes", async () => {
+  const store = new Store(":memory:");
+  const source = addPublicSource(store, {
+    status: "degraded",
+    last_error: "upstream timeout",
+  });
+  const old = publicMaterial(
+    "ycore:legacy:same",
+    "same",
+    source.id,
+    1,
+    "Old robotics report",
+    "robotics first revision",
+    "2026-09-18T01:00:00Z",
+    "legacy",
+  );
+  const latest = publicMaterial(
+    "ycore:managed:same",
+    "same",
+    source.id,
+    2,
+    "Updated robotics report",
+    "robotics latest revision",
+    "2026-09-18T03:00:00Z",
+  );
+  const miss = publicMaterial(
+    "ycore:managed:miss",
+    "miss",
+    source.id,
+    1,
+    "Unrelated finance",
+    "No matching term here.",
+    "2026-09-18T04:00:00Z",
+  );
+  for (const material of [old, latest, miss])
+    store.put("material", `${material.id}@${material.version}`, material);
+  const model = new EditorialFixture();
+  const radar = new Radar(store, () => model);
+  const topic = radar.saveTopic({
+    revision: 0,
+    title: "Robotics",
+    focus: "",
+    sourceIds: [source.id],
+    keywords: ["ROBOTICS"],
+    sources: [],
+  });
+  const job = radar.refresh(topic.id);
+  await radar.settled(job.id);
+  const request = JSON.parse(model.prompts[0].messages[1].content);
+  assert.deepEqual(
+    store
+      .require<RadarJob>("radar-job", job.id)
+      .sources.map((item) => [
+        item.reference.materialId,
+        item.reference.version,
+      ]),
+    [[latest.id, 2]],
+  );
+  assert.deepEqual(request.supply.sourceIds, [source.id]);
+  assert.deepEqual(request.supply.keywords, ["ROBOTICS"]);
+  assert.match(request.supply.notes.join("\n"), /不触发来源抓取/);
+  assert.match(request.supply.notes.join("\n"), /upstream timeout/);
+  store.close();
+});
+
+test("an empty public match is reported honestly and never calls the model", () => {
+  const store = new Store(":memory:");
+  const source = addPublicSource(store);
+  const material = publicMaterial(
+    "ycore:managed:item",
+    "item",
+    source.id,
+    1,
+    "Robotics",
+    "Evidence about robotics.",
+    "2026-09-18T01:00:00Z",
+  );
+  store.put("material", `${material.id}@${material.version}`, material);
+  const model = new EditorialFixture();
+  const radar = new Radar(store, () => model);
+  const topic = radar.saveTopic({
+    revision: 0,
+    title: "Quantum",
+    focus: "",
+    sourceIds: [source.id],
+    keywords: ["quantum"],
+    sources: [],
+  });
+  assert.throws(
+    () => radar.refresh(topic.id),
+    /没有符合来源和关键词.*未调用模型/,
+  );
+  assert.equal(model.calls, 0);
+  assert.equal(store.snapshot().radar.jobs.length, 0);
+  store.close();
+});
+
+test("legacy fixed-material topics remain valid and unchanged by omitted dynamic supply fields", () => {
+  const { store, radar, topic } = setup();
+  const unchanged = radar.saveTopic({
+    id: topic.id,
+    revision: topic.revision,
+    title: topic.title,
+    focus: topic.focus,
+    sources: topic.sources,
+  });
+  assert.equal(unchanged.revision, topic.revision);
+  assert.equal(unchanged.sourceIds, undefined);
+  assert.equal(unchanged.keywords, undefined);
+  store.close();
+});
+
+test("topic archival preserves history, checks revision, and prevents new radar work", () => {
+  const { store, radar, topic, model } = setup();
+  const archived = radar.archiveTopic(topic.id, topic.revision, true);
+  assert.equal(archived.archived, true);
+  assert.equal(archived.revision, topic.revision + 1);
+  assert.throws(
+    () => radar.archiveTopic(topic.id, topic.revision, false),
+    /已变化/,
+  );
+  assert.throws(() => radar.refresh(topic.id), /已归档/);
+  assert.equal(model.calls, 0);
+  assert.equal(store.snapshot().radar.topics.length, 1);
+  const restored = radar.archiveTopic(topic.id, archived.revision, false);
+  assert.equal(restored.archived, false);
+  assert.equal(restored.revision, archived.revision + 1);
+  store.close();
+});
 test("radar integrates a collection, preserves dedup reasons and exact editions, and skips unchanged input without creating work", async () => {
   const { store, model, radar, topic, first } = setup();
   assert.equal(model.calls, 0);
@@ -161,6 +404,21 @@ test("radar integrates a collection, preserves dedup reasons and exact editions,
   radar.reading(original.id, { saved: true, read: true, scroll: 410 });
   assert.equal(store.snapshot().radar.reading[0].scroll, 410);
   assert.equal(model.calls, 2);
+  store.close();
+});
+
+test("radar ignores undeclared top-level model metadata while retaining strict declared-field validation", async () => {
+  const { store, model, radar, topic } = setup();
+  model.extraMetadata = true;
+  const job = radar.refresh(topic.id);
+  await radar.settled(job.id);
+  assert.equal(
+    store.require<RadarJob>("radar-job", job.id).status,
+    "succeeded",
+  );
+  const edition = store.snapshot().radar.editions[0];
+  assert.equal(edition.insight.sections.length, 1);
+  assert.equal("sections_count" in edition.insight, false);
   store.close();
 });
 test("radar corrections are scoped to a topic; excluded text is not transmitted and cannot be cited", async () => {

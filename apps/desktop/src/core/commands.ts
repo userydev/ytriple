@@ -7,6 +7,7 @@ import { briefInputSchema, standardInputSchema } from "./project-contract";
 import { initializationInput } from "./project-initialization";
 import { layoutSchema, viewSchema } from "./view";
 import { z } from "zod";
+import { workspaceContextSchema } from "./workspace-context";
 import { teamSchema, workflowSchema } from "./configuration";
 import { topicInputSchema } from "./radar-contract";
 const id = z.string().min(1).max(300),
@@ -276,6 +277,12 @@ export const commandSchema = z.discriminatedUnion("type", [
     expectedVersionId: id,
   }),
   z.object({ type: z.literal("sync") }),
+  z.object({ type: z.literal("prepare-workspace-chat"), context: id, text,
+    workspaceContext: workspaceContextSchema.optional() }),
+  z.object({ type: z.literal("workspace-action-apply"), id }),
+  z.object({ type: z.literal("workspace-action-dismiss"), id }),
+  z.object({ type: z.literal("workspace-action-undo"), id }),
+  z.object({ type: z.literal("workspace-policy"), direct: z.boolean() }),
   z.object({ type: z.literal("connect") }),
   z.object({
     type: z.literal("configure"),
@@ -284,6 +291,7 @@ export const commandSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("draft"),
+    workspaceContext: workspaceContextSchema.optional(),
     skillKeys: z.array(id).max(4).optional(),
     outputMode,
     id,
@@ -294,6 +302,7 @@ export const commandSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("submit"),
+    workspaceContext: workspaceContextSchema.optional(),
     skillKeys: z.array(id).max(4).optional(),
     outputMode,
     key: z.string().uuid(),

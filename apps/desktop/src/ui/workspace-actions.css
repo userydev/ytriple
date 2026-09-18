@@ -1,0 +1,65 @@
+.workspace-actions {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+}
+.workspace-action {
+  border: 1px solid #dfe4dc;
+  border-radius: 12px;
+  padding: 13px 14px;
+  background: #f8faf7;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+.workspace-action.pending {
+  border-color: #dfc983;
+  background: #fffbec;
+}
+.workspace-action.undone {
+  opacity: 0.72;
+}
+.workspace-action p {
+  margin: 4px 0;
+}
+.workspace-action small {
+  display: block;
+  color: #687168;
+  margin-top: 4px;
+}
+.workspace-action .workspace-policy-inline {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 9px;
+  font-size: 12px;
+}
+.workspace-action-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.workspace-action-controls button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.workspace-team-ready {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 2px 8px;
+  color: #687168;
+}
+@media (max-width: 720px) {
+  .workspace-action {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .workspace-action-controls {
+    flex-wrap: wrap;
+  }
+}

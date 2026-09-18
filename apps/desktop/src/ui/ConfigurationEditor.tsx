@@ -33,6 +33,9 @@ export function ConfigurationEditor({
     [busy, setBusy] = useState(false),
     [notice, setNotice] = useState(""),
     [error, setError] = useState("");
+  const [directActions, setDirectActions] = useState(
+    data.workspacePolicy.direct,
+  );
   const latestTeam = Math.max(
     ...teams.filter((t) => t.id === team.id).map((t) => t.version),
   );
@@ -125,6 +128,38 @@ export function ConfigurationEditor({
       </div>
       {tab === "team" ? (
         <section>
+          <label className="schedule-check">
+            <input
+              type="checkbox"
+              checked={directActions}
+              disabled={busy}
+              onChange={(event) => {
+                const direct = event.target.checked;
+                setBusy(true);
+                setError("");
+                void command({ type: "workspace-policy", direct })
+                  .then(() => {
+                    setDirectActions(direct);
+                    setNotice(
+                      direct
+                        ? "后续小范围、可撤销的操作可由团队直接办理；周期执行、启用和扩大范围仍需确认。"
+                        : "团队会先请你确认所有工作台变更。",
+                    );
+                    onApplied();
+                  })
+                  .catch((reason) =>
+                    setError(
+                      reason instanceof Error ? reason.message : String(reason),
+                    ),
+                  )
+                  .finally(() => setBusy(false));
+              }}
+            />
+            小范围操作直接办理
+          </label>
+          <p className="settings-note">
+            默认关闭。保存关注重点、暂停任务等可撤销操作可直接完成；新增周期、启用任务、扩大来源范围仍会等待确认。
+          </p>
           <fieldset className="form-section">
             <legend>搭配信息</legend>
             <label>

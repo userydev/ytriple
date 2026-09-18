@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { Store } from "../src/core/store";
 import { Runtime } from "../src/core/runtime";
 import { LocalTools } from "../src/core/tools";
+import { DelegationRunner } from "../src/core/delegation";
 import { ProcessRecords } from "../src/core/process";
 import {
   WorkspaceBackups,
@@ -114,6 +115,65 @@ test("historical flows reject unexpected tool controls and oversized escaped out
   } finally {
     bounded.close();
   }
+});
+
+test("one concise schema correction can be repaired without executing the invalid request", async () => {
+  const store = fixture();
+  try {
+    const model = new Script((prompt, n) => {
+      if (n === 1)
+        return JSON.stringify({ ytriple_tool: {
+          key: "builtin.calculate@1", purpose: "计算", input: {
+            operation: "add", values: ["bad", 2],
+          },
+        } });
+      if (n === 2) {
+        assert.match(prompt.messages[1].content, /values/);
+        assert.doesNotMatch(prompt.messages[1].content, /invalid_type|regex|pattern/i);
+        return calculate([1, 2], "add");
+      }
+      return "计算结果已经由工具返回。";
+    });
+    const runtime = new Runtime(store, () => model), run = runtime.submit(input());
+    await runtime.settled(run.workId);
+    assert.equal(store.require<Run>("run", run.id).status, "succeeded");
+    assert.equal(store.all("tool-call").length, 1);
+    assert.equal(model.prompts.length, 3);
+  } finally { store.close(); }
+});
+
+test("persisted tool format feedback resumes at the next turn without replaying the paid request", async () => {
+  const store = fixture();
+  try {
+    const run = store.submit(input(), "account:test");
+    const invalid = JSON.stringify({ ytriple_tool: {
+      key: "builtin.calculate@1", purpose: "计算", input: {
+        operation: "add", values: ["bad", 2],
+      },
+    } });
+    const first = new Script(() => invalid), controller = new AbortController();
+    await assert.rejects(
+      new DelegationRunner(store, first, run, controller.signal, (current) => {
+        if (current.toolFormatError) controller.abort();
+      }).execute(""),
+      /已停止/,
+    );
+    assert.equal(first.prompts.length, 1);
+    const original = store.all<Contribution>("contribution")[0];
+    assert.equal(original.body, invalid);
+    assert.match(original.toolFormatError?.message ?? "", /values/);
+
+    const resumed = new Script((_prompt, n) =>
+      n === 1 ? calculate([1, 2], "add") : "已根据真实工具返回完成。",
+    );
+    const result = await new DelegationRunner(
+      store, resumed, run, new AbortController().signal, () => {},
+    ).execute("");
+    assert.equal(result.waiting, false);
+    assert.equal(resumed.prompts.length, 2);
+    assert.ok(resumed.prompts.every((prompt) => !prompt.taskId.includes(":t0:")));
+    assert.equal(store.all("tool-call").length, 1);
+  } finally { store.close(); }
 });
 const input = (more: Partial<SubmitInput> = {}): SubmitInput => ({
   key: randomUUID(),
@@ -365,7 +425,10 @@ test("tool policy and member grants freeze per run, with global limits and dupli
       await runtime.settled(run.workId);
       assert.equal(store.require<Run>("run", run.id).status, "failed");
       assert.equal(store.all("tool-call").length, duplicate ? 1 : 8);
-      assert.equal(store.require<Run>("run", run.id).tools?.keys.length, 2);
+      assert.equal(
+        store.require<Run>("run", run.id).tools?.keys.length,
+        toolCatalog.length,
+      );
       assert.equal(store.all("version").length, 0);
     } finally {
       store.close();

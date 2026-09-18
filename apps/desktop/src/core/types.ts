@@ -7,6 +7,8 @@ import type {
 import type { OutcomeRecord } from "./outcome-contract";
 import type { Layout, WorkView } from "./view";
 import type { RadarSnapshot } from "./radar-contract";
+import type { WorkspaceContext } from "./workspace-context";
+import type { WorkspaceActionProposal } from "./workspace-action-contract";
 import type { FeedSource, FeedCheck } from "./feed-contract";
 import type {
   Schedule,
@@ -36,6 +38,9 @@ export type Reference = {
 export type OutputMode =
   "result" | "explanation" | "summary" | "review" | "readiness" | "method";
 export type Draft = {
+  workspaceContext?: WorkspaceContext;
+  teamKey?: string;
+  workflowKey?: string;
   skillKeys?: string[];
   outputMode?: OutputMode;
   preparedProcess?: { materialId: string; instruction: string; added: boolean };
@@ -131,6 +136,7 @@ export type Delivery = {
   adoptedVersionId: string | null;
 };
 export type Work = {
+  workspaceContext?: WorkspaceContext;
   id: string;
   title: string;
   projectId: string | null;
@@ -242,6 +248,8 @@ export type Workflow = {
   stages: { role: string; objective: string; result: boolean }[];
 };
 export type Run = {
+  workspacePolicy?: { direct: boolean };
+  workspaceContext?: WorkspaceContext;
   tools?: import("./tool-contract").ToolPolicy;
   modelIdentity?: import("./model-contract").ModelIdentity;
   recovery?: "remote" | "local";
@@ -293,6 +301,7 @@ export type Decision = DecisionRequest & {
 };
 export type Contribution = {
   tool?: import("./tool-contract").ToolReceipt;
+  toolFormatError?: { message: string; createdAt: string };
   skills?: SkillUse[];
   skillRequest?: { key: string; purpose: string };
   task?: {
@@ -385,6 +394,8 @@ export type ServiceStatus = {
   error: string | null;
 };
 export type Snapshot = {
+  workspacePolicy: { direct: boolean };
+  workspaceActions: WorkspaceActionProposal[];
   desktop?: {
     version: string;
     buildId: string;
@@ -435,6 +446,7 @@ export type Snapshot = {
   workflows: Workflow[];
 };
 export type SubmitInput = {
+  workspaceContext?: WorkspaceContext;
   schedule?: ScheduledRun;
   skillKeys?: string[];
   outputMode?: OutputMode;
@@ -503,4 +515,22 @@ export const adaptiveWorkflow: Workflow = {
       result: true,
     },
   ],
+};
+
+export const workbenchTeam: Team = {
+  id: "workbench-team",
+  version: 1,
+  name: "工作团队",
+  members: defaultTeam.members.map((member) => member.id === "editor" ? {
+    ...member,
+    name: "工作伙伴",
+    toolKeys: ["builtin.workspace@1", "builtin.material@1", "builtin.calculate@1"],
+    instruction: "理解用户当前目标和正在处理的对象，先核对真实状态。简单问题直接回答，明确操作使用实际工作台能力办理；需要研究或核查时才委派。仅缺少会改变行动的条件才追问。区分已执行、等待确认和执行失败，不用建议或文字代替真实操作。解释不修改成果，调整保留原对象和历史。",
+  } : { ...member, toolKeys: ["builtin.material@1", "builtin.calculate@1"] }),
+};
+export const workbenchWorkflow: Workflow = {
+  ...adaptiveWorkflow,
+  id: "workbench-flow",
+  name: "按需办理与协作",
+  stages: [{ role: "editor", objective: "根据目标选择直接回答、办理或按需委派；办理以真实结果回应，分析依赖实际证据，不机械全员发言。", result: true }],
 };

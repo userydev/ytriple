@@ -15,6 +15,7 @@ import type {
   RadarWatch,
   RadarAutoCheck,
 } from "../src/core/radar-watch-contract";
+import type { Material, Source } from "../src/core/types";
 
 class FixtureModel implements Model {
   scope = "fixture";
@@ -131,6 +132,233 @@ function setup() {
     checks: () => store.all<RadarAutoCheck>("radar-auto-check"),
   };
 }
+
+function publicWatchSetup(
+  syncPublicSources: () => Promise<unknown>,
+  initialMaterial = false,
+) {
+  let timestamp = Date.parse("2026-09-18T12:00:00Z");
+  const clock = () => timestamp;
+  const store = new Store(":memory:");
+  const model = new FixtureModel();
+  const source: Source = {
+    id: "source-public",
+    name: "Public source",
+    status: "active",
+    last_error: null,
+  };
+  store.put("meta", "sources", [source]);
+  const radar = new Radar(
+    store,
+    () => model,
+    () => {},
+    clock,
+  );
+  const topic = radar.saveTopic({
+    revision: 0,
+    title: "Public evidence",
+    focus: "Wait for synced evidence",
+    sourceIds: [source.id],
+    keywords: ["agent"],
+    sources: [],
+  });
+  const addMaterial = (version = 1, coverage = "summary") => {
+    const material: Material = {
+      id: "ycore:fixture:agent-report",
+      version,
+      title: "Agent report",
+      body: `Readable agent evidence revision ${version}`,
+      coverage,
+      url: "https://publisher.example/agent-report",
+      upstream: {
+        scope: "fixture",
+        id: "agent-report",
+        revision: version,
+        publisher: "Publisher",
+        publishedAt: null,
+        discoveredAt: new Date(timestamp).toISOString(),
+        updatedAt: new Date(timestamp).toISOString(),
+        topics: [],
+        provenance: [
+          {
+            sourceId: source.id,
+            adapter: "rss",
+            upstreamId: "agent-report",
+            discoveredAt: new Date(timestamp).toISOString(),
+            rawRef: `raw-${version}`,
+          },
+        ],
+        contentHash: `hash-${version}`,
+        fullArticle: false,
+      },
+      createdAt: new Date(timestamp).toISOString(),
+    };
+    store.put("material", `${material.id}@${version}`, material);
+    return material;
+  };
+  if (initialMaterial) addMaterial();
+  const watches = new RadarWatches(
+    store,
+    radar,
+    () => model.scope,
+    () => {},
+    clock,
+    syncPublicSources,
+  );
+  const config = () =>
+    watches.save({
+      topicId: topic.id,
+      topicRevision: topic.revision,
+      expectedRevision:
+        store.get<RadarWatch>("radar-watch", topic.id)?.revision ?? 0,
+      enabled: true,
+      intervalMinutes: 30,
+      maxCallsPerDay: 5,
+    });
+  return {
+    store,
+    model,
+    radar,
+    topic,
+    watches,
+    config,
+    addMaterial,
+    advance: (ms = 1800001) => {
+      timestamp += ms;
+    },
+    now: () => timestamp,
+    watch: () => store.require<RadarWatch>("radar-watch", topic.id),
+    checks: () => store.all<RadarAutoCheck>("radar-auto-check"),
+  };
+}
+
+test("scheduled public sync can introduce readable evidence and settled waits for the resulting model run", async () => {
+  let release!: () => void;
+  let f!: ReturnType<typeof publicWatchSetup>;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  f = publicWatchSetup(async () => {
+    await gate;
+    f.addMaterial();
+  });
+  try {
+    f.config();
+    f.watches.scheduledTick();
+    assert.equal(f.model.calls, 0);
+    release();
+    await f.watches.settled();
+    assert.equal(f.model.calls, 1);
+    assert.equal(f.checks()[0].status, "updated");
+    assert.equal(f.store.snapshot().radar.editions.length, 1);
+  } finally {
+    f.store.close();
+  }
+});
+
+test("a public watch remains enabled without evidence and uses later synced evidence without editing the topic", async () => {
+  let syncs = 0;
+  let f!: ReturnType<typeof publicWatchSetup>;
+  f = publicWatchSetup(async () => {
+    syncs++;
+    if (syncs === 2) f.addMaterial();
+  });
+  try {
+    f.config();
+    f.watches.scheduledTick();
+    await f.watches.settled();
+    assert.equal(f.checks()[0].status, "unchanged");
+    assert.match(f.checks()[0].error!, /继续等待来源更新/);
+    assert.equal(f.watch().enabled, true);
+    assert.equal(f.model.calls, 0);
+    f.advance();
+    f.watches.scheduledTick();
+    await f.watches.settled();
+    assert.equal(f.model.calls, 1);
+    assert.equal(f.checks()[1].status, "updated");
+    assert.equal(
+      f.store.require<RadarTopic>("radar-topic", f.topic.id).revision,
+      f.topic.revision,
+    );
+  } finally {
+    f.store.close();
+  }
+});
+
+test("public sync failure preserves the edition, postpones five minutes, and makes no paid call", async () => {
+  const f = publicWatchSetup(async () => {
+    throw Error("fixture sync failed");
+  }, true);
+  try {
+    const initial = f.radar.refresh(f.topic.id);
+    await f.radar.settled(initial.id);
+    const edition = f.store.snapshot().radar.editions[0];
+    const calls = f.model.calls;
+    f.config();
+    f.watches.scheduledTick();
+    await f.watches.settled();
+    assert.equal(f.model.calls, calls);
+    assert.deepEqual(f.store.snapshot().radar.editions, [edition]);
+    assert.equal(f.checks().length, 0);
+    assert.equal(f.watch().enabled, true);
+    assert.equal(Date.parse(f.watch().nextAt!), f.now() + 300000);
+    assert.match(f.watch().error!, /同步失败.*未调用模型/);
+  } finally {
+    f.store.close();
+  }
+});
+
+test("shutdown during public sync prevents a late model launch", async () => {
+  let release!: () => void;
+  let f!: ReturnType<typeof publicWatchSetup>;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  f = publicWatchSetup(async () => {
+    await gate;
+    f.addMaterial();
+  });
+  try {
+    f.config();
+    f.watches.scheduledTick();
+    f.watches.shutdown();
+    release();
+    await f.watches.settled();
+    assert.equal(f.model.calls, 0);
+    assert.equal(f.checks().length, 0);
+    assert.equal(f.watch().enabled, true);
+  } finally {
+    f.store.close();
+  }
+});
+
+test("repeated scheduled ticks merge one overdue public watch into one run and schedule from now", async () => {
+  let release!: () => void;
+  let syncs = 0;
+  let f!: ReturnType<typeof publicWatchSetup>;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  f = publicWatchSetup(async () => {
+    syncs++;
+    await gate;
+    f.addMaterial();
+  });
+  try {
+    f.config();
+    f.advance(4 * 3600000);
+    f.watches.scheduledTick();
+    f.watches.scheduledTick();
+    release();
+    await f.watches.settled();
+    assert.equal(syncs, 1);
+    assert.equal(f.model.calls, 1);
+    assert.equal(f.checks().length, 1);
+    assert.equal(Date.parse(f.watch().nextAt!), f.now() + 30 * 60000);
+  } finally {
+    f.store.close();
+  }
+});
 test("automatic radar freezes input, coalesces checks, skips unchanged and enforces rolling budget across reauthorization", async () => {
   const f = setup();
   try {

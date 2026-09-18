@@ -21,7 +21,7 @@ export const teamSchema = z
             skillKeys: z.array(z.string().min(1).max(300)).max(8).optional(),
             toolKeys: z
               .array(toolKey)
-              .max(2)
+              .max(3)
               .refine(
                 (keys) => new Set(keys).size === keys.length,
                 "工具不能重复",

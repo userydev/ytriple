@@ -26,6 +26,7 @@ import { teamSchema, workflowSchema } from "./configuration";
 import { layoutSchema, viewSchema } from "./view";
 import { insightSchema, topicInputSchema } from "./radar-contract";
 import { skillDefinition } from "./skill-contract";
+import { workspaceActionProposalSchema } from "./workspace-action-contract";
 
 const limit = 64 * 1024 * 1024;
 const hash = (value: string) =>
@@ -68,6 +69,7 @@ const statuses = z.enum([
   "unknown",
 ]);
 const fields: Record<string, z.ZodType> = {
+  "workspace-action": workspaceActionProposalSchema,
   "tool-call": z
     .object({
       id: z.string(),
@@ -128,7 +130,7 @@ const fields: Record<string, z.ZodType> = {
   run: z.object({
     tools: z
       .object({
-        keys: z.array(toolKey).max(2),
+        keys: z.array(toolKey).max(3),
         maxCalls: z.number().int().min(1).max(8),
       })
       .strict()
@@ -151,6 +153,13 @@ const fields: Record<string, z.ZodType> = {
     objective: z.string(),
     body: z.string(),
     status: statuses,
+    toolFormatError: z
+      .object({
+        message: z.string().min(1).max(1000),
+        createdAt: z.string().datetime(),
+      })
+      .strict()
+      .optional(),
   }),
   version: z.object({
     id: z.string(),
@@ -237,7 +246,7 @@ const fields: Record<string, z.ZodType> = {
   }),
 };
 const kinds = new Set(
-  "tool-call direct-call asset candidate contribution decision decision-answer delivery draft feed feed-check feed-preview initialization initialization-form local-source local-system-plan material message meta model-call model-input outcome outcome-input project project-brief project-inspection project-reading-work project-standard radar-auto-check radar-edition radar-job radar-reading radar-topic radar-watch run schedule schedule-occurrence schedule-version skill skill-adoption skill-state suggestion-document suggestion-preview suggestion-receipt team version view work work-event workflow".split(
+  "tool-call workspace-action direct-call asset candidate contribution decision decision-answer delivery draft feed feed-check feed-preview initialization initialization-form local-source local-system-plan material message meta model-call model-input outcome outcome-input project project-brief project-inspection project-reading-work project-standard radar-auto-check radar-edition radar-job radar-reading radar-topic radar-watch run schedule schedule-occurrence schedule-version skill skill-adoption skill-state suggestion-document suggestion-preview suggestion-receipt team version view work work-event workflow".split(
     " ",
   ),
 );
@@ -277,6 +286,8 @@ export function validateWorkspace(data: WorkspaceData) {
               ? workflowSchema
               : row.id === "local-roots"
                 ? rootsSchema
+                : row.id === "workspace-policy"
+                  ? z.object({ direct: z.boolean() }).strict()
                 : null;
       if (schema && !schema.safeParse(value).success)
         throw Error(`备份设置格式不符：${row.id}`);
@@ -305,6 +316,7 @@ export function validateWorkspace(data: WorkspaceData) {
         "schedule",
         "radar-watch",
         "tool-call",
+        "workspace-action",
       ].includes(row.kind) &&
       value.id !== row.id
     )
@@ -339,6 +351,28 @@ export function validateWorkspace(data: WorkspaceData) {
           throw Error("工具记录与成员归属不一致");
         if (owner.tool && JSON.stringify(owner.tool) !== JSON.stringify(value))
           throw Error("过程中的工具返回与执行记录不一致");
+      }
+      if (kind === "workspace-action") {
+        required("run", value.runId);
+        required("work", value.workId);
+        required("contribution", value.contributionId);
+        const owner = indexed.get("contribution")!.get(value.contributionId);
+        if (
+          owner.runId !== value.runId ||
+          owner.workId !== value.workId ||
+          owner.memberId !== value.memberId ||
+          id !== `workspace-action:${value.contributionId}`
+        )
+          throw Error("工作台操作与成员归属不一致");
+        if (value.result) {
+          const kind =
+            value.result.kind === "radar-topic"
+              ? "radar-topic"
+              : value.result.kind === "schedule"
+                ? "schedule"
+                : "radar-watch";
+          required(kind, value.result.id);
+        }
       }
       if (kind === "contribution" && value.tool)
         required("tool-call", value.tool.id);
@@ -656,6 +690,14 @@ export class WorkspaceBackups {
         }
         for (const work of store!.all<any>("work"))
           store!.put("work", work.id, { ...work, queuePaused: true });
+        store!.put("meta", "workspace-policy", { direct: false });
+        for (const action of store!.all<any>("workspace-action"))
+          if (action.status === "pending")
+            store!.put("workspace-action", action.id, {
+              ...action,
+              status: "dismissed",
+              dismissedAt: entry.createdAt,
+            });
         for (const row of backup.payload.entities) {
           if (row.kind === "local-source")
             store!.put(row.kind, row.id, {

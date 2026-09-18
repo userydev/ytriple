@@ -67,6 +67,7 @@ import { WorkArea } from "./WorkArea";
 import { useWorkViews } from "./useWorkViews";
 import { Dialog } from "./Dialog";
 import { RadarHighlights } from "./RadarHighlights";
+import { WorkspaceActions } from "./WorkspaceActions";
 const MethodActions = lazy(() =>
   import("./MethodActions").then((m) => ({ default: m.MethodActions })),
 );
@@ -374,6 +375,46 @@ function App() {
     changeContext("new");
     setRadarEditionId(id);
   }
+  function openSchedule(id: string) {
+    setImmersive(false);
+    setPage("schedules");
+    setProjectId(null);
+    setSelectedDelivery(null);
+    changeContext("new");
+    setScheduleId(id);
+  }
+  async function prepareWorkspaceChat(
+    surface: "radar" | "schedules",
+    text: string,
+    workspaceContext?: {
+      kind: "radar-topic" | "schedule";
+      id: string;
+      revision: number;
+    },
+  ) {
+    const existing = workspaceContext
+      ? data!.works.find(
+          (candidate) =>
+            candidate.workspaceContext?.kind === workspaceContext.kind &&
+            candidate.workspaceContext.id === workspaceContext.id,
+        )
+      : undefined;
+    const next = existing?.id ?? `new:workspace:${crypto.randomUUID()}`;
+    const draft = await command<Draft>({
+      type: "prepare-workspace-chat",
+      context: next,
+      text,
+      workspaceContext,
+    });
+    setData(await command<Snapshot>({ type: "snapshot" }));
+    setPage(surface);
+    setProjectId(existing?.projectId ?? draft.projectId);
+    setSelectedDelivery(existing?.deliveryId ?? null);
+    changeContext(existing?.id ?? draft.id);
+    setComposerEpoch((n) => n + 1);
+    setImmersive(true);
+    setComposerFocus((n) => n + 1);
+  }
   const composer = (
     <Composer
       key={`${context}:${composerEpoch}`}
@@ -402,6 +443,12 @@ function App() {
         }
       }}
       onManage={() => setDialog("work")}
+      onTeam={() => setDialog("team")}
+      onSettings={() => {
+        setImmersive(false);
+        setPage("settings");
+        setSettingsTab("model");
+      }}
       onClose={
         !immersive && page === "radar" && context.startsWith("new:radar:")
           ? () => {
@@ -452,32 +499,56 @@ function App() {
             pending = data!.decisions.find(
               (d) => d.workId === w.id && d.status === "pending",
             ),
+            workspacePending = data!.workspaceActions.find(
+              (action) => action.workId === w.id && action.status === "pending",
+            ),
+            workspaceApplied = data!.workspaceActions
+              .filter(
+                (action) =>
+                  action.workId === w.id && action.status === "applied",
+              )
+              .at(-1),
             r =
               (pending
                 ? data!.runs.find((r) => r.id === pending.runId)
                 : undefined) ??
               data!.runs.filter((r) => r.workId === w.id).at(-1);
+          const displayStatus = w.completedAt
+            ? "succeeded"
+            : workspacePending || pending
+              ? "waiting"
+              : v || workspaceApplied
+                ? "succeeded"
+                : (r?.status ?? "");
           return (
             <article
-              className={`work-card ${pending ? "needs-decision" : ""}`}
+              className={`work-card ${pending || workspacePending ? "needs-decision" : ""}`}
               key={w.id}
             >
               <div className="work-card-meta">
                 <span>{p?.name ?? "独立工作"}</span>
-                <span className={`status-label ${r?.status ?? ""}`}>
+                <span className={`status-label ${displayStatus}`}>
                   {w.completedAt
                     ? "已完成"
-                    : r
-                      ? {
-                          queued: "待发",
-                          running: "团队处理中",
-                          succeeded: "已有成果",
-                          failed: "运行失败",
-                          unknown: "状态待核",
-                          cancelled: "已停止",
-                          waiting: "待你决定",
-                        }[r.status]
-                      : "待开始"}
+                    : workspacePending
+                      ? "待确认"
+                      : pending
+                        ? "待你决定"
+                        : v
+                          ? "已有成果"
+                          : workspaceApplied
+                            ? "已办理"
+                            : r
+                              ? {
+                                  queued: "待发",
+                                  running: "团队处理中",
+                                  succeeded: "已回复",
+                                  failed: "运行失败",
+                                  unknown: "状态待核",
+                                  cancelled: "已停止",
+                                  waiting: "待你决定",
+                                }[r.status]
+                              : "待开始"}
                 </span>
               </div>
               <button className="work-title" onClick={() => openWork(w.id)}>
@@ -486,10 +557,14 @@ function App() {
               </button>
               {pending ? (
                 <p>{pending.question}</p>
+              ) : workspacePending ? (
+                <p>{workspacePending.summary}</p>
               ) : v ? (
                 <div className="work-excerpt">
                   <Markdown>{v.body}</Markdown>
                 </div>
+              ) : workspaceApplied ? (
+                <p>{workspaceApplied.summary}</p>
               ) : null}
               {r ? (
                 <TeamTrace
@@ -923,6 +998,24 @@ function App() {
       )}
     </section>
   );
+  const workspaceActionReceipts = work ? (
+    <WorkspaceActions
+      data={data}
+      workId={work.id}
+      onError={fail}
+      onRadar={(topicId) => {
+        setImmersive(false);
+        openRadar(
+          data.radar.editions
+            .filter((edition) => edition.topicId === topicId)
+            .at(-1)?.id ?? null,
+        );
+      }}
+      onSchedule={(id) => {
+        openSchedule(id);
+      }}
+    />
+  ) : null;
   const decision = (
     <section className="decision-pane">
       <div className="conversation">
@@ -948,6 +1041,7 @@ function App() {
         {latestRun?.error ? (
           <p className="error-inline">{latestRun.error}</p>
         ) : null}
+        {immersive ? workspaceActionReceipts : null}
       </div>
       {composer}
     </section>
@@ -1088,10 +1182,7 @@ function App() {
                           </p>
                           <button
                             className="text-action"
-                            onClick={() => {
-                              setScheduleId(s.id);
-                              setPage("schedules");
-                            }}
+                            onClick={() => openSchedule(s.id)}
                           >
                             查看任务
                             <ArrowUpRight size={16} />
@@ -1132,13 +1223,23 @@ function App() {
                               data.decisions.some(
                                 (d) =>
                                   d.workId === b.id && d.status === "pending",
-                              ),
+                              ) ||
+                                data.workspaceActions.some(
+                                  (action) =>
+                                    action.workId === b.id &&
+                                    action.status === "pending",
+                                ),
                             ) -
                             Number(
                               data.decisions.some(
                                 (d) =>
                                   d.workId === a.id && d.status === "pending",
-                              ),
+                              ) ||
+                                data.workspaceActions.some(
+                                  (action) =>
+                                    action.workId === a.id &&
+                                    action.status === "pending",
+                                ),
                             ),
                         )
                         .slice(0, 5),
@@ -1181,6 +1282,19 @@ function App() {
                   onSync={() => void sync()}
                   syncing={syncing}
                   onError={fail}
+                  onPrepare={(text, topic) =>
+                    void prepareWorkspaceChat(
+                      "radar",
+                      text,
+                      topic
+                        ? {
+                            kind: "radar-topic",
+                            id: topic.id,
+                            revision: topic.revision,
+                          }
+                        : undefined,
+                    ).catch(fail)
+                  }
                 />
               </Suspense>
             ) : null}
@@ -1561,6 +1675,19 @@ function App() {
                     openWork(id, versionId);
                     setImmersive(true);
                   }}
+                  onPrepare={(text, schedule) =>
+                    void prepareWorkspaceChat(
+                      "schedules",
+                      text,
+                      schedule
+                        ? {
+                            kind: "schedule",
+                            id: schedule.id,
+                            revision: schedule.revision,
+                          }
+                        : undefined,
+                    ).catch(fail)
+                  }
                 />
               </Suspense>
             ) : null}
@@ -1761,6 +1888,7 @@ function App() {
                 {latestRun?.error ? (
                   <p className="error-inline">{latestRun.error}</p>
                 ) : null}
+                {!immersive ? workspaceActionReceipts : null}
               </section>
             ) : null}
           </main>
