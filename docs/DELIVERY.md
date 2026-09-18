@@ -1,5 +1,15 @@
 # ytriple 开发与验证记录
 
+## 2026-09-17 · F1 真实个人账号与日常连接完成
+
+- 在现有 ycore-dev Supabase Auth 创建首个获准测试用户 `userydev@gmail.com`，通过 Admin API 确认邮箱，授予 ytriple 的 information:read / ai:invoke / product:access。每日测试额度 100 次、200000 预算单位，无付费套餐。密码仅交给托管 Auth，未进入源码、日志或文档；桌面保存系统加密会话。
+- 增加 ycore `npm run users --` 运维入口：创建/分页查询/启停用户、查看/授予/撤销产品权益。Admin key 仅留操作者受保护配置，不进入 API/worker。CLI 对真实用户 list、entitlements、revoke、entitle 均通过。
+- 桌面修复身份绑定：托管 session.user.id 必须匹配 ycore identity.user_id，首次/刷新均校验，错误映射不触发私有读取或付费调用。
+- 真实安装 UI 经 `https://core.ydev.work` 登录，先验证无权益提示，再获权连接；公共来源同步成功；设置内最小模型测试成功，运行 `2e2c7f9c-5b78-4dbb-9343-4e003df82def`（stream，7 输入/91 输出 tokens，费用未知）。退出清空连接；重开恢复个人登录和连接，原工作/成果保持。修正版构建 `d0d6201233a73536` 已替换 `/Applications/ytriple.app`，重新经表单登录及撤销/恢复权益通过。
+- 桌面 typecheck + 171 测试、服务 typecheck + 32 测试通过。另运行真实本地 Supabase Auth v2.195.0 + Postgres 集成，验证双用户同键隔离、刷新主体/额度、停用/过期、退出撤销未过期 token、运行角色权限。该负向矩阵使用本地真实 Auth 与模型替身；不冒充第二个线上个人账号。
+- 此包后端运行协议未改，无迁移或 VPS 重发；现役 API/worker 仍 `dev-20260917-0f85bcb`，现场健康。桌面为本机 ad-hoc 包，未公证/公开发布。旧安装包和升级前 SQLite 备份位于 ytriple `.local/f1/`，服务与主分支保持原状。F2 恢复矩阵、F3–F5 不在本包完成声明内。
+
+
 ## 2026-09-17 · UI 阶段基线确认与基础服务优先规划
 
 用户接受当前版本并要求提交。产品源码 `0a6ab53`、安装构建 `fb9aeb861f3b12ce` 作为阶段基线；连同此前三个 UI 提交与本轮计划更新交付 dev，不合并 main。后续按 F1 身份→F2 AI 恢复→F3 信息→F4 后台接续→F5 服务交付推进，ytriple 冻结新增业务功能，仅配合 ycore 接入。

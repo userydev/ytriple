@@ -123,6 +123,23 @@ test("switching accounts blocks both private reads and paid writes before sendin
     f.calls.every((c) => c.path === "/v1/identity" && c.method === "GET"),
   );
 });
+test("managed login binds the provider user to the service identity", async () => {
+  const f = fixture();
+  await assert.rejects(
+    YCore.forUser(
+      "https://core.example",
+      "ytriple",
+      async () => "user-a-token",
+      f.fetcher,
+      userB,
+    ),
+    (e: unknown) => e instanceof ServiceError && e.code === "ACCOUNT_CHANGED",
+  );
+  assert.deepEqual(
+    f.calls.map((call) => call.path),
+    ["/v1/identity"],
+  );
+});
 test("identity failure does not fall back to legacy credentials or replay billable work", async () => {
   const f = fixture();
   let token = "user-a-token";

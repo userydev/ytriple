@@ -78,6 +78,7 @@ export class YCore implements Model {
   private readonly clientScope: string;
   private user?: {
     id: string;
+    providerUserId?: string;
     product: string;
     scope: string;
     verifiedToken: string;
@@ -94,13 +95,20 @@ export class YCore implements Model {
     product: string,
     accessToken: (signal?: AbortSignal) => Promise<string>,
     fetcher: typeof fetch = fetch,
+    providerUserId?: string,
   ) {
     if (!/^[a-z][a-z0-9_-]{0,63}$/.test(product)) throw Error("产品标识无效");
     const token = await accessToken();
     const service = new YCore(baseUrl, token, fetcher);
-    const identity = await service.verifyUser(token, product);
+    const identity = await service.verifyUser(
+      token,
+      product,
+      undefined,
+      providerUserId,
+    );
     service.user = {
       id: identity.id,
+      providerUserId,
       product,
       verifiedToken: token,
       accessToken,
@@ -143,6 +151,7 @@ export class YCore implements Model {
           token,
           this.user.product,
           init.signal ?? undefined,
+          this.user.providerUserId,
         );
         if (current.id !== this.user.id)
           throw new ServiceError(
@@ -158,6 +167,7 @@ export class YCore implements Model {
     token: string,
     product: string,
     signal?: AbortSignal,
+    providerUserId?: string,
   ) {
     const identity = userIdentity.parse(
       await (
@@ -166,6 +176,8 @@ export class YCore implements Model {
     );
     if (identity.product_id !== product)
       throw new ServiceError("ACCOUNT_CHANGED", "服务返回的产品身份不匹配");
+    if (providerUserId && identity.user_id !== providerUserId)
+      throw new ServiceError("ACCOUNT_CHANGED", "服务返回的账号身份不匹配");
     return identity;
   }
   private async send(

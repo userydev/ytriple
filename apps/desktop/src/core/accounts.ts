@@ -252,6 +252,7 @@ export class Accounts {
             ? this.token(record, signal)
             : Promise.resolve(record.session.access_token),
         this.fetcher,
+        record.session.user.id,
       );
     } catch (e) {
       accessError = accessMessage(e);
@@ -288,6 +289,7 @@ export class Accounts {
         "ytriple",
         (signal) => this.token(record, signal),
         this.fetcher,
+        record.session.user.id,
       );
       this.state.error = null;
       return client;
