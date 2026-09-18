@@ -27,6 +27,7 @@ import { IconButton } from "./Composer";
 import { latestEditions } from "./RadarHighlights";
 import { FeedsPanel } from "./FeedsPanel";
 import { RadarAutomationEditor } from "./RadarAutomation";
+import { visibleRadarMaterials } from "../core/material-list";
 function TopicEditor({
   data,
   topic,
@@ -48,14 +49,9 @@ function TopicEditor({
     [query, setQuery] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
-  const materials = Array.from(
-    new Map(
-      data.materials
-        .filter((m) => m.coverage !== "radar")
-        .sort((a, b) => a.version - b.version)
-        .map((m) => [m.id, m]),
-    ).values(),
-  ).reverse();
+  const materials = visibleRadarMaterials(
+    data.materials.filter((m) => m.coverage !== "radar"),
+  );
   return (
     <Dialog title={topic ? "议题与筛选规则" : "关注一个议题"} onClose={onClose}>
       <form
@@ -422,14 +418,9 @@ export function RadarPanel({
         .toLowerCase()
         .includes(filter.toLowerCase()),
   );
-  const materials = Array.from(
-    new Map(
-      data.materials
-        .filter((m) => m.upstream || m.feedSource)
-        .sort((a, b) => a.version - b.version)
-        .map((m) => [m.id, m]),
-    ).values(),
-  ).reverse();
+  const materials = visibleRadarMaterials(
+    data.materials.filter((m) => m.upstream || m.feedSource),
+  );
   return (
     <section className="wide-content radar-content" ref={root}>
       {selected ? (

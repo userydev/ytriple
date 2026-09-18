@@ -295,7 +295,7 @@ test("sync reads every snapshot page and persists revisions plus incremental cur
     else if (p.pathname.endsWith("documents")) {
       pages++;
       body = p.searchParams.has("cursor")
-        ? { data: [doc("b")], next_cursor: null, sync_cursor: "start" }
+        ? { data: [doc("b")], next_cursor: null, sync_cursor: "same-position-new-signature" }
         : { data: [doc("a")], next_cursor: "page-2", sync_cursor: "start" };
     } else
       body = {

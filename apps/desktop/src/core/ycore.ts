@@ -499,7 +499,6 @@ export class YCore implements Model {
           );
         store.transaction(() => p.data.forEach(save));
         sync ??= p.sync_cursor;
-        if (sync !== p.sync_cursor) throw Error("材料快照在分页间发生变化");
         next = p.next_cursor;
       } while (next);
       cursor = sync!;
