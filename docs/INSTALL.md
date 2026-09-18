@@ -42,3 +42,10 @@
 从旧 ad-hoc 安装包首次替换为固定自签名包时，macOS 钥匙串可能要求一次迁移授权；确认是本机新构建的 `work.ydev.ytriple` 后允许即可。后续构建保持同一证书和 designated requirement，正常情况下不应每次重新询问。不要放宽钥匙串 ACL、信任任意应用、改存明文凭据或把证书添加为系统全局 trust root；应用仍通过 `safeStorage` 使用登录钥匙串。
 
 这种签名只用于本机未公证验证，不启用需要有效 Team ID 的发布运行时配置，也不能据此宣称互联网下载或另一台 Mac 的 Gatekeeper 验收完成。公开发行仍需要有效 Developer ID、相应 hardened runtime 配置、Apple 公证及另一台 Mac 的实际验证；不通过关闭 Gatekeeper 或删除隔离标记绕过验收。[Electron 签名说明](https://www.electronjs.org/docs/latest/tutorial/code-signing)
+
+
+## 开发更新与钥匙串（2026-09-18 更正）
+
+用户已明确要求不要在开发验证中反复输入钥匙串密码。UI 迭代优先做类型/回归检查并复用已授权版本，集中打包安装；不要连续重装启动来验证细小样式修改。
+
+本机自签名可保持证书 DR 一致，但 macOS 旧登录钥匙串条目的 partition_id 仍可能按每个构建 cdhash 限制。`TeamIdentifier=not set` 的本地构建不能承诺更新后免授权；一次同版本重启成功不是升级验证。有效 Apple Developer 签名尚未配置。不得为消除提示保存用户 Mac 密码、允许所有应用访问条目或降低全局钥匙串保护。

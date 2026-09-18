@@ -71,26 +71,30 @@ function AddFeed({ onClose }: { onClose: () => void }) {
           }
         }}
       >
-        <label>
-          RSS / Atom 地址
-          <input
-            type="url"
-            autoFocus
-            required
-            value={url}
-            disabled={busy}
-            placeholder="https://…/feed"
-            onChange={(e) => {
-              setUrl(e.target.value);
-              setPreview(null);
-            }}
-          />
-        </label>
-        <p className="muted">
-          由当前信息服务读取公开订阅。不会加入公共资料库，也不会调用模型；登录、付费和带密钥的订阅暂不支持。
-        </p>
+        <fieldset className="form-section">
+          <legend>订阅地址</legend>
+          <label>
+            RSS / Atom 地址
+            <input
+              type="url"
+              autoFocus
+              required
+              value={url}
+              disabled={busy}
+              placeholder="https://…/feed"
+              onChange={(e) => {
+                setUrl(e.target.value);
+                setPreview(null);
+              }}
+            />
+          </label>
+          <p className="settings-note">
+            读取公开订阅的标题、摘要或节选，不调用模型。登录、付费和带密钥的订阅暂不支持。
+          </p>
+        </fieldset>
         {preview ? (
-          <>
+          <fieldset className="form-section">
+            <legend>确认来源</legend>
             <label>
               来源名称
               <input
@@ -106,9 +110,7 @@ function AddFeed({ onClose }: { onClose: () => void }) {
                 ? `，另有 ${preview.snapshot.omitted_items} 条未纳入`
                 : ""}
             </p>
-            <p className="muted">
-              读取的是订阅提供的标题、摘要或节选，未逐篇读取网站全文。历史材料保留，后续更新形成新版本。
-            </p>
+            <p className="settings-note">历史材料保留，后续更新形成新版本。</p>
             <details>
               <summary>预览本次材料</summary>
               {preview.snapshot.items.slice(0, 3).map((item) => (
@@ -139,7 +141,7 @@ function AddFeed({ onClose }: { onClose: () => void }) {
                 ))}
               </select>
             </label>
-          </>
+          </fieldset>
         ) : null}
         {error ? <p role="alert">{error}</p> : null}
         <button type="submit" className="primary" disabled={busy}>
@@ -346,30 +348,33 @@ export function FeedsPanel({ data }: { data: Snapshot }) {
               });
             }}
           >
-            <label>
-              来源名称
-              <input
-                name="name"
-                required
-                maxLength={120}
-                defaultValue={editing.name}
-              />
-            </label>
-            <label>
-              检查间隔（分钟）
-              <input
-                name="interval"
-                type="number"
-                min={30}
-                max={10080}
-                required
-                defaultValue={editing.intervalMinutes}
-              />
-            </label>
-            <p className="muted">{editing.url}</p>
-            <p>
-              自动检查只在应用运行时进行；重新打开会检查最新一份订阅，不逐次补跑错过的时点。
-            </p>
+            <fieldset className="form-section">
+              <legend>来源设置</legend>
+              <label>
+                来源名称
+                <input
+                  name="name"
+                  required
+                  maxLength={120}
+                  defaultValue={editing.name}
+                />
+              </label>
+              <label>
+                检查间隔（分钟）
+                <input
+                  name="interval"
+                  type="number"
+                  min={30}
+                  max={10080}
+                  required
+                  defaultValue={editing.intervalMinutes}
+                />
+              </label>
+              <p className="settings-note">{editing.url}</p>
+              <p className="settings-note">
+                应用运行时自动检查；重新打开只检查最新一份订阅。
+              </p>
+            </fieldset>
             {error ? <p role="alert">{error}</p> : null}
             <button className="primary" disabled={!!busy}>
               保存

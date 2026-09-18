@@ -1,5 +1,5 @@
 import { useState, Suspense, lazy } from "react";
-import { FolderOpen, FolderCog, RefreshCw, Link } from "lucide-react";
+import { FolderOpen, RefreshCw, Link } from "lucide-react";
 import type { Snapshot, Project } from "../core/types";
 import type { Command } from "../core/commands";
 import { command } from "./api";
@@ -26,65 +26,81 @@ function useAction(onError: Props["onError"]) {
 export function LocalFolderSettings({ data, onError }: Props) {
   const { busy, act } = useAction(onError);
   return (
-    <section className="local-folders">
-      <div className="section-heading">
-        <h2>本地目录</h2>
-        <IconButton
-          label="刷新本地目录"
-          disabled={busy}
-          onClick={() => void act({ type: "refresh-local-directories" })}
-        >
-          <RefreshCw size={17} />
-        </IconButton>
-      </div>
-      <p>Code 存放项目，AI 存放工作流、知识库与可复用成果。</p>
-      {(["code", "ai"] as const).map((kind) => {
-        const path =
-          kind === "ai" ? data.localRoots.aiPath : data.localRoots.codePath;
-        const status = data.localInventory?.roots.find((r) => r.kind === kind);
-        return (
-          <div className="local-folder-row" key={kind}>
-            <div>
-              <strong>{kind === "ai" ? "AI · 资产" : "Code · 项目"}</strong>
-              <p className="local-path">{path ?? "尚未配置"}</p>
-              {status && !status.available ? (
-                <small role="status">
-                  {path ? "目录不可用，请检查位置或重新选择" : "选择已有文件夹"}
-                </small>
-              ) : null}
-            </div>
-            <IconButton
-              label={`选择 ${kind === "ai" ? "AI" : "Code"} 目录`}
-              disabled={busy}
-              onClick={() => void act({ type: "choose-local-root", kind })}
-            >
-              <FolderCog size={18} />
-            </IconButton>
-            <IconButton
-              label={`在 Finder 打开 ${kind === "ai" ? "AI" : "Code"}`}
-              disabled={busy || !status?.available}
-              onClick={() => void act({ type: "reveal-local-root", kind })}
-            >
-              <FolderOpen size={18} />
-            </IconButton>
+    <div className="settings-page local-folders">
+      <section className="settings-section">
+        <div className="settings-section-header">
+          <div>
+            <h2>本地目录</h2>
+            <p>指定项目与 AI 资产所在的位置。</p>
           </div>
-        );
-      })}
-      {data.localInventory?.notes.length ? (
-        <details>
-          <summary>目录检查说明</summary>
-          {data.localInventory.notes.map((note, i) => (
-            <p key={i}>{note}</p>
-          ))}
-        </details>
-      ) : null}
-      <p className="muted">
-        沿用已有文件夹。关联目录不会移动文件或自动发送内容给 AI。
-      </p>
+          <button
+            className="quiet"
+            disabled={busy}
+            onClick={() => void act({ type: "refresh-local-directories" })}
+          >
+            <RefreshCw size={17} />
+            刷新状态
+          </button>
+        </div>
+        {(["code", "ai"] as const).map((kind) => {
+          const path =
+            kind === "ai" ? data.localRoots.aiPath : data.localRoots.codePath;
+          const status = data.localInventory?.roots.find(
+            (r) => r.kind === kind,
+          );
+          return (
+            <div className="setting-row" key={kind}>
+              <div className="setting-copy">
+                <strong>{kind === "ai" ? "AI 目录" : "Code 目录"}</strong>
+                <small>
+                  {kind === "ai"
+                    ? "工作流、知识库与可复用成果"
+                    : "本地项目与代码"}
+                </small>
+              </div>
+              <div className="setting-value">
+                <span
+                  className={`status-badge ${status?.available ? "success" : ""}`}
+                >
+                  {status?.available ? "可用" : path ? "不可用" : "未设置"}
+                </span>
+                <span className="local-path">{path ?? "尚未选择目录"}</span>
+              </div>
+              <div className="settings-actions">
+                <button
+                  className="quiet"
+                  disabled={busy}
+                  onClick={() => void act({ type: "choose-local-root", kind })}
+                >
+                  {path ? "更换目录" : "选择目录"}
+                </button>
+                <button
+                  className="quiet"
+                  disabled={busy || !status?.available}
+                  onClick={() => void act({ type: "reveal-local-root", kind })}
+                >
+                  <FolderOpen size={16} />在 Finder 打开
+                </button>
+              </div>
+            </div>
+          );
+        })}
+        {data.localInventory?.notes.length ? (
+          <details>
+            <summary>目录检查说明</summary>
+            {data.localInventory.notes.map((note, i) => (
+              <p key={i}>{note}</p>
+            ))}
+          </details>
+        ) : null}
+        <p className="settings-note">
+          沿用已有文件夹。关联目录不会移动文件或自动发送内容给 AI。
+        </p>
+      </section>
       <Suspense fallback={null}>
         <LocalSystemSetup data={data} />
       </Suspense>
-    </section>
+    </div>
   );
 }
 export function ProjectFolder({

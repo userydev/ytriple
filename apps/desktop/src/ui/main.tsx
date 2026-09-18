@@ -1,4 +1,3 @@
-import productMark from "../../../../assets/product-mark.svg?url";
 import { TeamTrace } from "./TeamTrace";
 import { UnknownRunActions } from "./UnknownRunActions";
 import { outcomeSnapshotChanged } from "../core/outcome-contract";
@@ -19,6 +18,12 @@ import { createRoot } from "react-dom/client";
 import Markdown from "./Markdown";
 import {
   House,
+  Menu,
+  UserRound,
+  Cpu,
+  HardDrive,
+  Users,
+  Info,
   Radar,
   Folder,
   Library,
@@ -127,6 +132,7 @@ const RadarPanel = lazy(() =>
 );
 import { coverageLabel, type RadarEdition } from "../core/radar-contract";
 import "./style.css";
+import "./settings-layout.css";
 type Page = "home" | "radar" | "projects" | "assets" | "schedules" | "settings";
 const names: Record<Page, string> = {
   home: "首页",
@@ -148,9 +154,9 @@ function App() {
   const [data, setData] = useState<Snapshot | null>(null),
     [error, setError] = useState(""),
     [page, setPage] = useState<Page>("home"),
-    [expanded, setExpanded] = useState(false),
+    [expanded, setExpanded] = useState(true),
     [projectTab, setProjectTab] = useState<"overview" | "files">("overview"),
-    [settingsTab, setSettingsTab] = useState("connection"),
+    [settingsTab, setSettingsTab] = useState("account"),
     [projectId, setProjectId] = useState<string | null>(null),
     [context, setContext] = useState("new"),
     [immersive, setImmersive] = useState(false),
@@ -232,6 +238,9 @@ function App() {
     document.addEventListener("selectionchange", capture);
     return () => document.removeEventListener("selectionchange", capture);
   }, []);
+  useEffect(() => {
+    document.title = names[page];
+  }, [page]);
   const viewState = useWorkViews(data, context, fail);
   const selectedVersion = viewState.view.versionId;
   const setSelectedVersion = (versionId: string | null) =>
@@ -949,15 +958,18 @@ function App() {
     >
       {!immersive ? (
         <aside className="navigation">
-          <IconButton
-            label={expanded ? "收起导航" : "展开导航"}
-            aria-expanded={expanded}
-            aria-controls="primary-navigation"
-            className="brand-toggle"
-            onClick={() => setExpanded((v) => !v)}
-          >
-            <img className="brand" src={productMark} alt="" />
-          </IconButton>
+          <div className="navigation-brand">
+            <IconButton
+              label={expanded ? "收起导航" : "展开导航"}
+              aria-expanded={expanded}
+              aria-controls="primary-navigation"
+              className="brand-toggle"
+              onClick={() => setExpanded((v) => !v)}
+            >
+              <Menu size={21} />
+            </IconButton>
+            <strong className="brand-wordmark">YTRIPLE</strong>
+          </div>
           <nav id="primary-navigation" aria-label="主导航">
             {(Object.keys(names) as Page[]).map((p) => {
               const Icon = icons[p];
@@ -976,28 +988,10 @@ function App() {
               );
             })}
           </nav>
-          <small className="local-label" title={data.workspace?.name}>
-            {data.workspace?.id && data.workspace.id !== "primary"
-              ? data.workspace.name
-              : "本地空间"}
-          </small>
         </aside>
       ) : null}
       <div className="workspace">
         <header className="topbar">
-          {data.workspace?.id && data.workspace.id !== "primary" ? (
-            <button
-              className="quiet active-space"
-              title={`当前工作空间：${data.workspace.name}`}
-              aria-label={`管理工作空间 ${data.workspace.name}`}
-              onClick={() => {
-                setImmersive(false);
-                setPage("settings");
-              }}
-            >
-              {data.workspace.name}
-            </button>
-          ) : null}
           {immersive ? (
             <>
               <button className="quiet" onClick={() => setImmersive(false)}>
@@ -1013,8 +1007,7 @@ function App() {
             </>
           ) : (
             <>
-              <strong>ytriple</strong>
-              <span className="breadcrumb">/ {names[page]}</span>
+              <span className="breadcrumb">{names[page]}</span>
               <button
                 className="quiet top-search"
                 onClick={() => setDialog("search")}
@@ -1022,13 +1015,6 @@ function App() {
                 <Search size={16} />
                 查找工作
               </button>
-              <span className="service-status">
-                {data.model?.mode === "direct"
-                  ? `自带 API · ${data.model.label}`
-                  : data.service.connected
-                    ? "服务已连接"
-                    : "本地工作空间"}
-              </span>
             </>
           )}
         </header>
@@ -1058,7 +1044,6 @@ function App() {
               <div className="home-content">
                 <header className="page-intro">
                   <div>
-                    <span className="eyebrow">YTRIPLE / WORKSPACE</span>
                     <h1>你的工作台</h1>
                     <p>接续手头的工作，也看看新的变化。</p>
                   </div>
@@ -1222,15 +1207,16 @@ function App() {
                         <h1>{project.name}</h1>
                         <p>{project.goal}</p>
                       </div>
-                      <IconButton
-                        label="目标、标准与资料"
+                      <button
+                        className="secondary-action"
                         onClick={() => {
                           setStandardCandidate(undefined);
                           setRequirementsProject(project.id);
                         }}
                       >
-                        <SlidersHorizontal size={20} />
-                      </IconButton>
+                        <SlidersHorizontal size={17} />
+                        项目设置
+                      </button>
                     </header>
                     <nav className="section-tabs" aria-label="项目内容">
                       <button
@@ -1462,8 +1448,8 @@ function App() {
                   <>
                     <div className="section-heading page-intro">
                       <div>
-                        <small>PROJECTS</small>
-                        <h1>持续推进的事</h1>
+                        <h1>项目</h1>
+                        <p>管理持续目标、资料与交付。</p>
                       </div>
                       <button
                         className="primary"
@@ -1582,74 +1568,129 @@ function App() {
               <section className="settings-content">
                 <header className="page-intro">
                   <div>
-                    <span className="eyebrow">PREFERENCES</span>
-                    <h1>工作空间设置</h1>
+                    <h1>设置</h1>
+                    <p>账号、工作方式与本机数据。</p>
                   </div>
                 </header>
                 <div className="settings-layout">
                   <nav className="settings-nav" aria-label="设置分类">
-                    {[
-                      ["connection", "服务与模型"],
-                      ["files", "本地目录"],
-                      ["space", "空间与数据"],
-                      ["team", "团队与协作"],
-                    ].map(([id, label]) => (
+                    {(
+                      [
+                        ["account", "账号", UserRound],
+                        ["model", "AI 模型", Cpu],
+                        ["files", "本地目录", Folder],
+                        ["space", "空间与备份", HardDrive],
+                        ["team", "团队与流程", Users],
+                        ["about", "关于应用", Info],
+                      ] as const
+                    ).map(([id, label, Icon]) => (
                       <button
                         key={id}
                         aria-pressed={settingsTab === id}
+                        aria-controls="settings-panel"
                         onClick={() => setSettingsTab(id)}
                       >
+                        <Icon size={17} />
                         {label}
                       </button>
                     ))}
                   </nav>
-                  <div className="settings-panel">
-                    <Suspense fallback={null}>
+                  <div className="settings-panel" id="settings-panel">
+                    <Suspense fallback={<p role="status">正在打开设置…</p>}>
+                      {settingsTab === "account" ? (
+                        <AccountSettings data={data} onError={fail} />
+                      ) : null}
+                      {settingsTab === "model" ? (
+                        <ModelSettings data={data} onError={fail} />
+                      ) : null}
                       {settingsTab === "files" ? (
                         <LocalFolderSettings data={data} onError={fail} />
                       ) : null}
                       {settingsTab === "space" ? (
                         <WorkspaceSettings onError={fail} />
                       ) : null}
-                      {settingsTab === "connection" ? (
-                        <>
-                          <AccountSettings data={data} onError={fail} />
-                          <ModelSettings data={data} onError={fail} />
-                        </>
-                      ) : null}
                     </Suspense>
                     {settingsTab === "team" ? (
-                      <>
-                        <h2>团队与协作</h2>
-                        <p>成员搭配与协作流程分别管理。</p>
-                        <button onClick={() => setDialog("team")}>
-                          管理默认搭配与流程
-                          <ArrowUpRight size={16} />
-                        </button>
-                      </>
+                      <section className="settings-section">
+                        <header className="settings-section-header">
+                          <div>
+                            <h2>团队与流程</h2>
+                            <p>设置新工作的默认协作方式。</p>
+                          </div>
+                        </header>
+                        <div className="setting-row">
+                          <div className="setting-copy">
+                            <strong>默认团队</strong>
+                            <span className="setting-value">
+                              {data.team.name}
+                            </span>
+                          </div>
+                          <button onClick={() => setDialog("team")}>
+                            管理团队与流程
+                            <ArrowUpRight size={16} />
+                          </button>
+                        </div>
+                        <div className="setting-row">
+                          <div className="setting-copy">
+                            <strong>默认流程</strong>
+                            <span className="setting-value">
+                              {data.workflow.name}
+                            </span>
+                          </div>
+                        </div>
+                      </section>
                     ) : null}
-                    {settingsTab === "space" ? (
-                      <>
-                        <h2>数据与设备</h2>
+                    {settingsTab === "about" ? (
+                      <section className="settings-section">
+                        <header className="settings-section-header">
+                          <div>
+                            <h2>关于应用</h2>
+                            <p>版本与本机存储信息。</p>
+                          </div>
+                        </header>
                         {data.desktop ? (
-                          <details>
-                            <summary>
-                              ytriple {data.desktop.version} ·{" "}
-                              {data.desktop.packaged ? "安装版" : "开发运行"}
-                            </summary>
-                            <p>
-                              {data.desktop.platform} · {data.desktop.arch} ·{" "}
-                              {data.desktop.buildId}
-                            </p>
-                            <p className="local-path">
-                              {data.desktop.dataDirectory}
-                            </p>
-                          </details>
-                        ) : null}
-                        <p>
-                          工作、草稿、材料和成果版本保存在这台设备。尚未开启跨设备同步。
-                        </p>
-                      </>
+                          <>
+                            <div className="setting-row">
+                              <div className="setting-copy">
+                                <strong>应用版本</strong>
+                                <span className="setting-value">
+                                  {data.desktop.version}
+                                </span>
+                              </div>
+                              <span className="status-badge">
+                                {data.desktop.packaged ? "已安装" : "开发模式"}
+                              </span>
+                            </div>
+                            <div className="setting-row">
+                              <div className="setting-copy">
+                                <strong>设备</strong>
+                                <span className="setting-value">
+                                  {data.desktop.platform} · {data.desktop.arch}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="setting-row">
+                              <div className="setting-copy">
+                                <strong>数据位置</strong>
+                                <span className="setting-value local-path">
+                                  {data.desktop.dataDirectory}
+                                </span>
+                                <small>
+                                  工作、材料和成果保存在这台设备，尚未开启跨设备同步。
+                                </small>
+                              </div>
+                            </div>
+                            <details className="settings-disclosure">
+                              <summary>构建信息</summary>
+                              <p className="local-path">
+                                {data.desktop.buildId}
+                              </p>
+                            </details>
+                          </>
+                        ) : (
+                          <p className="settings-note">应用信息暂不可用。</p>
+                        )}
+                      </section>
                     ) : null}
                   </div>
                 </div>

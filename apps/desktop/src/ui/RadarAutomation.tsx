@@ -72,51 +72,58 @@ export function RadarAutomationEditor({
           }
         }}
       >
-        <h3>{topic.title}</h3>
-        <p className="muted">
-          按议题规则 v{topic.revision} 使用 {topic.sources.length} 项所选材料
-          {topic.feedIds?.length
-            ? `与 ${topic.feedIds.length} 个订阅的新近文章`
-            : ""}
-          。结果回到雷达，已有阅读位置与收藏版本保留。
-        </p>
-        <label className="schedule-check">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => setEnabled(e.target.checked)}
-          />
-          应用运行时自动整理
-        </label>
-        <label>
-          检查间隔（分钟）
-          <input
-            type="number"
-            min={30}
-            max={10080}
-            required
-            value={minutes}
-            onChange={(e) => setMinutes(Number(e.target.value))}
-          />
-        </label>
-        <label>
-          每 24 小时最多自动调用模型
-          <input
-            type="number"
-            min={1}
-            max={24}
-            required
-            value={limit}
-            onChange={(e) => setLimit(Number(e.target.value))}
-          />
-        </label>
-        <p className="muted">
-          启用后开始检查。只在材料或规则变化时调用当前模型服务；没有新增理解不发布新解读。上限按滚动
-          24 小时计算，手动整理另计。暂停只停止后续检查。
-        </p>
-        <p className="muted">
-          来源按自己的刷新设置取得材料；此处不读取未选择的文件或网页。应用退出时不执行，重开只检查当前材料一次。
-        </p>
+        <fieldset className="form-section">
+          <legend>{topic.title}</legend>
+          <p className="settings-note">
+            按议题规则 v{topic.revision} 使用 {topic.sources.length} 项所选材料
+            {topic.feedIds?.length
+              ? `与 ${topic.feedIds.length} 个订阅的新近文章`
+              : ""}
+            。结果回到雷达，已有阅读位置与收藏版本保留。
+          </p>
+          <label className="schedule-check">
+            <input
+              type="checkbox"
+              checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)}
+            />
+            应用运行时自动整理
+          </label>
+        </fieldset>
+        <fieldset className="form-section">
+          <legend>检查频率与用量</legend>
+          <label>
+            检查间隔（分钟）
+            <input
+              type="number"
+              min={30}
+              max={10080}
+              required
+              value={minutes}
+              onChange={(e) => setMinutes(Number(e.target.value))}
+            />
+          </label>
+          <label>
+            每 24 小时最多自动调用模型
+            <input
+              type="number"
+              min={1}
+              max={24}
+              required
+              value={limit}
+              onChange={(e) => setLimit(Number(e.target.value))}
+            />
+          </label>
+          <p className="settings-note">
+            仅在材料或规则变化时调用模型；上限按滚动 24 小时计算，手动整理另计。
+          </p>
+        </fieldset>
+        <details>
+          <summary>运行范围</summary>
+          <p className="settings-note">
+            只读取议题已选材料。应用退出时不执行，重开只检查当前材料一次；暂停只停止后续检查。
+          </p>
+        </details>
         {watch?.error ? <p role="status">{watch.error}</p> : null}
         {error ? <p role="alert">{error}</p> : null}
         <button className="primary" disabled={busy}>

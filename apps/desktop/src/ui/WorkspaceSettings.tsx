@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { Download, Upload, ArrowUpRight } from "lucide-react";
+import { Download, Upload } from "lucide-react";
 import type {
   BackupPreview,
   SpaceEntry,
   SpaceInfo,
 } from "../core/backup-contract";
 import { command } from "./api";
-import { IconButton } from "./Composer";
 import { Dialog } from "./Dialog";
 
 const countLabels: Record<string, string> = {
@@ -61,73 +60,97 @@ export function WorkspaceSettings({
     }
   }
   return (
-    <section className="workspace-settings">
-      <div className="section-heading">
-        <h2>备份与空间</h2>
-        <div className="toolbar">
-          <IconButton
-            label="备份当前空间"
-            disabled={busy}
-            onClick={() =>
-              void act(async () => {
-                const result = await command<{ path: string } | undefined>({
-                  type: "workspace-export",
-                });
-                if (result) setNotice(`备份已保存：${result.path}`);
-              })
-            }
-          >
-            <Download size={18} />
-          </IconButton>
-          <IconButton
-            label="从备份恢复空间"
-            disabled={busy}
-            onClick={() =>
-              void act(async () => {
-                const next = await command<BackupPreview | undefined>({
-                  type: "workspace-inspect",
-                });
-                if (next) {
-                  setPreview(next);
-                  setName(
-                    `恢复 · ${new Date(next.createdAt).toLocaleDateString()}`,
-                  );
-                }
-              })
-            }
-          >
-            <Upload size={18} />
-          </IconButton>
-        </div>
-      </div>
-      <p>保存工作、成果、草稿和引用关系；恢复为独立空间。</p>
-      <p className="muted">
-        包含已读材料与项目关联，不复制 AI、Code 的原始文件或服务凭据。
-      </p>
-      {info?.startupError ? <p role="status">{info.startupError}</p> : null}
-      {info?.spaces.map((space) => (
-        <div className="local-folder-row" key={space.id}>
+    <div className="workspace-settings">
+      <section className="settings-section">
+        <div className="settings-section-header">
           <div>
-            <strong>{space.name}</strong>
-            <small className="muted">
-              {space.id === info.currentId
-                ? " · 当前空间"
-                : space.createdAt
-                  ? ` · ${new Date(space.createdAt).toLocaleString()}`
-                  : ""}
-            </small>
+            <h2>空间</h2>
+            <p>当前空间与这台设备上恢复过的空间。</p>
           </div>
-          {space.id !== info.currentId ? (
-            <IconButton
-              label={`打开 ${space.name}`}
-              disabled={busy}
-              onClick={() => setSwitchTo(space)}
-            >
-              <ArrowUpRight size={18} />
-            </IconButton>
-          ) : null}
         </div>
-      ))}
+        {info?.startupError ? <p role="status">{info.startupError}</p> : null}
+        {info?.spaces.map((space) => (
+          <div className="setting-row" key={space.id}>
+            <div className="setting-copy">
+              <strong>{space.name}</strong>
+              <small>
+                {space.id === info.currentId
+                  ? "正在使用"
+                  : space.createdAt
+                    ? new Date(space.createdAt).toLocaleString()
+                    : "可在此设备打开"}
+              </small>
+            </div>
+            {space.id === info.currentId ? (
+              <span className="status-badge success">当前空间</span>
+            ) : (
+              <div className="settings-actions">
+                <button
+                  className="quiet"
+                  disabled={busy}
+                  onClick={() => setSwitchTo(space)}
+                >
+                  打开空间
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+      </section>
+      <section className="settings-section">
+        <div className="settings-section-header">
+          <div>
+            <h2>备份与恢复</h2>
+            <p>备份当前空间，或把备份恢复为新的独立空间。</p>
+          </div>
+        </div>
+        <div className="setting-row">
+          <div className="setting-copy">
+            <strong>当前空间备份</strong>
+            <small>包含工作、成果、草稿、已读材料和项目关联。</small>
+          </div>
+          <div className="settings-actions">
+            <button
+              className="quiet"
+              disabled={busy}
+              onClick={() =>
+                void act(async () => {
+                  const result = await command<{ path: string } | undefined>({
+                    type: "workspace-export",
+                  });
+                  if (result) setNotice(`备份已保存：${result.path}`);
+                })
+              }
+            >
+              <Download size={16} />
+              备份当前空间
+            </button>
+            <button
+              className="quiet"
+              disabled={busy}
+              onClick={() =>
+                void act(async () => {
+                  const next = await command<BackupPreview | undefined>({
+                    type: "workspace-inspect",
+                  });
+                  if (next) {
+                    setPreview(next);
+                    setName(
+                      `恢复 · ${new Date(next.createdAt).toLocaleDateString()}`,
+                    );
+                  }
+                })
+              }
+            >
+              <Upload size={16} />
+              从备份恢复
+            </button>
+          </div>
+        </div>
+        <p className="settings-note">
+          包含已读材料与项目关联，不复制 AI、Code 的原始文件或服务凭据。
+        </p>
+      </section>
       {notice ? (
         <p role="status" className="workspace-notice">
           {notice}
@@ -222,6 +245,6 @@ export function WorkspaceSettings({
           </button>
         </Dialog>
       ) : null}
-    </section>
+    </div>
   );
 }

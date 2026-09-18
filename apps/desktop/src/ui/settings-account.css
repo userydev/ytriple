@@ -1,0 +1,148 @@
+.settings-section-header button,
+.settings-actions button,
+.model-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.account-identity {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 4px 0 22px;
+}
+.account-avatar {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #172738;
+  color: #fff;
+  font-size: 19px;
+  font-weight: 700;
+}
+.account-meta {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.account-meta strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.account-meta span,
+.setting-copy small {
+  color: #727a83;
+}
+.setting-copy small {
+  overflow-wrap: anywhere;
+}
+.danger-action {
+  color: #a0372c;
+}
+.settings-form fieldset {
+  display: grid;
+  gap: 16px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+div.settings-note {
+  padding: 12px 14px;
+  border-radius: 9px;
+  background: #f4f5f2;
+}
+div.settings-note strong,
+div.settings-note span {
+  display: block;
+}
+div.settings-note strong {
+  margin-bottom: 4px;
+  color: #26313b;
+}
+.error-note {
+  background: #fff0ee !important;
+  color: #9b332a !important;
+}
+.success-note {
+  background: #eaf6ee !important;
+  color: #267244 !important;
+}
+.advanced-settings > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.advanced-settings[open] > summary {
+  margin-bottom: 16px;
+}
+.model-choice-group {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 22px;
+}
+.model-choice {
+  align-items: flex-start;
+  width: 100%;
+  min-height: 92px;
+  padding: 16px;
+  text-align: left;
+  background: #fff;
+}
+.model-choice[aria-pressed="true"] {
+  border-color: #54687a;
+  background: #f4f7f8;
+  box-shadow: 0 0 0 1px #54687a inset;
+}
+.model-choice > span:last-child {
+  display: grid;
+  gap: 6px;
+}
+.model-choice small {
+  color: #727a83;
+  line-height: 1.4;
+}
+.choice-indicator {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid #bcc3c5;
+  border-radius: 50%;
+}
+.model-choice[aria-pressed="true"] .choice-indicator {
+  border-color: #334c5f;
+  background: #334c5f;
+  color: #fff;
+}
+.model-config-form {
+  min-width: min(520px, 72vw);
+}
+.inline-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+.inline-check input {
+  width: auto;
+}
+@media (max-width: 700px) {
+  .settings-section-header,
+  .setting-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .model-choice-group {
+    grid-template-columns: 1fr;
+  }
+  .setting-value {
+    max-width: none;
+    text-align: left;
+  }
+}

@@ -626,17 +626,17 @@ export function RadarPanel({
         <>
           <div className="section-heading page-intro">
             <div>
-              <span className="eyebrow">RADAR</span>
-              <h1>观察与理解</h1>
+              <h1>雷达</h1>
+              <p>跟进议题、整理来源并阅读解读。</p>
             </div>
             <div className="tool-group">
-              <IconButton
-                label="来源与议题"
+              <button
                 aria-expanded={sourcesOpen}
                 onClick={() => setSourcesOpen((v) => !v)}
               >
-                <SlidersHorizontal size={19} />
-              </IconButton>
+                <SlidersHorizontal size={17} />
+                来源与议题
+              </button>
               <button onClick={() => setEditing(null)}>
                 <Plus size={16} />
                 关注议题

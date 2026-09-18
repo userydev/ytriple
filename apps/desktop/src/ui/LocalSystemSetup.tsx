@@ -3,7 +3,6 @@ import { Check, FolderCog, RefreshCw } from "lucide-react";
 import type { Snapshot } from "../core/types";
 import type { LocalSystemPlan, LocalSystemStatus } from "../core/local-system";
 import { command } from "./api";
-import { IconButton } from "./Composer";
 import { Dialog } from "./Dialog";
 export function LocalSystemSetup({ data }: { data: Snapshot }) {
   const [status, setStatus] = useState<LocalSystemStatus | null>(null),
@@ -94,41 +93,61 @@ export function LocalSystemSetup({ data }: { data: Snapshot }) {
     }
   }
   return (
-    <section className="local-system-setup">
-      <div className="section-heading">
-        <h2>项目管理规则</h2>
-        <IconButton
-          label="检查本机项目规则"
+    <section className="local-system-setup settings-section">
+      <div className="settings-section-header">
+        <div>
+          <h2>本机项目规则</h2>
+          <p>检查 AI 与 Code 目录是否具备统一的基础约定。</p>
+        </div>
+        <button
+          className="quiet"
           disabled={busy || !configured}
           onClick={() => void inspect()}
         >
           <RefreshCw size={17} />
-        </IconButton>
+          重新检查
+        </button>
       </div>
-      <p>
-        {!configured
-          ? "先选择 AI 与 Code 目录。"
-          : (status?.message ??
-            (error
-              ? "本机规则检查未完成，请查看下方说明。"
-              : "正在检查本机规则…"))}
-      </p>
+      <div className="setting-row">
+        <div className="setting-copy">
+          <strong>初始化状态</strong>
+          <small>
+            {!configured
+              ? "先选择 AI 与 Code 目录"
+              : (status?.message ??
+                (error ? "检查未完成，请查看说明" : "正在检查…"))}
+          </small>
+        </div>
+        <span
+          className={`status-badge ${status?.state === "ready" ? "success" : ""}`}
+        >
+          {!configured
+            ? "待配置"
+            : status?.state === "ready"
+              ? "已就绪"
+              : "未完成"}
+        </span>
+        {configured && status?.state !== "ready" ? (
+          <div className="settings-actions">
+            <button
+              className="quiet"
+              disabled={busy}
+              onClick={() => void preview()}
+            >
+              <FolderCog size={17} />
+              {status?.plan &&
+              ["running", "failed"].includes(status.plan.status)
+                ? "继续初始化"
+                : "查看并初始化"}
+            </button>
+          </div>
+        ) : null}
+      </div>
       {status?.state === "ready" ? (
-        <p className="muted">
+        <p className="settings-note">
           <Check size={15} />
           沿用本机已有规则和项目登记。
         </p>
-      ) : configured ? (
-        <button
-          className="quiet"
-          disabled={busy}
-          onClick={() => void preview()}
-        >
-          <FolderCog size={17} />
-          {status?.plan && ["running", "failed"].includes(status.plan.status)
-            ? "检查并继续建立"
-            : "预览基础规则"}
-        </button>
       ) : null}
       {!plan && error ? <p role="alert">{error}</p> : null}
       {plan ? (
@@ -147,19 +166,27 @@ export function LocalSystemSetup({ data }: { data: Snapshot }) {
             <br />
             Code：{plan.codeRoot}
           </p>
-          <label>
-            预览规则文件
-            <select
-              aria-label="预览基础规则文件"
-              value={file}
-              onChange={(e) => setFile(e.target.value)}
-            >
-              {Object.keys(plan.files).map((path) => (
-                <option key={path}>{path}</option>
-              ))}
-            </select>
-          </label>
-          <pre className="suggestion-preview">{plan.files[file]}</pre>
+          <p className="settings-note">
+            将建立 {plan.directories.length} 个目录、
+            {Object.keys(plan.files).length} 个规则文件和{" "}
+            {Object.keys(plan.links).length} 个规则入口。
+          </p>
+          <details>
+            <summary>查看规则文件内容</summary>
+            <label>
+              规则文件
+              <select
+                aria-label="预览基础规则文件"
+                value={file}
+                onChange={(e) => setFile(e.target.value)}
+              >
+                {Object.keys(plan.files).map((path) => (
+                  <option key={path}>{path}</option>
+                ))}
+              </select>
+            </label>
+            <pre className="suggestion-preview">{plan.files[file]}</pre>
+          </details>
           <details>
             <summary>完整文件夹与规则入口</summary>
             <ul>

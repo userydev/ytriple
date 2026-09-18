@@ -86,7 +86,6 @@ export function AssetLibrary({
     <section className="wide-content">
       <header className="page-intro">
         <div>
-          <span className="eyebrow">LIBRARY</span>
           <h1>你的资产库</h1>
           <p>把有用的成果、资料和方法留给下一次工作。</p>
         </div>
@@ -126,8 +125,8 @@ export function AssetLibrary({
                 onChange={(e) => setQuery(e.target.value)}
               />
             </label>
-            <IconButton
-              label="从文件恢复资产"
+            <button
+              className="text-action"
               disabled={busy}
               onClick={() =>
                 void act(async () => {
@@ -144,7 +143,8 @@ export function AssetLibrary({
               }
             >
               <Upload size={18} />
-            </IconButton>
+              从文件恢复
+            </button>
           </div>
           {notice ? (
             <p role="status" className="muted">
@@ -184,13 +184,15 @@ export function AssetLibrary({
                     >
                       <Download size={17} />
                     </IconButton>
-                    <IconButton
-                      label={`引用 ${asset.label} 的保存版本`}
+                    <button
+                      className="text-action"
                       disabled={busy}
+                      aria-label={`引用 ${asset.label} 的保存版本`}
                       onClick={() => void act(() => onUse(asset.id))}
                     >
                       <ArrowUpRight size={18} />
-                    </IconButton>
+                      引用
+                    </button>
                   </div>
                 </div>
                 <p className="muted">

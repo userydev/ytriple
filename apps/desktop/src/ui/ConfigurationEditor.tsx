@@ -125,39 +125,44 @@ export function ConfigurationEditor({
       </div>
       {tab === "team" ? (
         <section>
-          <label>
-            搭配版本
-            <select
-              aria-label="搭配版本"
-              disabled={dirty.team || busy}
-              value={versionKey(team)}
-              onChange={(e) =>
-                setTeam(
-                  structuredClone(
-                    teams.find((t) => versionKey(t) === e.target.value)!,
-                  ),
-                )
-              }
-            >
-              {teams.map((t) => (
-                <option key={versionKey(t)} value={versionKey(t)}>
-                  {t.name} · v{t.version}
-                </option>
-              ))}
-            </select>
-          </label>
-          {team.version < latestTeam ? (
-            <p className="muted">正在查看历史搭配。选择最新版本可继续编辑。</p>
-          ) : null}
-          <label>
-            搭配名称
-            <input
-              value={team.name}
-              disabled={!teamEditable}
-              maxLength={200}
-              onChange={(e) => editTeam({ ...team, name: e.target.value })}
-            />
-          </label>
+          <fieldset className="form-section">
+            <legend>搭配信息</legend>
+            <label>
+              搭配版本
+              <select
+                aria-label="搭配版本"
+                disabled={dirty.team || busy}
+                value={versionKey(team)}
+                onChange={(e) =>
+                  setTeam(
+                    structuredClone(
+                      teams.find((t) => versionKey(t) === e.target.value)!,
+                    ),
+                  )
+                }
+              >
+                {teams.map((t) => (
+                  <option key={versionKey(t)} value={versionKey(t)}>
+                    {t.name} · v{t.version}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {team.version < latestTeam ? (
+              <p className="settings-note">
+                正在查看历史搭配。选择最新版本可继续编辑。
+              </p>
+            ) : null}
+            <label>
+              搭配名称
+              <input
+                value={team.name}
+                disabled={!teamEditable}
+                maxLength={200}
+                onChange={(e) => editTeam({ ...team, name: e.target.value })}
+              />
+            </label>
+          </fieldset>
           {team.members.map((m, i) => (
             <fieldset
               key={m.id}
@@ -311,107 +316,112 @@ export function ConfigurationEditor({
       ) : null}
       {tab === "flow" ? (
         <section>
-          <label>
-            流程版本
-            <select
-              aria-label="流程版本"
-              disabled={dirty.flow || busy}
-              value={versionKey(flow)}
-              onChange={(e) =>
-                setFlow(
-                  structuredClone(
-                    flows.find((f) => versionKey(f) === e.target.value)!,
-                  ),
-                )
-              }
-            >
-              {flows.map((f) => (
-                <option key={versionKey(f)} value={versionKey(f)}>
-                  {f.name} · v{f.version}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="inline-choice">
-            <input
-              type="checkbox"
-              checked={!!flow.delegation}
-              disabled={!flowEditable}
-              onChange={(e) => {
-                const { delegation: _, ...fixed } = flow;
-                editFlow(
-                  e.target.checked
-                    ? { ...flow, delegation: { maxTasks: 4, maxDepth: 2 } }
-                    : fixed,
-                );
-              }}
-            />
-            允许成员按需委派
-          </label>
-          {flow.delegation ? (
-            <div className="outcome-fields">
-              <label>
-                每轮最多子任务
-                <input
-                  type="number"
-                  min={1}
-                  max={8}
-                  value={flow.delegation.maxTasks}
-                  disabled={!flowEditable}
-                  onChange={(e) =>
-                    editFlow({
-                      ...flow,
-                      delegation: {
-                        ...flow.delegation!,
-                        maxTasks: Number(e.target.value),
-                      },
-                    })
-                  }
-                />
-              </label>
-              <label>
-                最多委派层级
-                <input
-                  type="number"
-                  min={1}
-                  max={3}
-                  value={flow.delegation.maxDepth}
-                  disabled={!flowEditable}
-                  onChange={(e) =>
-                    editFlow({
-                      ...flow,
-                      delegation: {
-                        ...flow.delegation!,
-                        maxDepth: Number(e.target.value),
-                      },
-                    })
-                  }
-                />
-              </label>
-            </div>
-          ) : null}
-          <p className="muted">
-            {flow.delegation
-              ? "负责人可从当前搭配选择成员处理限定任务，返回后继续判断。委派会产生额外模型调用，隐藏过程不停止执行。"
-              : "按下列步骤依次处理；成员不会自行增加子任务。"}
-          </p>
-          {flow.version < latestFlow ? (
-            <p className="muted">正在查看历史流程。选择最新版本可继续编辑。</p>
-          ) : null}
-          <label>
-            流程名称
-            <input
-              disabled={!flowEditable}
-              value={flow.name}
-              maxLength={200}
-              onChange={(e) => editFlow({ ...flow, name: e.target.value })}
-            />
-          </label>
-          <p className="muted">
-            {flow.delegation
-              ? "步骤定义负责人和交付责任，子任务按实际需要展开。"
-              : "按步骤顺序协作，每步读取前面的公开贡献。"}
-          </p>
+          <fieldset className="form-section">
+            <legend>流程信息</legend>
+            <label>
+              流程版本
+              <select
+                aria-label="流程版本"
+                disabled={dirty.flow || busy}
+                value={versionKey(flow)}
+                onChange={(e) =>
+                  setFlow(
+                    structuredClone(
+                      flows.find((f) => versionKey(f) === e.target.value)!,
+                    ),
+                  )
+                }
+              >
+                {flows.map((f) => (
+                  <option key={versionKey(f)} value={versionKey(f)}>
+                    {f.name} · v{f.version}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="inline-choice">
+              <input
+                type="checkbox"
+                checked={!!flow.delegation}
+                disabled={!flowEditable}
+                onChange={(e) => {
+                  const { delegation: _, ...fixed } = flow;
+                  editFlow(
+                    e.target.checked
+                      ? { ...flow, delegation: { maxTasks: 4, maxDepth: 2 } }
+                      : fixed,
+                  );
+                }}
+              />
+              允许成员按需委派
+            </label>
+            {flow.delegation ? (
+              <div className="outcome-fields">
+                <label>
+                  每轮最多子任务
+                  <input
+                    type="number"
+                    min={1}
+                    max={8}
+                    value={flow.delegation.maxTasks}
+                    disabled={!flowEditable}
+                    onChange={(e) =>
+                      editFlow({
+                        ...flow,
+                        delegation: {
+                          ...flow.delegation!,
+                          maxTasks: Number(e.target.value),
+                        },
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  最多委派层级
+                  <input
+                    type="number"
+                    min={1}
+                    max={3}
+                    value={flow.delegation.maxDepth}
+                    disabled={!flowEditable}
+                    onChange={(e) =>
+                      editFlow({
+                        ...flow,
+                        delegation: {
+                          ...flow.delegation!,
+                          maxDepth: Number(e.target.value),
+                        },
+                      })
+                    }
+                  />
+                </label>
+              </div>
+            ) : null}
+            <p className="settings-note">
+              {flow.delegation
+                ? "负责人可从当前搭配选择成员处理限定任务，返回后继续判断。委派会产生额外模型调用，隐藏过程不停止执行。"
+                : "按下列步骤依次处理；成员不会自行增加子任务。"}
+            </p>
+            {flow.version < latestFlow ? (
+              <p className="settings-note">
+                正在查看历史流程。选择最新版本可继续编辑。
+              </p>
+            ) : null}
+            <label>
+              流程名称
+              <input
+                disabled={!flowEditable}
+                value={flow.name}
+                maxLength={200}
+                onChange={(e) => editFlow({ ...flow, name: e.target.value })}
+              />
+            </label>
+            <p className="settings-note">
+              {flow.delegation
+                ? "步骤定义负责人和交付责任，子任务按实际需要展开。"
+                : "按步骤顺序协作，每步读取前面的公开贡献。"}
+            </p>
+          </fieldset>
           {flow.stages.map((s, i) => (
             <fieldset
               key={i}

@@ -177,135 +177,154 @@ export function ScheduleEditor({
           }
         }}
       >
-        <label>
-          任务名称
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-            maxLength={120}
-            autoFocus
-          />
-        </label>
-        <label>
-          结果归回
-          <select
-            value={selectedWork}
-            disabled={!!schedule}
-            onChange={(e) => chooseWork(e.target.value)}
-          >
-            <option value="">新建一项持续工作</option>
-            {data.works
-              .filter(
-                (w) => (!w.archived && !w.completedAt) || w.id === selectedWork,
-              )
-              .map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.title}
-                </option>
-              ))}
-          </select>
-        </label>
-        {!selectedWork ? (
+        <fieldset className="form-section">
+          <legend>委托内容</legend>
           <label>
-            所属项目
-            <select
-              value={projectId}
-              onChange={(e) => setProject(e.target.value)}
-            >
-              <option value="">独立工作</option>
-              {data.projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : (
-          <small>
-            {data.projects.find((p) => p.id === projectId)?.name ?? "独立工作"}{" "}
-            · 每次运行进入同一工作与成果链
-          </small>
-        )}
-        <label>
-          让团队做什么
-          <textarea
-            rows={4}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            required
-          />
-        </label>
-        <div className="schedule-timing">
-          <label>
-            首次执行
+            任务名称
             <input
-              type="datetime-local"
-              value={firstAt}
-              onChange={(e) => setFirst(e.target.value)}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
               required
+              maxLength={120}
+              autoFocus
             />
           </label>
           <label>
-            重复
-            <select value={hours} onChange={(e) => setHours(e.target.value)}>
-              <option value="">只执行一次</option>
-              {[...new Set([1, 6, 24, 168, ...(hours ? [Number(hours)] : [])])]
-                .sort((a, b) => a - b)
-                .map((n) => (
-                  <option key={n} value={n}>
-                    每 {n} 小时
+            结果归回
+            <select
+              value={selectedWork}
+              disabled={!!schedule}
+              onChange={(e) => chooseWork(e.target.value)}
+            >
+              <option value="">新建一项持续工作</option>
+              {data.works
+                .filter(
+                  (w) =>
+                    (!w.archived && !w.completedAt) || w.id === selectedWork,
+                )
+                .map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.title}
                   </option>
                 ))}
             </select>
           </label>
-        </div>
-        <small>
-          {timezone} · 周期按实际小时计算；跨夏令时可能改变本地钟点。
-        </small>
-        <References
-          data={data}
-          refs={refs}
-          onChange={setRefs}
-          disabled={busy}
-        />
-        <label>
-          添加已读取材料
-          <select
-            value=""
-            disabled={refs.length >= 20}
-            onChange={(e) => {
-              const m = materials.find(
-                (m) => `${m.id}@${m.version}` === e.target.value,
-              );
-              if (m && !refs.some((r) => r.materialId === m.id))
-                setRefs([
-                  ...refs,
-                  { materialId: m.id, version: m.version, label: m.title },
-                ]);
-            }}
-          >
-            <option value="">选择材料…</option>
-            {materials
-              .filter((m) => !refs.some((r) => r.materialId === m.id))
-              .map((m) => (
-                <option key={m.id} value={`${m.id}@${m.version}`}>
-                  {m.title} · v{m.version}
-                </option>
-              ))}
-          </select>
-        </label>
-        <label className="schedule-check">
-          <input
-            type="checkbox"
-            checked={followLatest}
-            onChange={(e) => setLatest(e.target.checked)}
+          {!selectedWork ? (
+            <label>
+              所属项目
+              <select
+                value={projectId}
+                onChange={(e) => setProject(e.target.value)}
+              >
+                <option value="">独立工作</option>
+                {data.projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <small>
+              {data.projects.find((p) => p.id === projectId)?.name ??
+                "独立工作"}{" "}
+              · 每次运行进入同一工作与成果链
+            </small>
+          )}
+          <label>
+            让团队做什么
+            <textarea
+              rows={4}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              required
+            />
+          </label>
+        </fieldset>
+        <fieldset className="form-section">
+          <legend>执行时间</legend>
+          <div className="schedule-timing">
+            <label>
+              首次执行
+              <input
+                type="datetime-local"
+                value={firstAt}
+                onChange={(e) => setFirst(e.target.value)}
+                required
+              />
+            </label>
+            <label>
+              重复
+              <select value={hours} onChange={(e) => setHours(e.target.value)}>
+                <option value="">只执行一次</option>
+                {[
+                  ...new Set([
+                    1,
+                    6,
+                    24,
+                    168,
+                    ...(hours ? [Number(hours)] : []),
+                  ]),
+                ]
+                  .sort((a, b) => a - b)
+                  .map((n) => (
+                    <option key={n} value={n}>
+                      每 {n} 小时
+                    </option>
+                  ))}
+              </select>
+            </label>
+          </div>
+          <small>
+            {timezone} · 周期按实际小时计算；跨夏令时可能改变本地钟点。
+          </small>
+        </fieldset>
+        <fieldset className="form-section">
+          <legend>材料范围</legend>
+          <References
+            data={data}
+            refs={refs}
+            onChange={setRefs}
+            disabled={busy}
           />
-          跟随所选材料的已读取新版本
-        </label>
-        <p className="muted">
-          不会自行读取文件或抓取网页。输入没有变化时只记录检查；立即运行会重新调用模型。
-        </p>
+          <label>
+            添加已读取材料
+            <select
+              value=""
+              disabled={refs.length >= 20}
+              onChange={(e) => {
+                const m = materials.find(
+                  (m) => `${m.id}@${m.version}` === e.target.value,
+                );
+                if (m && !refs.some((r) => r.materialId === m.id))
+                  setRefs([
+                    ...refs,
+                    { materialId: m.id, version: m.version, label: m.title },
+                  ]);
+              }}
+            >
+              <option value="">选择材料…</option>
+              {materials
+                .filter((m) => !refs.some((r) => r.materialId === m.id))
+                .map((m) => (
+                  <option key={m.id} value={`${m.id}@${m.version}`}>
+                    {m.title} · v{m.version}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <label className="schedule-check">
+            <input
+              type="checkbox"
+              checked={followLatest}
+              onChange={(e) => setLatest(e.target.checked)}
+            />
+            跟随所选材料的已读取新版本
+          </label>
+          <p className="settings-note">
+            不会自行读取文件或网页。输入未变化时只记录检查；立即运行会重新调用模型。
+          </p>
+        </fieldset>
         <div className="schedule-authorization">
           <strong>本机执行 · 每次最多 {limit} 次模型请求</strong>
           <p>
@@ -317,7 +336,7 @@ export function ScheduleEditor({
           </small>
         </div>
         <details>
-          <summary>负责人、方法与用量</summary>
+          <summary>高级设置</summary>
           <label>
             负责人
             <select
@@ -433,20 +452,24 @@ export function SchedulesPage({
   const selected = data.schedules.find((s) => s.id === selectedId);
   return (
     <section className="wide-content schedules-page">
-      <div className="section-heading">
+      <div className="section-heading page-intro">
         <div>
-          <small>SCHEDULES · 本机</small>
-          <h1>持续委托</h1>
+          <h1>定时任务</h1>
+          <p>把重复的工作交给团队，结果回到原处。</p>
         </div>
         <button className="primary" onClick={() => setEditor("new")}>
           <Plus size={17} />
           新建任务
         </button>
       </div>
-      <p className="lede">把重复的工作交给团队，结果回到原处。</p>
-      <p className="muted">
-        应用运行、电脑唤醒时触发；关闭窗口即退出，错过的周期不集中补跑。
-      </p>
+      <div className="schedule-runtime-note">
+        <Clock size={15} />
+        <span>本机执行 · 应用保持运行、电脑保持唤醒时触发</span>
+        <details>
+          <summary>运行说明</summary>
+          <p>关闭窗口即退出，错过的周期不集中补跑。</p>
+        </details>
+      </div>
       <RadarAutomationList data={data} onRead={onRadar} />
       {data.radar.watches.length ? <h2>团队定时任务</h2> : null}
       <div className="schedule-filters">
