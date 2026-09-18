@@ -16,6 +16,7 @@ import { IconButton } from "./Composer";
 import { ProjectRequirements } from "./ProjectRequirements";
 import { References } from "./References";
 import { outputLabels } from "../core/output";
+import { TeamTrace } from "./TeamTrace";
 const statusLabel = {
   running: "处理中",
   waiting: "等待答复",
@@ -38,6 +39,9 @@ export function ProcessPane({
   onError: (error: unknown) => void;
   focusIds?: string[];
 }) {
+  const [expandedRecords, setExpandedRecords] = useState<string[]>(
+    focusIds ?? [],
+  );
   const [scope, setScope] = useState("all"),
     [selected, setSelected] = useState<string[]>([]),
     [passage, setPassage] = useState<{ id: string; text: string } | null>(null),
@@ -49,6 +53,7 @@ export function ProcessPane({
     if (focusIds?.length) {
       setScope("all");
       setSelected(focusIds);
+      setExpandedRecords((ids) => [...new Set([...ids, ...focusIds])]);
       document
         .getElementById(`record-${focusIds[0]}`)
         ?.scrollIntoView({ block: "center" });
@@ -156,46 +161,63 @@ export function ProcessPane({
           onChange={() => {}}
         />
       ) : null}
-      <div data-contribution-id={c.id}>
-        {c.tool ? (
-          <>
-            <p>
-              {toolCatalog.find((t) => t.key === c.tool!.request.key)?.name ??
-                c.tool.request.key}{" "}
-              · {c.tool.status === "succeeded" ? "执行完成" : "执行失败"}
-            </p>
-            <p>{c.tool.request.purpose}</p>
-            <ToolEvidence receipt={c.tool} contribution={c} data={data} />
-          </>
-        ) : (
-          <Markdown>
-            {c.status === "running" && /^\s*\{/.test(c.body)
-              ? "正在组织协作请求…"
-              : c.body || "尚无公开分析记录"}
-          </Markdown>
-        )}
-      </div>
-      {c.skills?.length ? (
-        <details className="method-provenance">
-          <summary>本次请求载入方法 · {c.skills.length}</summary>
-          {c.skills.map((use) => {
-            const method = data.runs
-              .find((r) => r.id === c.runId)
-              ?.skills?.find((s) => skillKey(s) === use.key);
-            return (
-              <details key={use.key}>
-                <summary>
-                  {method?.name ?? use.key} · v{method?.version ?? "?"} ·{" "}
-                  {use.source === "requested" ? "用户指定" : "成员选择"}
-                </summary>
-                <p>{use.purpose}</p>
-                <Markdown>{method?.body ?? "方法快照不可用"}</Markdown>
-              </details>
+      <details
+        className="record-analysis"
+        open={expandedRecords.includes(c.id)}
+      >
+        <summary
+          onClick={(event) => {
+            event.preventDefault();
+            setExpandedRecords((ids) =>
+              ids.includes(c.id)
+                ? ids.filter((id) => id !== c.id)
+                : [...ids, c.id],
             );
-          })}
-          <small>仅方法正文载入记录，不代表脚本执行或效果验证。</small>
-        </details>
-      ) : null}
+          }}
+        >
+          {expandedRecords.includes(c.id) ? "收起分析" : "查看公开分析"}
+        </summary>
+        <div data-contribution-id={c.id}>
+          {c.tool ? (
+            <>
+              <p>
+                {toolCatalog.find((t) => t.key === c.tool!.request.key)?.name ??
+                  c.tool.request.key}{" "}
+                · {c.tool.status === "succeeded" ? "执行完成" : "执行失败"}
+              </p>
+              <p>{c.tool.request.purpose}</p>
+              <ToolEvidence receipt={c.tool} contribution={c} data={data} />
+            </>
+          ) : (
+            <Markdown>
+              {c.status === "running" && /^\s*\{/.test(c.body)
+                ? "正在组织协作请求…"
+                : c.body || "尚无公开分析记录"}
+            </Markdown>
+          )}
+        </div>
+        {c.skills?.length ? (
+          <details className="method-provenance">
+            <summary>本次请求载入方法 · {c.skills.length}</summary>
+            {c.skills.map((use) => {
+              const method = data.runs
+                .find((r) => r.id === c.runId)
+                ?.skills?.find((s) => skillKey(s) === use.key);
+              return (
+                <details key={use.key}>
+                  <summary>
+                    {method?.name ?? use.key} · v{method?.version ?? "?"} ·{" "}
+                    {use.source === "requested" ? "用户指定" : "成员选择"}
+                  </summary>
+                  <p>{use.purpose}</p>
+                  <Markdown>{method?.body ?? "方法快照不可用"}</Markdown>
+                </details>
+              );
+            })}
+            <small>仅方法正文载入记录，不代表脚本执行或效果验证。</small>
+          </details>
+        ) : null}
+      </details>
       {c.error ? <p className="error-inline">{c.error}</p> : null}
       {all.some((child) => child.task?.parentId === c.id) ? (
         <details
@@ -301,6 +323,18 @@ export function ProcessPane({
                 <h3>{r.text}</h3>
               </div>
             </div>
+            <TeamTrace
+              run={r}
+              records={shown}
+              onRecord={(id) => {
+                setExpandedRecords((ids) => [...new Set([...ids, id])]);
+                requestAnimationFrame(() => {
+                  document
+                    .getElementById(`record-${id}`)
+                    ?.scrollIntoView({ block: "start", behavior: "smooth" });
+                });
+              }}
+            />
             <details>
               <summary>
                 {r.team.name} · 搭配 v{r.team.version} · 流程 v

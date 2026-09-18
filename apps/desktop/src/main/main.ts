@@ -1,4 +1,5 @@
 import { ModelConnections } from "../core/model-connections";
+import { createMenuBar } from "./menu-bar";
 import { Accounts } from "../core/accounts";
 import { WorkspaceBackups } from "../core/workspace-backup";
 import { Methods } from "../core/methods";
@@ -397,6 +398,8 @@ app
         sandbox: true,
       },
     });
+    const menuBar = createMenuBar(window);
+    app.once("will-quit", () => menuBar.destroy());
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     window.webContents.on("will-navigate", (event, url) => {
       if (!url.startsWith("ytriple://app/")) event.preventDefault();

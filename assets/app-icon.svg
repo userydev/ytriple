@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- macOS app tile around the original 3878808 brand-glyph; the branch icon is reserved for the menu bar. -->
+  <rect x="80" y="80" width="864" height="864" rx="196" fill="#f4f6f0"/>
+  <g transform="translate(322 248) scale(22) rotate(-8 10 12)">
+    <rect x="0" y="4" width="4" height="16" rx="2" fill="#5c8067"/>
+    <rect x="7" y="0" width="4" height="24" rx="2" fill="#284f3c"/>
+    <rect x="14" y="13" width="4" height="11" rx="2" fill="#90ab88"/>
+  </g>
+</svg>

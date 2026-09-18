@@ -89,9 +89,7 @@ try {
       electron: pkg.devDependencies.electron,
       version: pkg.version,
       packaging: digest(await readFile(fileURLToPath(import.meta.url))),
-      icon: digest(
-        await readFile(resolve(cwd, "../../assets/branch-icon.svg")),
-      ),
+      icon: digest(await readFile(resolve(cwd, "../../assets/app-icon.svg"))),
       entitlements: digest(await readFile(entitlements)),
     }),
   ).slice(0, 16);
@@ -116,10 +114,7 @@ try {
   );
   const iconset = join(temporary, "ytriple.iconset");
   await mkdir(iconset);
-  const svg = await readFile(
-    resolve(cwd, "../../assets/branch-icon.svg"),
-    "utf8",
-  );
+  const svg = await readFile(resolve(cwd, "../../assets/app-icon.svg"), "utf8");
   for (const size of [16, 32, 128, 256, 512])
     for (const scale of [1, 2]) {
       const png = new Resvg(svg, {

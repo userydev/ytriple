@@ -1,5 +1,6 @@
 import { ArrowUpRight, BookOpen, Radar } from "lucide-react";
-import type { Snapshot } from "../core/types";
+import type { Snapshot, Material } from "../core/types";
+import { coverageLabel } from "../core/radar-contract";
 export function latestEditions(data: Snapshot) {
   return Array.from(
     new Map(data.radar.editions.map((e) => [e.topicId, e])).values(),
@@ -9,9 +10,11 @@ export function RadarHighlights({
   data,
   onOpen,
   onExplore,
+  onMaterial,
 }: {
   data: Snapshot;
   onOpen: (id: string) => void;
+  onMaterial: (material: Material) => void;
   onExplore: () => void;
 }) {
   const editions = latestEditions(data).slice(0, 4);
@@ -31,6 +34,25 @@ export function RadarHighlights({
             {e.insight.title}
           </button>
           <p>{e.insight.summary}</p>
+          {i === 0 && e.insight.sections.length ? (
+            <div className="story-threads" aria-label="解读脉络">
+              {e.insight.sections.slice(0, 3).map((section, index) => (
+                <button
+                  key={`${index}:${section.heading}`}
+                  onClick={() => onOpen(e.id)}
+                >
+                  <span className="thread-number">
+                    {String(index + 1).padStart(2, "0")}
+                  </span>
+                  <span>
+                    <strong>{section.heading}</strong>
+                    <small>{section.sources.length} 份引用依据</small>
+                  </span>
+                  <ArrowUpRight size={16} />
+                </button>
+              ))}
+            </div>
+          ) : null}
           <div className="story-footer">
             <span>
               <BookOpen size={14} />
@@ -42,6 +64,46 @@ export function RadarHighlights({
           </div>
         </article>
       ))}
+      {editions[0]?.sources.length ? (
+        <div className="home-evidence">
+          <div className="trace-heading">
+            <span>本期材料</span>
+            <small>{editions[0].sources.length} 份</small>
+          </div>
+          {editions[0].sources.slice(0, 3).map((source) => (
+            <button
+              key={source.key}
+              onClick={() =>
+                onMaterial(
+                  data.materials.find(
+                    (m) =>
+                      m.id === source.reference.materialId &&
+                      m.version === source.reference.version,
+                  ) ?? {
+                    id: source.reference.materialId,
+                    version: source.reference.version,
+                    title: source.title,
+                    body: source.body,
+                    coverage: source.coverage,
+                    createdAt: editions[0].createdAt,
+                    url: source.url,
+                  },
+                )
+              }
+              title={source.title}
+            >
+              <span className="evidence-symbol">
+                <BookOpen size={16} />
+              </span>
+              <span>
+                <strong>{source.title}</strong>
+                <small>{coverageLabel(source.coverage)}</small>
+              </span>
+              <ArrowUpRight size={14} />
+            </button>
+          ))}
+        </div>
+      ) : null}
       <button className="quiet" onClick={onExplore}>
         全部观察
       </button>

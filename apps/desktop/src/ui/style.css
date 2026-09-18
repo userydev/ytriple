@@ -151,15 +151,9 @@ small,
   gap: 23px;
 }
 .brand {
-  height: 34px;
+  height: 38px;
   width: 34px;
-  background: #4361d7;
-  color: #fff;
-  border-radius: 9px;
-  text-align: center;
-  font-weight: 650;
-  font-size: 23px;
-  line-height: 32px;
+  object-fit: contain;
 }
 .navigation nav {
   display: flex;
@@ -255,13 +249,13 @@ small,
   margin-bottom: 0;
 }
 .home-content {
-  max-width: 1260px;
+  max-width: 1200px;
   margin: auto;
 }
 .dashboard {
   display: grid;
-  grid-template-columns: minmax(260px, 0.85fr) minmax(340px, 1.35fr);
-  gap: 34px;
+  grid-template-columns: minmax(320px, 0.92fr) minmax(390px, 1.28fr);
+  gap: 40px;
   align-items: start;
 }
 .dashboard .section-heading {
@@ -342,9 +336,9 @@ small,
   overflow: hidden;
 }
 .lead-story {
-  padding: 26px 28px;
-  border-radius: 18px;
-  background: #eef1fb;
+  padding: 28px 30px;
+  border-radius: 20px;
+  background: #edf1ec;
 }
 .lead-story .story-title {
   font-size: 24px;
@@ -2069,9 +2063,9 @@ a {
 }
 .page-intro h1 {
   margin: 7px 0 8px;
-  font-size: 28px;
+  font-size: 34px;
   font-weight: 600;
-  letter-spacing: -0.8px;
+  letter-spacing: -1.2px;
 }
 .page-intro p {
   color: #748199;
@@ -2199,8 +2193,8 @@ a {
   display: inline-flex;
   font-size: 10px;
   font-weight: 500;
-  color: #5970b5;
-  background: #e1e7f7;
+  color: #466653;
+  background: #e0e8de;
   border-radius: 5px;
   padding: 4px 7px;
   white-space: nowrap;
@@ -2475,6 +2469,272 @@ a {
 }
 .spinning {
   animation: ui-spin 1.4s linear infinite;
+}
+
+/* Work is a sequence of people and records, not another text excerpt. */
+.team-trace {
+  margin: 24px 0;
+  padding: 20px;
+  background: #f5f7f5;
+  border-radius: 14px;
+}
+.trace-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: #5b6c62;
+}
+.trace-heading small {
+  font-size: 11px;
+}
+.team-trace ol {
+  display: flex;
+  list-style: none;
+  margin: 22px 0 0;
+  padding: 0 0 4px;
+  overflow-x: auto;
+}
+.team-trace li {
+  flex: 1 0 86px;
+  position: relative;
+}
+.team-trace li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  height: 1px;
+  background: #d1dbd3;
+  top: 20px;
+  left: calc(50% + 26px);
+  width: calc(100% - 52px);
+}
+.team-trace li button {
+  background: transparent;
+  width: 100%;
+  padding: 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.team-trace li button:hover .trace-node {
+  box-shadow: 0 0 0 4px #e1e8df;
+}
+.team-trace li strong {
+  font-size: 12px;
+  font-weight: 550;
+  margin-top: 5px;
+}
+.team-trace li small {
+  font-size: 10px;
+}
+.trace-node {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #7c8584;
+  background: #e9ecea;
+  position: relative;
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+}
+.trace-node > svg {
+  position: absolute;
+  bottom: -1px;
+  right: -2px;
+  background: #f5f7f5;
+  border-radius: 50%;
+  width: 17px;
+  height: 17px;
+  padding: 2px;
+}
+.trace-node.succeeded {
+  background: #dfe9dd;
+  color: #496a51;
+}
+.trace-node.running {
+  background: #e3e8fa;
+  color: #4b66b2;
+}
+.trace-node.failed,
+.trace-node.unknown {
+  background: #f6e8e0;
+  color: #aa664d;
+}
+.trace-node.waiting {
+  background: #f2ead8;
+  color: #977744;
+}
+.work-card .team-trace {
+  margin: 24px -4px;
+  padding: 18px 12px;
+}
+.home-content .work-list article {
+  padding: 26px;
+  border-radius: 20px;
+}
+.home-content .work-card .work-title {
+  font-size: 20px;
+  line-height: 1.55;
+  margin: 16px 0 12px;
+}
+.home-content .work-excerpt {
+  max-height: 72px;
+  margin-bottom: 0;
+}
+.home-content .work-excerpt .markdown {
+  -webkit-line-clamp: 2;
+  font-size: 13px;
+}
+.home-content .continue-action {
+  background: #355b47;
+  color: white;
+  padding: 10px 14px;
+}
+.home-content .continue-action:hover {
+  background: #284a39;
+}
+.home-content .lead-story .story-title {
+  font-size: 26px;
+  line-height: 1.5;
+  color: #2c4137;
+}
+.home-content .lead-story > p {
+  color: #617068;
+  font-size: 13px;
+  line-height: 1.85;
+}
+.story-threads {
+  margin: 22px 0 10px;
+  display: grid;
+  gap: 3px;
+}
+.story-threads button {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  text-align: left;
+  justify-content: flex-start;
+  background: #ffffff80;
+  padding: 15px;
+  border-radius: 10px;
+}
+.story-threads button:hover {
+  background: #fff;
+}
+.story-threads .thread-number {
+  font-size: 12px;
+  color: #8a9a8c;
+  font-variant-numeric: tabular-nums;
+}
+.story-threads button > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+.story-threads strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 550;
+  color: #3d5747;
+}
+.story-threads small {
+  display: block;
+  font-size: 10px;
+  color: #7d8c80;
+  margin-top: 4px;
+}
+.story-threads svg {
+  flex: none;
+  color: #758d7b;
+}
+.home-evidence {
+  padding: 22px 4px 0;
+}
+.home-evidence > .trace-heading {
+  margin-bottom: 10px;
+}
+.home-evidence > button {
+  display: flex;
+  width: 100%;
+  gap: 12px;
+  align-items: center;
+  background: transparent;
+  text-align: left;
+  padding: 10px 0;
+}
+.home-evidence > button > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+}
+.home-evidence strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+}
+.home-evidence small {
+  display: block;
+  font-size: 10px;
+  margin-top: 4px;
+}
+.home-evidence .evidence-symbol {
+  width: 32px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  background: #edf0f1;
+  border-radius: 7px;
+  color: #899793;
+  flex: none;
+}
+.home-evidence > button:hover strong {
+  color: #355b47;
+}
+.home-evidence > button > svg {
+  color: #97a19c;
+  flex: none;
+}
+.process-record {
+  scroll-margin-top: 20px;
+}
+.process-pane > .process-run {
+  max-width: 900px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.process-run .process-record {
+  padding: 20px;
+  margin-top: 12px;
+  background: #fff;
+  border-radius: 14px;
+}
+.process-run .process-record.selected {
+  background: #f0f4ef;
+}
+.process-record > .section-heading {
+  margin-bottom: 8px;
+}
+.process-record > .muted {
+  margin-bottom: 10px;
+}
+.record-analysis > summary {
+  cursor: pointer;
+  color: #557462;
+  font-size: 12px;
+  padding: 6px 0;
+}
+.record-analysis > [data-contribution-id] {
+  margin-top: 16px;
+  font-size: 14px;
+  line-height: 1.85;
+}
+.record-identity {
+  margin-top: 14px;
+  color: #8a9490;
 }
 @keyframes ui-spin {
   to {

@@ -1,3 +1,5 @@
+import productMark from "../../../../assets/product-mark.svg?url";
+import { TeamTrace } from "./TeamTrace";
 import { UnknownRunActions } from "./UnknownRunActions";
 import { outcomeSnapshotChanged } from "../core/outcome-contract";
 import { scheduleProblem } from "../core/schedule-contract";
@@ -481,13 +483,35 @@ function App() {
                   <Markdown>{v.body}</Markdown>
                 </div>
               ) : null}
+              {r ? (
+                <TeamTrace
+                  compact
+                  run={r}
+                  records={data!.contributions}
+                  onRecord={(id) => {
+                    openWork(w.id);
+                    setProcessFocus([id]);
+                    setImmersive(true);
+                    viewState.update(w.id, { focused: "process" });
+                  }}
+                />
+              ) : null}
               <div className="work-card-actions">
                 <button
                   className="continue-action"
-                  onClick={() => openWork(w.id)}
+                  onClick={() => {
+                    openWork(w.id);
+                    if (!pending) {
+                      setImmersive(true);
+                      viewState.update(w.id, {
+                        focused: null,
+                        surface: "process",
+                      });
+                    }
+                  }}
                 >
-                  {pending ? "回答问题" : "继续工作"}
-                  <ArrowRight size={15} />
+                  <PanelsTopLeft size={16} />
+                  {pending ? "回答问题" : "团队工作区"}
                 </button>
                 {!w.completedAt &&
                 !w.archived &&
@@ -932,7 +956,7 @@ function App() {
           >
             <Menu size={21} />
           </IconButton>
-          <div className="brand">y</div>
+          <img className="brand" src={productMark} alt="ytriple" />
           <nav>
             {(Object.keys(names) as Page[]).map((p) => {
               const Icon = icons[p];
@@ -1032,7 +1056,7 @@ function App() {
               <div className="home-content">
                 <header className="page-intro">
                   <div>
-                    <span className="eyebrow">WORKSPACE</span>
+                    <span className="eyebrow">YTRIPLE / WORKSPACE</span>
                     <h1>你的工作台</h1>
                     <p>接续手头的工作，也看看新的变化。</p>
                   </div>
@@ -1149,6 +1173,7 @@ function App() {
                     </div>
 
                     <RadarHighlights
+                      onMaterial={setReading}
                       data={data}
                       onOpen={openRadar}
                       onExplore={() => openRadar(null)}
