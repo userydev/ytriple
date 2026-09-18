@@ -624,9 +624,9 @@ export function RadarPanel({
         </>
       ) : (
         <>
-          <div className="section-heading">
+          <div className="section-heading page-intro">
             <div>
-              <small>RADAR</small>
+              <span className="eyebrow">RADAR</span>
               <h1>观察与理解</h1>
             </div>
             <div className="tool-group">

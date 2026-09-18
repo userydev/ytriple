@@ -25,6 +25,12 @@ import {
   FileText,
   ChevronDown,
   Pencil,
+  Sparkles,
+  LoaderCircle,
+  Folder,
+  Radar,
+  MessageSquare,
+  ClipboardList,
 } from "lucide-react";
 import { command } from "./api";
 import { References } from "./References";
@@ -57,6 +63,7 @@ export function Composer({
   projectId,
   deliveryId,
   immersive,
+  surface = "home",
   onExpand,
   onWork,
   onContext,
@@ -70,6 +77,7 @@ export function Composer({
   projectId: string | null;
   deliveryId?: string | null;
   immersive: boolean;
+  surface?: "home" | "radar" | "projects" | "assets" | "schedules" | "settings";
   onExpand: () => void;
   onWork: (id: string) => void;
   onContext: (id: string) => void;
@@ -83,6 +91,7 @@ export function Composer({
     initial?.skillKeys ?? [],
   );
   const [showSkills, setShowSkills] = useState(false);
+  const [focused, setFocused] = useState(false);
   const [outputMode, setOutputMode] = useState(initial?.outputMode ?? "result");
   const [text, setText] = useState(initial?.text ?? "");
   const [refs, setRefs] = useState<Reference[]>([
@@ -108,7 +117,7 @@ export function Composer({
       el.style.height = "auto";
       el.style.height = Math.min(el.scrollHeight, 220) + "px";
     }
-  }, [text]);
+  }, [text, focused, immersive, menu, refs.length]);
   useEffect(() => {
     if (!menu) return;
     menuOpener.current =
@@ -243,6 +252,54 @@ export function Composer({
         }),
       }
     : null;
+  const expandedInput =
+    immersive ||
+    !!work ||
+    focused ||
+    !!text ||
+    refs.length > 0 ||
+    skillKeys.length > 0 ||
+    !!menu ||
+    outputMode !== "result";
+  const inputState = running
+    ? "running"
+    : refs.length
+      ? "referenced"
+      : work
+        ? "continuing"
+        : project
+          ? "project"
+          : "new";
+  const delivery = data.deliveries.find((d) => d.id === actualDeliveryId);
+  const contextLabel =
+    work?.title ??
+    (surface === "radar"
+      ? "围绕这篇解读"
+      : (delivery?.title ?? project?.name ?? "新工作"));
+  const placeholder = running
+    ? "补充下一轮要处理的内容…"
+    : recipient
+      ? `给${team.members.find((m) => m.id === recipient)?.name ?? "成员"}的补充…`
+      : refs.length
+        ? work
+          ? "想怎样调整？写下修改意见…"
+          : "基于这些材料，你想进一步做什么？"
+        : work
+          ? "继续讨论，或告诉团队下一步…"
+          : delivery
+            ? `围绕「${delivery.title}」推进什么？`
+            : project
+              ? `为「${project.name}」开始一项工作…`
+              : "有什么想法，交给团队一起完成…";
+  const ContextIcon = running
+    ? LoaderCircle
+    : surface === "radar"
+      ? Radar
+      : work
+        ? MessageSquare
+        : project
+          ? Folder
+          : Sparkles;
   const decision = data.decisions.find(
     (d) => d.workId === context && d.status === "pending",
   );
@@ -262,33 +319,48 @@ export function Composer({
     );
   return (
     <section
-      className="composer"
+      className={`composer ${expandedInput ? "is-expanded" : "is-compact"} ${immersive ? "in-workspace" : ""}`}
+      data-state={inputState}
       ref={root}
+      onFocusCapture={(e) => {
+        if (e.target === textarea.current) setFocused(true);
+      }}
+      onBlurCapture={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null))
+          setFocused(false);
+      }}
       aria-label="对话输入"
       onKeyDown={(e) => {
-        if (e.key === "Escape" && menu) {
-          e.stopPropagation();
-          setMenu(null);
-          menuOpener.current?.focus();
+        if (e.key === "Escape") {
+          if (menu) {
+            e.stopPropagation();
+            setMenu(null);
+            menuOpener.current?.focus();
+          } else if (!text && !refs.length && !work) {
+            textarea.current?.blur();
+            setFocused(false);
+          }
         }
       }}
     >
       <div className="composer-context">
         <button
-          className="quiet"
+          className="quiet composer-identity"
+          aria-expanded={menu === "work"}
+          title={contextLabel}
           onClick={() => setMenu(menu === "work" ? null : "work")}
         >
-          {work?.title ?? "新工作"}
+          <ContextIcon size={15} className={running ? "spinning" : ""} />
+          <span>{contextLabel}</span>
           <ChevronDown size={13} />
         </button>
         {projectContext ? (
-          <button
-            className="quiet"
+          <IconButton
+            label={`项目要求 · ${projectContext.standards.length} 条标准`}
             onClick={() => setShowProject(true)}
-            title="查看发送时将沿用的项目目标、标准与资料"
           >
-            项目要求 · {projectContext.standards.length} 条
-          </button>
+            <ClipboardList size={16} />
+          </IconButton>
         ) : null}
         {outputMode !== "result" ? (
           <span className="output-mode">
@@ -306,7 +378,13 @@ export function Composer({
             </IconButton>
           </span>
         ) : null}
-        {running ? <span className="muted">处理中</span> : null}
+        {running ? (
+          <span className="composer-state" role="status">
+            团队处理中
+          </span>
+        ) : work ? (
+          <span className="composer-state">继续工作</span>
+        ) : null}
         {work?.archived ? (
           <span className="muted">已归档</span>
         ) : work?.completedAt ? (
@@ -424,8 +502,8 @@ export function Composer({
         aria-label="工作目标或补充"
         disabled={busy}
         value={text}
-        rows={2}
-        placeholder={work ? "继续这项工作…" : "交给团队一件事…"}
+        rows={1}
+        placeholder={placeholder}
         onChange={(e) => change(e.target.value)}
         onKeyDown={(e) => {
           if (
@@ -442,6 +520,7 @@ export function Composer({
         <div className="tool-group">
           <IconButton
             label="添加材料"
+            className="attach-trigger"
             aria-expanded={menu === "add"}
             onClick={() => setMenu(menu === "add" ? null : "add")}
           >
@@ -449,6 +528,7 @@ export function Composer({
           </IconButton>
           <IconButton
             label="选择本轮方法"
+            className="extended-tool"
             disabled={busy}
             aria-haspopup="dialog"
             onClick={() => setShowSkills(true)}
@@ -457,6 +537,7 @@ export function Composer({
           </IconButton>
           <IconButton
             label="交流对象"
+            className="extended-tool"
             aria-expanded={menu === "people"}
             onClick={() => setMenu(menu === "people" ? null : "people")}
           >
@@ -466,11 +547,12 @@ export function Composer({
         <div className="tool-group">
           <IconButton
             label={immersive ? "收起工作区" : "展开团队工作区"}
+            className="workspace-trigger"
             onClick={() => {
               void save().then(onExpand).catch(onError);
             }}
           >
-            <PanelsTopLeft size={18} />
+            <PanelsTopLeft size={19} />
           </IconButton>
           {running ? (
             <IconButton
