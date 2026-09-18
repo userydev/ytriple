@@ -1,5 +1,23 @@
 # ytriple 开发与验证记录
 
+## 2026-09-17 · F2 AI 调用与恢复完成（服务发布日 UTC 2026-09-18）
+
+**交付组合**：ytriple 功能提交 `55caa5c`、稳定签名提交 `a1ef152`，最终 macOS arm64 构建 `419a7b7fbf22b848`；ycore 提交 `cb0bf36`，现役 API/worker 同镜像 `dev-20260918-cb0bf36`。F1 提交分别为 `b9dbf49` / `a4ca8ff`。只提交 dev，未推送或改 main。
+
+- 客户端对畸形 SSE、首事件丢失、EOF 未收到终态以及 `PROVIDER_ERROR` / `EXECUTION_LOST` 保留未知状态，支持按原运行或幂等键查询；负责人不会越过状态未知的子任务继续生成。定时调用记录保留 attempted，不误写失败或零费用。EOF 尾帧可解析，但单独 EOF 仍不能证明成功。
+- 服务端终态仅可从 running 条件写入；失联恢复已写 unknown 后，迟到模型结果无法覆盖它。SSE completed 只在成功落库后发送。主体级事务锁限制同一身份跨 stream/JSON 最多 4 个 queued/running；第五个返回 429 CONCURRENCY_LIMITED，重复键优先复用，终态释放并发位。没有新迁移。
+- **真实个人账号 + 公网模型**：原始响应被有意吞掉，客户端无首事件/无远端 ID 时保留 unknown；新进程重开同一 SQLite，按原键取回 `99821ca2-5ebe-43b8-852d-1c3f107f7c6b`，恢复到原工作 `d1683d71-2670-4d81-a290-cd05ef581d57` / 成员贡献 `ef1f5463-f48e-46ba-9c95-21c30fabe48f:0`，生成一份原成果；恢复阶段 POST 数为 0。故障注入只发生在客户端传输，模型和远端持久结果均为真实。
+- **真实后台 JSON**：worker 暂停后提交 `2a03e7ec-8f2a-417e-a1ff-39baf102c980`，重复提交返回同一 queued run；重启 API/worker 后该运行成功返回 `{status:ok}`。此恢复先在旧兼容服务上验证；更新至当前发布后再次只读查询同一历史结果成功。
+- **当前发布负向验证**：授权预算不足 429 GRANT_BUDGET_EXCEEDED；撤销后 403 GRANT_UNAVAILABLE。5 个同时后台请求仅接纳 4 个，满额重复同键仍复用；执行前撤销授权，重启 worker 后四条全部 failed/GRANT_UNAVAILABLE，无供应商调用。相关脚本和去秘密证据在 ytriple `.local/f2/`。
+- 最终 F2 安装候选连接当前发布，设置内真实流式测试 `92e4bc14-8055-4930-87ec-378447999ff7` 成功（7 输入 / 97 输出 tokens）；本轮共 5 次真实模型调用，其中 1 次为失败 harness 所触发的独立调用。四个撤销授权任务未执行供应商调用。费用字段均未知。
+- **自动检查**：桌面 174 测试、私有服务 18 测试、ycore 36 测试及各自类型检查通过。隔离 Postgres 中真实执行子进程 SIGKILL，模拟越过 5 分钟窗口后恢复 unknown，未重发模型；覆盖终态落库先于 completed、并发、授权、跨主体及迟到结果竞态。此故障矩阵模型为明确 fixture，不冒充线上强杀真实模型。
+- **部署与回退**：发布前无 queued/running AI；源码归档 SHA-256 `8c3732997a0a9808eed65e1f08a34549a5dbbe6797c3c7cd32aa9db16ca95840`，镜像 ID `sha256:e39f9428af3de5c3059eedb82cf0320ddcf125220d8641aaf0aec4446ad88a00`。只替换 API/worker，Caddy、凭据及数据库不变；API healthy。服务回退到 `dev-20260917-0f85bcb`，桌面旧 F1 包保留在 ytriple `.local/f2/previous-d0d6201233a73536.app`。本机签名与 DMG 校验通过，未公开发布/公证。
+- **钥匙串重复提示修复**：原 ad-hoc 包的 DR 绑定 CDHash，每次构建变化会触发重新授权。改为本机持久自签名代码签名身份，DR 固定为 bundle ID + 证书根；两次不同 CDHash 构建验证相同身份。最终包已安装，首次签名迁移后再次退出/启动未出现授权阻塞，个人账号自动恢复并连接。safeStorage 保持加密，未放宽钥匙串 ACL、未加系统信任根。独立签名钥匙串/私钥在本机 ~/.config/ytriple/signing，仓库只读忽略的配置，发布包不含私钥。首次从旧临时签名迁移仍可能需一次“始终允许”；系统锁定等独立认证不在免提示承诺内。
+- 仍无后台 JSON 取消 API；unknown/cancelled 均不意味着零费用。失联扫描为超过 5 分钟后由 worker 每分钟检查，不承诺立刻确认停止。F3 信息来源、F4 产品后台工作接续及 F5 长期运行保障仍未完成，不计入本次目标。
+
+验证脚本曾有两处 harness 问题（错误类型不模拟 fetch、重复提交后未等本地 pump 结束即关闭 SQLite）；已保留原失败记录，修正后通过。首次 harness 的真实调用单独保留，不把它计为恢复成功，不重发原 key。
+
+
 ## 2026-09-17 · F1 真实个人账号与日常连接完成
 
 - 在现有 ycore-dev Supabase Auth 创建首个获准测试用户 `userydev@gmail.com`，通过 Admin API 确认邮箱，授予 ytriple 的 information:read / ai:invoke / product:access。每日测试额度 100 次、200000 预算单位，无付费套餐。密码仅交给托管 Auth，未进入源码、日志或文档；桌面保存系统加密会话。
