@@ -34,7 +34,9 @@ import {
   safeStorage,
   session,
   shell,
+  nativeImage,
 } from "electron";
+declare const __YTRIPLE_DOCK_ICON__: string;
 import { readFile, writeFile, stat } from "node:fs/promises";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, resolve, extname, basename } from "node:path";
@@ -262,6 +264,7 @@ app.on("second-instance", () => {
 app
   .whenReady()
   .then(async () => {
+    app.dock?.setIcon(nativeImage.createFromDataURL(__YTRIPLE_DOCK_ICON__));
     const baseDataDir = app.getPath("userData");
     mkdirSync(baseDataDir, { recursive: true, mode: 0o700 });
     backups = new WorkspaceBackups(baseDataDir);

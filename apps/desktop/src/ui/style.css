@@ -140,25 +140,25 @@ small,
   overflow: hidden;
 }
 .navigation {
-  width: 78px;
+  width: 60px;
   background: #fff;
   border-right: 0;
   flex: none;
   display: flex;
   align-items: center;
   flex-direction: column;
-  padding: 20px 10px 15px;
-  gap: 23px;
+  padding: 12px 8px;
+  gap: 16px;
 }
 .brand {
-  height: 38px;
-  width: 34px;
+  height: 30px;
+  width: 26px;
   object-fit: contain;
 }
 .navigation nav {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 5px;
   width: 100%;
   flex: 1;
 }
@@ -166,8 +166,9 @@ small,
   background: transparent;
   border: 0;
   flex-direction: column;
-  padding: 10px 0;
-  gap: 3px;
+  height: 40px;
+  padding: 8px 0;
+  gap: 0;
   font-size: 11px;
   color: #7b818a;
 }
@@ -184,14 +185,31 @@ small,
   white-space: nowrap;
 }
 .nav-wide .navigation {
-  width: 160px;
+  width: 184px;
 }
 .nav-wide .navigation nav button {
   flex-direction: row;
   justify-content: flex-start;
-  padding-left: 14px;
+  padding-left: 12px;
   font-size: 13px;
-  gap: 14px;
+  gap: 12px;
+}
+.navigation .brand-toggle {
+  width: 40px;
+  height: 40px;
+  padding: 4px;
+  align-self: flex-start;
+}
+.navigation nav button span,
+.navigation .local-label {
+  display: none;
+}
+.nav-wide .navigation nav button span,
+.nav-wide .navigation .local-label {
+  display: block;
+}
+.nav-wide .navigation .local-label {
+  padding: 0 8px;
 }
 .workspace {
   flex: 1;
@@ -232,7 +250,7 @@ small,
 .page {
   overflow: auto;
   flex: 1;
-  padding: 32px 42px 36px;
+  padding: 24px 32px 28px;
   min-height: 0;
   scrollbar-gutter: stable;
   position: relative;
@@ -255,12 +273,12 @@ small,
 .dashboard {
   display: grid;
   grid-template-columns: minmax(320px, 0.92fr) minmax(390px, 1.28fr);
-  gap: 40px;
+  gap: 24px;
   align-items: start;
 }
 .dashboard .section-heading {
-  margin-bottom: 18px;
-  min-height: 34px;
+  margin-bottom: 12px;
+  min-height: 30px;
 }
 .dashboard .section-heading h2 {
   display: flex;
@@ -336,7 +354,7 @@ small,
   overflow: hidden;
 }
 .lead-story {
-  padding: 28px 30px;
+  padding: 22px 24px;
   border-radius: 20px;
   background: #edf1ec;
 }
@@ -2059,7 +2077,7 @@ a {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  margin-bottom: 30px;
+  margin-bottom: 20px;
 }
 .page-intro h1 {
   margin: 7px 0 8px;
@@ -2492,7 +2510,7 @@ a {
 .team-trace ol {
   display: flex;
   list-style: none;
-  margin: 22px 0 0;
+  margin: 16px 0 0;
   padding: 0 0 4px;
   overflow-x: auto;
 }
@@ -2568,11 +2586,11 @@ a {
   color: #977744;
 }
 .work-card .team-trace {
-  margin: 24px -4px;
-  padding: 18px 12px;
+  margin: 18px -2px;
+  padding: 14px 10px;
 }
 .home-content .work-list article {
-  padding: 26px;
+  padding: 22px;
   border-radius: 20px;
 }
 .home-content .work-card .work-title {

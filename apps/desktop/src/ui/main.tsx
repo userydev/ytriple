@@ -18,7 +18,6 @@ import {
 import { createRoot } from "react-dom/client";
 import Markdown from "./Markdown";
 import {
-  Menu,
   House,
   Radar,
   Folder,
@@ -951,13 +950,15 @@ function App() {
       {!immersive ? (
         <aside className="navigation">
           <IconButton
-            label="展开或收起导航"
+            label={expanded ? "收起导航" : "展开导航"}
+            aria-expanded={expanded}
+            aria-controls="primary-navigation"
+            className="brand-toggle"
             onClick={() => setExpanded((v) => !v)}
           >
-            <Menu size={21} />
+            <img className="brand" src={productMark} alt="" />
           </IconButton>
-          <img className="brand" src={productMark} alt="ytriple" />
-          <nav>
+          <nav id="primary-navigation" aria-label="主导航">
             {(Object.keys(names) as Page[]).map((p) => {
               const Icon = icons[p];
               return (
@@ -966,6 +967,7 @@ function App() {
                   className={page === p ? "selected" : ""}
                   aria-current={page === p ? "page" : undefined}
                   title={names[p]}
+                  aria-label={names[p]}
                   onClick={() => navigate(p)}
                 >
                   <Icon size={21} />
