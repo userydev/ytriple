@@ -20,6 +20,8 @@ class EditorialFixture implements Model {
   calls = 0;
   lookups = 0;
   interrupt = false;
+  protocolError = false;
+  terminalError?: "EXECUTION_LOST" | "PROVIDER_ERROR";
   noChange = false;
   corrupt = false;
   output = "";
@@ -65,7 +67,22 @@ class EditorialFixture implements Model {
       text: this.interrupt ? this.output.slice(0, 15) : this.output,
     };
     if (this.interrupt)
-      throw new ServiceError("STREAM_INTERRUPTED", "fixture interrupted", key);
+      throw new ServiceError(
+        this.protocolError ? "INVALID_STREAM" : "STREAM_INTERRUPTED",
+        "fixture interrupted",
+        key,
+      );
+    if (this.terminalError) {
+      yield {
+        type: "run.failed",
+        run_id: key,
+        error: {
+          code: this.terminalError,
+          message: "billing and result are not confirmed",
+        },
+      };
+      return;
+    }
     yield { type: "run.completed", run_id: key };
   }
   async lookup() {
@@ -289,6 +306,7 @@ test("explicitly retaining a duplicate keeps its text but never removes the dupl
 test("radar recovers a lost first event through read-only key lookup using the actual ycore result envelope", async () => {
   const { store, radar, model, topic } = setup();
   model.interrupt = true;
+  model.protocolError = true;
   const job = radar.refresh(topic.id);
   await radar.settled(job.id);
   const remoteId = randomUUID();
@@ -367,4 +385,25 @@ test("missing or uncertain original radar runs never start replacement calls or 
   assert.equal(keyQueries, 2);
   assert.equal(model.calls, 1);
   store.close();
+});
+
+test("radar keeps execution-lost and provider-unknown terminal events recoverable", async () => {
+  for (const code of ["EXECUTION_LOST", "PROVIDER_ERROR"] as const) {
+    const { store, radar, model, topic } = setup();
+    model.terminalError = code;
+    const job = radar.refresh(topic.id);
+    await radar.settled(job.id);
+    assert.equal(
+      store.require<RadarJob>("radar-job", job.id).status,
+      "unknown",
+    );
+    await radar.reconcile(job.id);
+    assert.equal(
+      store.require<RadarJob>("radar-job", job.id).status,
+      "succeeded",
+    );
+    assert.equal(model.calls, 1);
+    assert.equal(model.lookups, 1);
+    store.close();
+  }
 });

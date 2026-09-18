@@ -12,7 +12,12 @@ import type { Store } from "./store";
 import type { Contribution, Decision, Member, Reference, Run } from "./types";
 import { Decisions, decisionInstruction, parseDecision } from "./decisions";
 import { outputInstruction } from "./output";
-import { ServiceError, type Model, type Prompt } from "./ycore";
+import {
+  isUncertainExecution,
+  ServiceError,
+  type Model,
+  type Prompt,
+} from "./ycore";
 const requestSchema = z
   .object({
     memberId: z.string().min(1).max(80),
@@ -211,11 +216,12 @@ export class DelegationRunner {
           c.remoteId = event.run_id;
           if (event.type === "text.delta") c.body += event.text ?? "";
           if (event.type === "run.failed") {
-            c.status = "failed";
+            const uncertain = isUncertainExecution(event.error?.code);
+            c.status = uncertain ? "unknown" : "failed";
             c.error = event.error?.message ?? "子任务失败";
             this.store.put("contribution", id, c);
             this.changed(c);
-            if (input.depth > 0) return c;
+            if (input.depth > 0 && !uncertain) return c;
             throw new ServiceError(
               event.error?.code ?? "MODEL_FAILED",
               event.error?.message ?? "子任务失败",

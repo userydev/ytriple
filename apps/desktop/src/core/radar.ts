@@ -1,6 +1,11 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Store } from "./store";
-import { ServiceError, type Model, type Prompt } from "./ycore";
+import {
+  isUncertainExecution,
+  ServiceError,
+  type Model,
+  type Prompt,
+} from "./ycore";
 import type { Material, Reference } from "./types";
 import type { FeedSource } from "./feed-contract";
 import type { RadarWatch } from "./radar-watch-contract";
@@ -331,8 +336,13 @@ sections 最多 5 节，全文控制在 1200 个中文字以内，摘要不超�
         controller.signal.aborted ||
         e instanceof TypeError ||
         (e instanceof DOMException && e.name === "TimeoutError") ||
+        (e instanceof ServiceError && isUncertainExecution(e.code)) ||
         (e instanceof ServiceError &&
-          ["STREAM_INTERRUPTED", "RUN_ALREADY_EXISTS"].includes(e.code));
+          [
+            "STREAM_INTERRUPTED",
+            "INVALID_STREAM",
+            "RUN_ALREADY_EXISTS",
+          ].includes(e.code));
       if (e instanceof ServiceError && e.runId) job.remoteId = e.runId;
       job.status = uncertain ? "unknown" : "failed";
       job.error = uncertain

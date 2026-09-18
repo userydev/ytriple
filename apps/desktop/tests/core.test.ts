@@ -230,6 +230,21 @@ test("SSE handles split UTF-8 and CRLF, and requires a terminal event", async ()
   c = new YCore(
     "https://service.example",
     "test",
+    streamFetch(
+      wire + 'event: run.completed\r\ndata: {"run_id":"r"}',
+    ) as typeof fetch,
+  );
+  const eofEvents = [];
+  for await (const event of c.stream(
+    prompt,
+    "fixed-key",
+    new AbortController().signal,
+  ))
+    eofEvents.push(event);
+  assert.equal(eofEvents.at(-1)?.type, "run.completed");
+  c = new YCore(
+    "https://service.example",
+    "test",
     streamFetch(wire) as typeof fetch,
   );
   await assert.rejects(async () => {
@@ -667,7 +682,7 @@ test("failed attachments and invalid excerpts cannot be silently dropped from fi
   s.close();
 });
 
-test("team recovery before the first event finds the same submitted stage without a new POST", async () => {
+test("invalid stream before the first event finds the same submitted stage without a new POST", async () => {
   const store = new Store(":memory:");
   let calls = 0;
   let lookups = 0;
@@ -675,7 +690,10 @@ test("team recovery before the first event finds the same submitted stage withou
     scope: "recovery-test",
     async *stream() {
       calls++;
-      throw new TypeError("connection lost before first event");
+      throw new ServiceError(
+        "INVALID_STREAM",
+        "invalid event before first server event",
+      );
     },
     async lookupByKey(key) {
       lookups++;
@@ -703,6 +721,43 @@ test("team recovery before the first event finds the same submitted stage withou
   assert.equal(calls, 1);
   assert.equal(lookups, 1);
   store.close();
+});
+
+test("execution-lost and provider-unknown terminal events retain the original run for recovery", async () => {
+  for (const code of ["EXECUTION_LOST", "PROVIDER_ERROR"]) {
+    const store = new Store(":memory:");
+    let calls = 0;
+    const remoteId = `remote-${code}`;
+    const model: Model = {
+      scope: "uncertain-terminal-test",
+      async *stream() {
+        calls++;
+        yield { type: "run.started", run_id: remoteId };
+        yield {
+          type: "run.failed",
+          run_id: remoteId,
+          error: { code, message: "billing and result are not confirmed" },
+        };
+      },
+      async lookup(id) {
+        assert.equal(id, remoteId);
+        return {
+          status: "succeeded",
+          result: { text: "已找回原运行结果" },
+          error: null,
+        };
+      },
+    };
+    const runtime = new Runtime(store, () => model);
+    const run = runtime.submit(input());
+    await runtime.settled(run.workId);
+    assert.equal(store.require<Run>("run", run.id).status, "unknown");
+    assert.equal(store.all<Contribution>("contribution")[0].status, "unknown");
+    await runtime.reconcile(run.id);
+    assert.equal(store.require<Run>("run", run.id).status, "queued");
+    assert.equal(calls, 1);
+    store.close();
+  }
 });
 
 test("stopping before the first server event remains uncertain until read-only recovery confirms cancellation", async () => {

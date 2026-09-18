@@ -43,6 +43,9 @@ export type StreamEvent = {
   text?: string;
   error?: { code: string; message: string };
 };
+export function isUncertainExecution(code: string | undefined) {
+  return code === "EXECUTION_LOST" || code === "PROVIDER_ERROR";
+}
 export interface Model {
   readonly identity?: import("./model-contract").ModelIdentity;
   readonly recovery?: "remote" | "local";
@@ -331,6 +334,7 @@ export class YCore implements Model {
         buffer += done
           ? decoder.decode()
           : decoder.decode(value, { stream: true });
+        if (done && buffer.trim()) buffer += "\n\n";
         let match: RegExpExecArray | null;
         while ((match = /\r?\n\r?\n/.exec(buffer))) {
           const frame = buffer.slice(0, match.index);
@@ -354,26 +358,44 @@ export class YCore implements Model {
             ].includes(type)
           )
             continue;
-          const parsed = z
-            .object({
-              run_id: z.string(),
-              text: z.string().optional(),
-              error: z
-                .object({ code: z.string(), message: z.string() })
-                .passthrough()
-                .optional(),
-            })
-            .parse(JSON.parse(data));
+          let parsed: {
+            run_id: string;
+            text?: string;
+            error?: { code: string; message: string };
+          };
+          try {
+            parsed = z
+              .object({
+                run_id: z.string(),
+                text: z.string().optional(),
+                error: z
+                  .object({ code: z.string(), message: z.string() })
+                  .passthrough()
+                  .optional(),
+              })
+              .parse(JSON.parse(data));
+          } catch {
+            throw new ServiceError(
+              "INVALID_STREAM",
+              "服务返回的事件格式无效；请核对原运行",
+              runId,
+            );
+          }
           if (runId && runId !== parsed.run_id)
             throw new ServiceError(
               "INVALID_STREAM",
               "数据流的运行标识发生变化",
+              runId,
             );
           runId = parsed.run_id;
           if (terminal)
-            throw new ServiceError("INVALID_STREAM", "终态后收到额外输出");
+            throw new ServiceError(
+              "INVALID_STREAM",
+              "终态后收到额外输出",
+              runId,
+            );
           if (type === "text.delta" && parsed.text === undefined)
-            throw new ServiceError("INVALID_STREAM", "输出片段缺少正文");
+            throw new ServiceError("INVALID_STREAM", "输出片段缺少正文", runId);
           terminal = type === "run.completed" || type === "run.failed";
           yield { ...parsed, type: type as StreamEvent["type"] };
         }

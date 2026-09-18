@@ -39,7 +39,9 @@ const delegate = (memberId = "researcher", references = [1]) =>
 class Script implements Model {
   prompts: Prompt[] = [];
   keys: string[] = [];
-  constructor(readonly output: (p: Prompt, n: number) => string | "FAIL") {}
+  constructor(
+    readonly output: (p: Prompt, n: number) => string | "FAIL" | "UNKNOWN",
+  ) {}
   async *stream(p: Prompt, key: string): AsyncGenerator<StreamEvent> {
     this.prompts.push(p);
     this.keys.push(key);
@@ -50,6 +52,17 @@ class Script implements Model {
         type: "run.failed",
         run_id: key,
         error: { code: "MODEL_FAILED", message: "测试子任务确定失败" },
+      };
+      return;
+    }
+    if (body === "UNKNOWN") {
+      yield {
+        type: "run.failed",
+        run_id: key,
+        error: {
+          code: "PROVIDER_ERROR",
+          message: "测试供应商结果与费用未知",
+        },
       };
       return;
     }
@@ -343,6 +356,30 @@ test("confirmed child failures return as failures for the owner to handle, while
         .length,
       2,
     );
+  } finally {
+    f.store.close();
+  }
+});
+test("provider-unknown child stops its owner and remains recoverable", async () => {
+  const f = fixture();
+  try {
+    const model = new Script((p) =>
+      p.taskId.includes(":d:")
+        ? "UNKNOWN"
+        : p.taskId.endsWith(":t0:a0")
+          ? delegate()
+          : "不应在未知子任务后继续",
+    );
+    const runtime = new Runtime(f.store, () => model),
+      run = runtime.submit(request({ refs: f.refs }));
+    await runtime.settled(run.workId);
+    assert.equal(f.store.require<Run>("run", run.id).status, "unknown");
+    assert.equal(model.prompts.length, 2);
+    const child = f.store
+      .all<Contribution>("contribution")
+      .find((c) => c.task?.depth === 1)!;
+    assert.equal(child.status, "unknown");
+    assert.equal(child.error, "测试供应商结果与费用未知");
   } finally {
     f.store.close();
   }

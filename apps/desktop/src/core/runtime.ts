@@ -4,7 +4,12 @@ import { resultKind, outputInstruction, versionLabel } from "./output";
 import { formatProjectContext } from "./projects";
 import { Decisions, decisionInstruction, parseDecision } from "./decisions";
 import { Store } from "./store";
-import { ServiceError, type Model, type Prompt } from "./ycore";
+import {
+  isUncertainExecution,
+  ServiceError,
+  type Model,
+  type Prompt,
+} from "./ycore";
 import type {
   ArtifactVersion,
   Contribution,
@@ -78,7 +83,11 @@ export class Runtime {
         for await (const event of model.stream(prompt, key, signal)) {
           call.remoteId = event.run_id;
           if (event.type === "run.completed") call.state = "completed";
-          if (event.type === "run.failed") call.state = "failed";
+          if (
+            event.type === "run.failed" &&
+            !isUncertainExecution(event.error?.code)
+          )
+            call.state = "failed";
           store.put("model-call", id, call);
           yield event;
         }
@@ -560,8 +569,13 @@ ${outputInstruction(run.outputMode)}`,
         const uncertain =
           e instanceof TypeError ||
           (e instanceof DOMException && e.name === "TimeoutError") ||
+          (e instanceof ServiceError && isUncertainExecution(e.code)) ||
           (e instanceof ServiceError &&
-            ["STREAM_INTERRUPTED", "RUN_ALREADY_EXISTS"].includes(e.code));
+            [
+              "STREAM_INTERRUPTED",
+              "INVALID_STREAM",
+              "RUN_ALREADY_EXISTS",
+            ].includes(e.code));
         const remoteStop =
           controller.signal.aborted &&
           !!contribution &&
