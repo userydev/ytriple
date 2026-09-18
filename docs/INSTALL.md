@@ -25,4 +25,20 @@
 
 `npm run check` 后执行 `npm run package:mac`。命令固定打包本机 arm64 平台，复制明确的运行文件并核对 ASAR 清单和逐文件哈希，校验嵌套签名及 DMG；输出 `manifest.json` 与 `SHA256SUMS`。构建标识包含运行内容、Electron 版本、图标、打包脚本和权限文件的摘要。打包不读取 `.env` 内容作为应用资源。
 
-本地开发包采用 ad-hoc 签名，不启用需要有效 Team ID 的发布运行时配置，未做 Apple 公证。它只用于本机验证，不能据此宣称互联网下载或另一台 Mac 的 Gatekeeper 验收完成。本轮机器没有有效发布签名身份。公开发行需要有效 Developer ID、相应 hardened runtime 配置、Apple 公证及另一台 Mac 的实际验证；不通过关闭 Gatekeeper 或删除隔离标记绕过验收。[Electron 签名说明](https://www.electronjs.org/docs/latest/tutorial/code-signing)
+本地开发包必须使用同一台机器上持久的自签名代码签名身份，不再回退到 ad-hoc。打包前同时设置 `YTRIPLE_SIGN_IDENTITY`（证书名称或 SHA-1）和 `YTRIPLE_SIGN_KEYCHAIN`（钥匙串绝对路径），或在仓库内创建不会提交的 `.local/macos-signing.json`：
+
+```json
+{
+  "identity": "ytriple Local Code Signing",
+  "keychain": "/绝对路径/ytriple-signing.keychain-db",
+  "passwordFile": "/绝对路径/keychain-password"
+}
+```
+
+`passwordFile` 可省略；钥匙串设置自动锁定时建议配置，或用 `YTRIPLE_SIGN_PASSWORD_FILE` 覆盖。密码文件必须是权限 `0600`、不进入仓库的小型普通文件，脚本仅用它解锁指定钥匙串，不写入安装包、manifest 或日志。
+
+脚本从指定钥匙串的 matching identities 中精确选择证书，自签名证书不需要成为系统全局 trust root。证书 SHA-256 纳入 buildId；实际应用签名证书、CDHash 和 designated requirement 会在打包后核验并写入外层 manifest。缺少或不匹配的稳定身份会停止打包，不会改用 ad-hoc。
+
+从旧 ad-hoc 安装包首次替换为固定自签名包时，macOS 钥匙串可能要求一次迁移授权；确认是本机新构建的 `work.ydev.ytriple` 后允许即可。后续构建保持同一证书和 designated requirement，正常情况下不应每次重新询问。不要放宽钥匙串 ACL、信任任意应用、改存明文凭据或把证书添加为系统全局 trust root；应用仍通过 `safeStorage` 使用登录钥匙串。
+
+这种签名只用于本机未公证验证，不启用需要有效 Team ID 的发布运行时配置，也不能据此宣称互联网下载或另一台 Mac 的 Gatekeeper 验收完成。公开发行仍需要有效 Developer ID、相应 hardened runtime 配置、Apple 公证及另一台 Mac 的实际验证；不通过关闭 Gatekeeper 或删除隔离标记绕过验收。[Electron 签名说明](https://www.electronjs.org/docs/latest/tutorial/code-signing)
