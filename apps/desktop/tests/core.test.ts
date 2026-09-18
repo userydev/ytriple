@@ -262,7 +262,11 @@ test("sync reads every snapshot page and persists revisions plus incremental cur
     id,
     revision,
     url: "https://example.com/" + id,
+    publisher: "Example",
     published_at: null,
+    discovered_at: "2026-09-18T00:00:00Z",
+    updated_at: "2026-09-18T00:00:00Z",
+    topics: ["technology"],
     content: {
       title: id,
       summary: "内容",
@@ -271,6 +275,17 @@ test("sync reads every snapshot page and persists revisions plus incremental cur
       coverage: "summary",
       full_article: false,
     },
+    provenance: [
+      {
+        source_id: "source-1",
+        adapter: "rss",
+        upstream_id: id,
+        discovered_at: "2026-09-18T00:00:00Z",
+        raw_ref: "raw-1",
+      },
+    ],
+    content_hash: `hash-${id}-${revision}`,
+    visibility: "public" as const,
   });
   let pages = 0;
   const fetcher = async (url: RequestInfo | URL) => {

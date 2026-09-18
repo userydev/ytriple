@@ -191,7 +191,25 @@ export type Material = {
     mode: OutputMode;
   };
   url?: string;
-  upstream?: { scope: string; id: string; revision: number };
+  upstream?: {
+    scope: string;
+    id: string;
+    revision: number;
+    publisher: string | null;
+    publishedAt: string | null;
+    discoveredAt: string;
+    updatedAt: string;
+    topics: string[];
+    provenance: {
+      sourceId: string;
+      adapter: string;
+      upstreamId: string | null;
+      discoveredAt: string;
+      rawRef: string;
+    }[];
+    contentHash: string;
+    fullArticle: false;
+  };
   createdAt: string;
 };
 export type Message = {

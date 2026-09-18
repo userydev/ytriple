@@ -7,7 +7,11 @@ const documentSchema = z.object({
   id: z.string(),
   revision: z.number().int().positive(),
   url: z.string(),
+  publisher: z.string().nullable(),
   published_at: z.string().nullable(),
+  discovered_at: z.string(),
+  updated_at: z.string(),
+  topics: z.array(z.string()),
   content: z.object({
     title: z.string(),
     summary: z.string().nullable(),
@@ -16,6 +20,17 @@ const documentSchema = z.object({
     coverage: z.enum(["title_only", "summary", "feed_content"]),
     full_article: z.literal(false),
   }),
+  provenance: z.array(
+    z.object({
+      source_id: z.string(),
+      adapter: z.string(),
+      upstream_id: z.string().nullable(),
+      discovered_at: z.string(),
+      raw_ref: z.string(),
+    }),
+  ),
+  content_hash: z.string(),
+  visibility: z.literal("public"),
 });
 const refSchema = z.object({
   id: z.string(),
@@ -426,8 +441,26 @@ export class YCore implements Model {
             : body,
         coverage: raw.content.coverage,
         url: raw.url,
-        upstream: { scope: this.scope, id: raw.id, revision: raw.revision },
-        createdAt: raw.published_at ?? new Date().toISOString(),
+        upstream: {
+          scope: this.scope,
+          id: raw.id,
+          revision: raw.revision,
+          publisher: raw.publisher,
+          publishedAt: raw.published_at,
+          discoveredAt: raw.discovered_at,
+          updatedAt: raw.updated_at,
+          topics: raw.topics,
+          provenance: raw.provenance.map((entry) => ({
+            sourceId: entry.source_id,
+            adapter: entry.adapter,
+            upstreamId: entry.upstream_id,
+            discoveredAt: entry.discovered_at,
+            rawRef: entry.raw_ref,
+          })),
+          contentHash: raw.content_hash,
+          fullArticle: raw.content.full_article,
+        },
+        createdAt: raw.published_at ?? raw.discovered_at,
       };
       store.put("material", `${id}@${m.version}`, m);
     };
@@ -446,7 +479,7 @@ export class YCore implements Model {
       })
       .parse(await (await this.request("/v1/sources")).json());
     store.put<Source[]>("meta", "sources", sources.data);
-    if (!cursor) {
+    const snapshot = async () => {
       let next: string | null = null;
       let sync: string | undefined;
       do {
@@ -471,10 +504,11 @@ export class YCore implements Model {
       } while (next);
       cursor = sync!;
       store.put("meta", key, cursor);
-    }
-    try {
+    };
+    const increments = async () => {
       let more = true;
       while (more) {
+        if (!cursor) throw Error("材料增量游标缺失");
         const p = z
           .object({
             data: z.array(
@@ -501,15 +535,19 @@ export class YCore implements Model {
         cursor = p.next_cursor;
         more = p.has_more;
       }
+    };
+    if (!cursor) await snapshot();
+    try {
+      await increments();
     } catch (e) {
       if (e instanceof ServiceError && e.code === "CURSOR_EXPIRED") {
         store.remove("meta", key);
-        throw new ServiceError(
-          "CURSOR_EXPIRED",
-          "资料快照已过期，请再次同步以建立新快照",
-        );
+        cursor = undefined;
+        await snapshot();
+        await increments();
+      } else {
+        throw e;
       }
-      throw e;
     }
     return store
       .all<Material>("material")
