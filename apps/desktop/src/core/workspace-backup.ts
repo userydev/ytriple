@@ -24,7 +24,13 @@ import {
 } from "./backup-contract";
 import { teamSchema, workflowSchema } from "./configuration";
 import { layoutSchema, viewSchema } from "./view";
-import { insightSchema, topicInputSchema } from "./radar-contract";
+import {
+  insightSchema,
+  radarViewSchema,
+  topicInputSchema,
+  isMaterialReadingId,
+  materialIdFromReading,
+} from "./radar-contract";
 import { skillDefinition } from "./skill-contract";
 import { workspaceActionProposalSchema } from "./workspace-action-contract";
 
@@ -208,6 +214,14 @@ const fields: Record<string, z.ZodType> = {
     saved: z.boolean(),
     read: z.boolean(),
     scroll: z.number(),
+    savedRef: z
+      .object({
+        materialId: z.string(),
+        version: z.number().int().positive(),
+      })
+      .strict()
+      .optional(),
+    positions: z.record(z.string(), z.number()).optional(),
   }),
   feed: z.object({
     id: z.string(),
@@ -288,6 +302,8 @@ export function validateWorkspace(data: WorkspaceData) {
                 ? rootsSchema
                 : row.id === "workspace-policy"
                   ? z.object({ direct: z.boolean() }).strict()
+                : row.id === "radar-view"
+                  ? radarViewSchema
                 : null;
       if (schema && !schema.safeParse(value).success)
         throw Error(`备份设置格式不符：${row.id}`);
@@ -423,7 +439,19 @@ export function validateWorkspace(data: WorkspaceData) {
         required("radar-topic", value.topic.id);
         refs(value.sources.map((s: any) => s.reference));
       }
-      if (kind === "radar-reading") required("radar-edition", id);
+      if (kind === "radar-reading") {
+        if (isMaterialReadingId(id) || value.savedRef) {
+          const materialId =
+            value.savedRef?.materialId ?? materialIdFromReading(id);
+          if (!materialId || !materialIds.has(materialId))
+            throw Error("备份缺少关联记录：material");
+          if (value.savedRef)
+            required(
+              "material",
+              `${value.savedRef.materialId}@${value.savedRef.version}`,
+            );
+        } else required("radar-edition", id);
+      }
       if (kind === "radar-topic") {
         for (const s of value.sources) {
           if (!materialIds.has(s.materialId)) throw Error("议题引用的材料缺失");

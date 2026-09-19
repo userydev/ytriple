@@ -73,6 +73,9 @@ export function Composer({
   onClose,
   onError,
   extraRefs = [],
+  compactRadar = false,
+  radarTitle,
+  radarExcerpt,
 }: {
   data: Snapshot;
   context: string;
@@ -89,6 +92,9 @@ export function Composer({
   onClose?: () => void;
   onError: (e: unknown) => void;
   extraRefs?: Reference[];
+  compactRadar?: boolean;
+  radarTitle?: string;
+  radarExcerpt?: string;
 }) {
   const initial = data.drafts.find((d) => d.id === context);
   const workspaceContext =
@@ -215,7 +221,7 @@ export function Composer({
       });
       setText("");
       setOutputMode(workspaceContext ? "explanation" : "result");
-      setRefs([]);
+      setRefs(context.startsWith("new:radar:") || work?.keepResearchReferences ? refs : []);
       setSkillKeys([]);
       submitKey.current = null;
       onWork(run.workId);
@@ -300,7 +306,7 @@ export function Composer({
             : "定时任务委托"
           : (work?.title ??
             (surface === "radar"
-              ? "围绕这篇解读"
+              ? (radarTitle ?? "围绕这篇文章")
               : (delivery?.title ?? project?.name ?? "新工作")));
   const placeholder = running
     ? "补充下一轮要处理的内容…"
@@ -312,6 +318,8 @@ export function Composer({
           : "基于这些材料，你想进一步做什么？"
         : work
           ? "继续讨论，或告诉团队下一步…"
+          : compactRadar
+            ? "这篇新闻里，你想弄清什么？"
           : delivery
             ? `围绕「${delivery.title}」推进什么？`
             : project
@@ -337,6 +345,7 @@ export function Composer({
           decision={decision}
           title={work?.title ?? "当前工作"}
           immersive={immersive}
+          hideExpand={compactRadar}
           onExpand={onExpand}
           onManage={onManage}
           onError={onError}
@@ -345,7 +354,7 @@ export function Composer({
     );
   return (
     <section
-      className={`composer ${expandedInput ? "is-expanded" : "is-compact"} ${immersive ? "in-workspace" : ""}`}
+      className={`composer ${expandedInput ? "is-expanded" : "is-compact"} ${immersive ? "in-workspace" : ""} ${compactRadar ? "radar-compact" : ""}`}
       data-state={inputState}
       ref={root}
       onFocusCapture={(e) => {
@@ -370,6 +379,12 @@ export function Composer({
       }}
     >
       <div className="composer-context">
+        {compactRadar ? (
+          <div className="radar-ask-identity">
+            <strong>{radarTitle ?? "这篇文章"}</strong>
+            {radarExcerpt ? <small>{radarExcerpt}</small> : null}
+          </div>
+        ) : (
         <button
           className="quiet composer-identity"
           aria-expanded={menu === "work"}
@@ -380,6 +395,7 @@ export function Composer({
           <span>{contextLabel}</span>
           <ChevronDown size={13} />
         </button>
+        )}
         {projectContext ? (
           <IconButton
             label={`项目要求 · ${projectContext.standards.length} 条标准`}
@@ -469,7 +485,7 @@ export function Composer({
             ))}
         </div>
       ) : null}
-      {workspaceContext ? (
+      {workspaceContext && !compactRadar ? (
         <div className="workspace-team-ready">
           <small>
             {team.members.map((member) => member.name).join("、")} ·
@@ -575,6 +591,8 @@ export function Composer({
           >
             <Plus size={19} />
           </IconButton>
+          {compactRadar ? null : (
+            <>
           <IconButton
             label="选择本轮方法"
             className="extended-tool"
@@ -592,8 +610,11 @@ export function Composer({
           >
             <Users size={18} />
           </IconButton>
+            </>
+          )}
         </div>
         <div className="tool-group">
+          {compactRadar ? null : (
           <IconButton
             label={immersive ? "收起工作区" : "展开团队工作区"}
             className="workspace-trigger"
@@ -603,6 +624,7 @@ export function Composer({
           >
             <PanelsTopLeft size={19} />
           </IconButton>
+          )}
           {running ? (
             <IconButton
               label="停止当前轮并暂停待发"

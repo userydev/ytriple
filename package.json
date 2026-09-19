@@ -5,7 +5,8 @@
   "scripts": {
     "setup": "npm --prefix apps/desktop ci && npm --prefix apps/service ci",
     "test:db": "docker compose -f compose.test.yaml up -d --wait postgres",
-    "check": "npm run check:desktop && npm run check:service",
+    "check": "npm run check:docs && npm run check:desktop && npm run check:service",
+    "check:docs": "node scripts/check-docs.mjs",
     "check:desktop": "npm --prefix apps/desktop run check",
     "check:service": "npm --prefix apps/service run check",
     "build": "npm --prefix apps/desktop run build && npm --prefix apps/service run typecheck",

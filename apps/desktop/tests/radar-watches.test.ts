@@ -428,7 +428,7 @@ test("changed topic or service pauses authorization; stale settings reject and d
     );
     f.config();
     const { updatedAt: _updatedAt, ...input } = f.topic;
-    f.radar.saveTopic({ ...input, title: "改变议题" });
+    f.radar.saveTopic({ ...input, keywords: [...(input.keywords ?? []), "changed"] });
     assert.equal(f.current().enabled, false);
     f.watches.tick();
     assert.equal(f.current().enabled, false);

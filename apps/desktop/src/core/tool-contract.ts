@@ -19,7 +19,7 @@ export const toolCatalog = [
     key: "builtin.material@1" as const,
     name: "材料查阅",
     description:
-      "只查阅本任务分配的准确材料版本或选段，不打开磁盘、链接或其他工作。",
+      "只查阅本任务分配的准确材料版本或选段，不打开磁盘、链接或其他工作。返回中的 coverage 是数据：标题、摘要或节选不是全文，不得据此声称已抓取或联网深研。",
     input:
       '{"mode":"read","reference":1,"start":0,"maxChars":2000}，或 {"mode":"find","reference":1,"text":"字面检索词","maxMatches":5}；reference 是本任务材料一基序号，start 为选中范围内从 0 开始的 UTF-16 位置，单次最多 6000 字符。',
   },
@@ -27,10 +27,10 @@ export const toolCatalog = [
     key: "builtin.workspace@1" as const,
     name: "工作台",
     description:
-      "读取有界的雷达议题、公开来源、定时任务和团队能力；也可提出类型化操作。安全且可逆的当前对象操作可能直接完成，新增授权、周期执行和扩大范围会生成待确认卡，不得声称待确认操作已经完成。",
+      "读取有界的雷达议题、公开来源、定时任务和团队能力；也可提出类型化操作。先 inspect 真实可用来源与覆盖再提案。讨论方案或否定不创建对象；不能在对话里创建网页或任意 URL 订阅，应指引用户到雷达话题详情添加 RSS/Atom。安全且可逆的当前对象操作可能直接完成，新增授权、周期执行和扩大范围会生成待确认卡，不得声称待确认操作已经完成。共同能力说明不扩大本轮工具权限。",
     input:
       '先用 {"mode":"inspect","query":"可选准确名称"} 取得真实 ID、revision、来源、成员、时区及当前对象 input。操作用 {"mode":"act","action":...}，严格字段如下：\n' +
-      '1. 雷达议题：{"kind":"radar-topic","topic":{"id":"编辑时用现有UUID；新建省略","revision":0,"title":"1-120字","focus":"0-2000字","feedIds":["UUID，最多5个"],"feedLimit":8,"sourceIds":["公开来源ID，最多10个"],"keywords":["最多12个，每项1-120字"],"sources":[{"materialId":"材料ID","policy":"auto|keep|exclude","reason":"0-500字"}]}}。新建 revision 必须为0；编辑使用 inspect 的 id/revision；sources/feedIds/sourceIds 至少一类非空；不要提交 archived。\n' +
+      '1. 雷达议题：{"kind":"radar-topic","topic":{"id":"编辑时用现有UUID；新建省略","revision":0,"title":"1-120字","focus":"0-2000字，研究目标不是匹配词","feedIds":["UUID，最多5个"],"feedLimit":8,"sourceIds":["公开来源ID，最多10个"],"keywords":["最多12个，每项1-120字；无 matchRules 时用标题或正文 OR 命中"],"matchRules":{"version":1,"groups":[{"terms":["组内OR"]}],"exclude":["全文否决"]},"sources":[{"materialId":"材料ID","policy":"auto|keep|exclude","reason":"0-500字"}]}}。matchRules 组间 AND，且全部必要组须在同一标题或同一正文段落满足；有效 matchRules 替代 keywords，损坏规则不得退回宽松 OR。新建 revision 必须为0；编辑使用 inspect 的 id/revision；sources/feedIds/sourceIds 至少一类非空；不要提交 archived。修改 matchRules 或来源范围必须确认，不能当作收窄直接执行。命中条数只能根据 inspect 的真实材料本地判断，不得虚构。\n' +
       '2. 新建或编辑定时任务：{"kind":"schedule","input":{"id":"编辑用现有UUID；新建省略由客户端生成","expectedRevision":0,"name":"1-120字","workId":null,"projectId":null,"text":"1-16000字","refs":[{"materialId":"ID","version":1,"label":"名称","excerpt":"可选固定选段"}],"recipient":null,"skillKeys":[],"outputMode":"result|explanation|summary|review|readiness|method","firstAt":"未来ISO-8601时刻，优先UTC Z，也接受合法时区偏移","intervalHours":null,"timezone":"IANA时区","followLatest":false,"maxModelCalls":4,"enabled":true}}。编辑必须完整复用 inspect.input 后只改目标字段；intervalHours 为 null 表示一次，或1-8760整数；refs最多20、skillKeys最多4、maxModelCalls 1-32。需要用户确认由宿主 pending 卡控制，不能因此把 enabled 改为 false；用户要求按期执行时 enabled=true，只有用户明确要求草稿或暂停时才是 false。缺少明确时间/时区先提待决，不能猜。\n' +
       '3. 启停现有任务：{"kind":"schedule-enabled","id":"现有UUID","revision":1,"enabled":false}。\n' +
       '4. 雷达自动整理：{"kind":"radar-watch","input":{"topicId":"议题UUID","topicRevision":1,"expectedRevision":0,"enabled":true,"intervalMinutes":60,"maxCallsPerDay":4}}；intervalMinutes 30-10080，maxCallsPerDay 1-24；新设置 expectedRevision=0，编辑用 inspect 的 watch revision。所有字段都必须来自用户目标与 inspect 事实；不得编造 ID、revision、时间或已执行状态。',

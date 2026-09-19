@@ -182,6 +182,7 @@ export class Feeds {
           coverage: item.coverage,
           url: url.toString(),
           publishedAt: item.published_at,
+          ...(item.image ? { image: item.image } : {}),
         });
         if (previous?.feedSource?.contentHash === contentHash) {
           check.unchanged++;
@@ -206,6 +207,15 @@ export class Feeds {
             fetchedAt: snapshot.fetched_at,
             publisher: item.publisher,
           },
+          ...(item.image
+            ? {
+                image: {
+                  url: item.image.url,
+                  origin: item.image.origin,
+                  credit: item.image.credit,
+                },
+              }
+            : {}),
         };
         this.store.put("material", `${id}@${material.version}`, material);
         if (previous) check.updated++;

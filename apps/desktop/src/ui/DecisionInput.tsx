@@ -6,6 +6,7 @@ export function DecisionInput({
   decision,
   title,
   immersive,
+  hideExpand = false,
   onExpand,
   onManage,
   onError,
@@ -13,6 +14,7 @@ export function DecisionInput({
   decision: Decision;
   title: string;
   immersive: boolean;
+  hideExpand?: boolean;
   onExpand: () => void;
   onManage: () => void;
   onError: (e: unknown) => void;
@@ -121,6 +123,7 @@ export function DecisionInput({
       <div className="composer-tools">
         <span className="muted">答复后接续原工作</span>
         <div className="tool-group">
+          {hideExpand ? null : (
           <button
             className="icon-button"
             aria-label={immersive ? "收起工作区" : "展开团队工作区"}
@@ -130,6 +133,7 @@ export function DecisionInput({
           >
             <PanelsTopLeft size={18} />
           </button>
+          )}
           <button
             className="icon-button"
             aria-label="停止等待并保留答复草稿"

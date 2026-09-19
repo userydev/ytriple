@@ -9,7 +9,7 @@ import { layoutSchema, viewSchema } from "./view";
 import { z } from "zod";
 import { workspaceContextSchema } from "./workspace-context";
 import { teamSchema, workflowSchema } from "./configuration";
-import { topicInputSchema } from "./radar-contract";
+import { radarViewSchema, topicInputSchema } from "./radar-contract";
 const id = z.string().min(1).max(300),
   text = z.string().max(64000);
 const reference = z
@@ -202,20 +202,47 @@ export const commandSchema = z.discriminatedUnion("type", [
     topicId: id,
     retry: z.boolean().optional(),
   }),
+  z.object({
+    type: z.literal("radar-organize"),
+    topicId: id,
+    retry: z.boolean().optional(),
+  }),
   z.object({ type: z.literal("radar-stop"), jobId: id }),
   z.object({ type: z.literal("radar-reconcile"), jobId: id }),
   z.object({ type: z.literal("radar-reference"), editionId: id }),
-  z.object({
-    type: z.literal("radar-reading"),
-    editionId: id,
-    patch: z
-      .object({
-        saved: z.boolean().optional(),
-        read: z.boolean().optional(),
-        scroll: z.number().min(0).max(10000000).optional(),
-      })
-      .strict(),
-  }),
+  z
+    .object({
+      type: z.literal("radar-reading"),
+      editionId: id.optional(),
+      materialId: id.optional(),
+      version: z.number().int().positive().optional(),
+      patch: z
+        .object({
+          saved: z.boolean().optional(),
+          read: z.boolean().optional(),
+          scroll: z.number().min(0).max(10000000).optional(),
+          pinSavedVersion: z.boolean().optional(),
+        })
+        .strict(),
+    })
+    .strict()
+    .refine(
+      (value) => Boolean(value.editionId) !== Boolean(value.materialId),
+      "阅读状态需要解读或材料之一",
+    )
+    .refine(
+      (value) => !value.materialId || value.version,
+      "材料阅读需要准确版本",
+    ),
+  z.object({ type: z.literal("radar-view"), view: radarViewSchema }).strict(),
+  z
+    .object({
+      type: z.literal("radar-archive-topic"),
+      id,
+      revision: z.number().int().positive(),
+      archived: z.boolean(),
+    })
+    .strict(),
   z.object({ type: z.literal("snapshot") }),
   z.object({
     type: z.literal("decision-draft"),

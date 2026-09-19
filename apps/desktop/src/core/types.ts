@@ -136,6 +136,7 @@ export type Delivery = {
   adoptedVersionId: string | null;
 };
 export type Work = {
+  keepResearchReferences?: boolean;
   workspaceContext?: WorkspaceContext;
   id: string;
   title: string;
@@ -215,6 +216,25 @@ export type Material = {
     }[];
     contentHash: string;
     fullArticle: false;
+  };
+  image?: {
+    url: string;
+    origin: "enclosure" | "media" | "content";
+    credit?: string | null;
+  };
+  derived?: {
+    processorVersion: string;
+    status: "ready" | "insufficient" | "failed";
+    titleZh: string | null;
+    digest: string | null;
+    keypoints: { text: string; quote: string }[];
+    coverage: string;
+    model: string | null;
+    processedAt: string | null;
+    contentHash: string;
+    revision: number;
+    error?: { code: string; message: string } | null;
+    input?: { chars: number; truncated: boolean } | null;
   };
   createdAt: string;
 };

@@ -31,6 +31,36 @@ const documentSchema = z.object({
   ),
   content_hash: z.string(),
   visibility: z.literal("public"),
+  image: z
+    .object({
+      url: z.string().url(),
+      origin: z.enum(["enclosure", "media", "content"]),
+      credit: z.string().nullable().optional(),
+    })
+    .optional(),
+});
+const derivedSchema = z.object({
+  document_id: z.string(),
+  revision: z.number().int().positive(),
+  content_hash: z.string(),
+  processor_version: z.string(),
+  status: z.enum(["ready", "insufficient", "failed"]),
+  title_zh: z.string().nullable(),
+  digest: z.string().nullable(),
+  keypoints: z.array(
+    z.object({ text: z.string(), quote: z.string() }).strict(),
+  ),
+  coverage: z.string(),
+  model: z.string().nullable(),
+  processed_at: z.string().nullable(),
+  error: z.object({ code: z.string(), message: z.string() }).nullable(),
+  input: z
+    .object({
+      chars: z.number().int().nonnegative(),
+      truncated: z.boolean(),
+    })
+    .nullable()
+    .optional(),
 });
 const refSchema = z.object({
   id: z.string(),
@@ -235,7 +265,61 @@ export class YCore implements Model {
     return response;
   }
   async capabilities() {
-    return (await this.request("/v1/capabilities")).json();
+    return (await this.request("/v1/capabilities")).json() as Promise<{
+      processing?: {
+        available: boolean;
+        model: string | null;
+        processor_version: string | null;
+      };
+      [key: string]: unknown;
+    }>;
+  }
+  async processDerived(
+    items: { id: string; revision: number }[],
+    retry = false,
+  ) {
+    return z
+      .object({ data: z.array(derivedSchema) })
+      .parse(
+        await (
+          await this.request("/v1/derived/process", {
+            method: "POST",
+            body: JSON.stringify({ items, retry }),
+            signal: AbortSignal.timeout(120000),
+          })
+        ).json(),
+      ).data;
+  }
+  associateDerived(
+    store: Store,
+    records: z.infer<typeof derivedSchema>[],
+  ) {
+    for (const record of records) {
+      for (const material of store.all<Material>("material")) {
+        if (
+          material.upstream?.id !== record.document_id ||
+          material.upstream.revision !== record.revision
+        )
+          continue;
+        store.put("material", `${material.id}@${material.version}`, {
+          ...material,
+          derived: {
+            processorVersion: record.processor_version,
+            status: record.status,
+            titleZh: record.title_zh,
+            digest: record.digest,
+            keypoints: record.keypoints,
+            coverage: record.coverage,
+            model: record.model,
+            processedAt: record.processed_at,
+            contentHash: record.content_hash,
+            revision: record.revision,
+            error: record.error,
+            input: record.input ?? null,
+          },
+        });
+      }
+    }
   }
   async readFeed(url: string, signal?: AbortSignal) {
     try {
@@ -431,6 +515,7 @@ export class YCore implements Model {
     const save = (raw: z.infer<typeof documentSchema>) => {
       const id = `ycore:${this.scope}:${raw.id}`;
       const body = raw.content.body ?? raw.content.summary ?? raw.content.title;
+      const existing = store.get<Material>("material", `${id}@${raw.revision}`);
       const m: Material = {
         id,
         version: raw.revision,
@@ -461,6 +546,20 @@ export class YCore implements Model {
           fullArticle: raw.content.full_article,
         },
         createdAt: raw.published_at ?? raw.discovered_at,
+        ...(raw.image
+          ? {
+              image: {
+                url: raw.image.url,
+                origin: raw.image.origin,
+                credit: raw.image.credit ?? null,
+              },
+            }
+          : {}),
+        ...(existing?.derived &&
+        existing.derived.contentHash === raw.content_hash &&
+        existing.derived.revision === raw.revision
+          ? { derived: existing.derived }
+          : {}),
       };
       store.put("material", `${id}@${m.version}`, m);
     };

@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { Snapshot } from "../core/types";
 import type { WorkspaceActionProposal } from "../core/workspace-action-contract";
 import { command } from "./api";
+import { localMatchPreview } from "../core/radar-news";
 import "./workspace-actions.css";
 
 function details(proposal: WorkspaceActionProposal, data: Snapshot) {
@@ -30,6 +31,8 @@ function details(proposal: WorkspaceActionProposal, data: Snapshot) {
       input.focus ? `关注：${input.focus}` : null,
       names.length ? `来源：${names.join("、")}` : null,
       input.keywords?.length ? `关键词：${input.keywords.join("、")}` : null,
+      input.matchRules ? `同时包含：${input.matchRules.groups.map((group) => group.terms.join(" / ")).join(" + ")}` : null,
+      input.matchRules?.exclude?.length ? `排除：${input.matchRules.exclude.join("、")}` : null,
     ]
       .filter(Boolean)
       .join(" · ");
@@ -45,12 +48,14 @@ export function WorkspaceActions({
   onRadar,
   onSchedule,
   onError,
+  compactRadar = false,
 }: {
   data: Snapshot;
   workId: string;
   onRadar: (id: string) => void;
   onSchedule: (id: string) => void;
   onError: (error: unknown) => void;
+  compactRadar?: boolean;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const proposals = data.workspaceActions.filter(
@@ -98,6 +103,9 @@ export function WorkspaceActions({
   return (
     <section className="workspace-actions" aria-label="工作空间变更">
       {proposals.map((proposal) => {
+        const preview = proposal.action.kind === "radar-topic"
+          ? localMatchPreview(data, proposal.action.topic)
+          : null;
         const expired =
           proposal.status === "pending" &&
           new Date(proposal.expiresAt).getTime() <= Date.now();
@@ -116,6 +124,12 @@ export function WorkspaceActions({
               </strong>
               <p>{proposal.summary}</p>
               <small>{details(proposal, data)}</small>
+              {preview ? (
+                <div className="radar-scope-preview">
+                  <p>{preview.error ?? `当前新闻中有 ${preview.count} 篇符合范围`}</p>
+                  {preview.samples.slice(0, 3).map((sample, index) => <p key={index}>{sample.title}</p>)}
+                </div>
+              ) : null}
               {proposal.status === "pending" ? (
                 <small>
                   {expired
@@ -123,7 +137,7 @@ export function WorkspaceActions({
                     : "确认后才会写入；失败时本卡会保留。"}
                 </small>
               ) : null}
-              {proposal.id === firstPending && !data.workspacePolicy.direct ? (
+              {!compactRadar && proposal.id === firstPending && !data.workspacePolicy.direct ? (
                 <label className="workspace-policy-inline">
                   <input
                     type="checkbox"

@@ -15,6 +15,10 @@ import {
   type Layout,
   type WorkView,
 } from "./view";
+import {
+  radarViewSchema,
+  type RadarView,
+} from "./radar-contract";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID, createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -234,6 +238,9 @@ export class Store {
     }
     return this.put("view", value.id, value);
   }
+  saveRadarView(view: RadarView) {
+    return this.put("meta", "radar-view", radarViewSchema.parse(view));
+  }
   close() {
     this.db.close();
   }
@@ -336,6 +343,7 @@ export class Store {
         editions: this.all("radar-edition"),
         jobs: this.all("radar-job"),
         reading: this.all("radar-reading"),
+        view: this.get("meta", "radar-view"),
       },
       ...this.configurationVersions(),
       layout: this.get<Layout>("meta", "layout") ?? defaultLayout,
@@ -571,6 +579,7 @@ export class Store {
       const prepared = this.get<Draft>("draft", input.context);
       const work: Work = isNew
         ? {
+            keepResearchReferences: input.context.startsWith("new:radar:"),
             id: randomUUID(),
             title:
               input.projectId &&
@@ -699,8 +708,19 @@ export class Store {
           JSON.stringify(input.skillKeys ?? []) &&
         draft.projectId === input.projectId &&
         JSON.stringify(draft.refs) === JSON.stringify(input.refs)
-      )
+      ) {
         this.remove("draft", input.context);
+        if (work.keepResearchReferences && !this.get<Draft>("draft", work.id))
+          this.saveDraft({
+            id: work.id,
+            text: "",
+            refs: structuredClone(input.refs),
+            recipient: null,
+            projectId: work.projectId,
+            workspaceContext: work.workspaceContext,
+            outputMode: work.workspaceContext ? "explanation" : "result",
+          });
+      }
       return run;
     });
   }

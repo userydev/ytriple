@@ -35,6 +35,15 @@ const document = (revision: number, title = `Revision ${revision}`) => ({
   ],
   content_hash: `content-${revision}`,
   visibility: "public",
+  ...(revision === 2
+    ? {
+        image: {
+          url: "https://publisher.example/cover.jpg",
+          origin: "enclosure" as const,
+          credit: "Publisher",
+        },
+      }
+    : {}),
 });
 
 test("material sync preserves stable identity, revisions, provenance and local relations across replay", async () => {
@@ -98,8 +107,28 @@ test("material sync preserves stable identity, revisions, provenance and local r
   assert.equal(revisions[1].upstream?.contentHash, "content-2");
   assert.equal(revisions[1].upstream?.fullArticle, false);
   assert.equal(revisions[1].coverage, "summary");
+  assert.equal(revisions[1].image?.url, "https://publisher.example/cover.jpg");
+  store.put("material", `${materialId}@2`, {
+    ...revisions[1],
+    derived: {
+      processorVersion: "neutral-brief-v1+gemini-3.8-flash",
+      status: "ready",
+      titleZh: "修订要点",
+      digest: "Summary 2",
+      keypoints: [{ text: "要点", quote: "Summary 2" }],
+      coverage: "summary",
+      model: "gemini-3.8-flash",
+      processedAt: "2026-09-18T02:00:00Z",
+      contentHash: "content-2",
+      revision: 2,
+      error: null,
+    },
+  });
+  await client.sync(store);
+  const kept = store.get<Material>("material", `${materialId}@2`);
+  assert.equal(kept?.derived?.titleZh, "修订要点");
   assert.equal(store.all("material").length, 2);
-  assert.equal(changeCalls, 2);
+  assert.equal(changeCalls, 3);
   assert.equal(
     store.get<any>("radar-topic", "topic-local").sources[0].materialId,
     materialId,

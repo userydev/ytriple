@@ -44,6 +44,7 @@ import { randomUUID } from "node:crypto";
 import { Store } from "../core/store";
 import { Runtime } from "../core/runtime";
 import { Radar } from "../core/radar";
+import { organizeRadarTopic } from "../core/radar-workbench";
 import { WorkspaceActions } from "../core/workspace-actions";
 import { Artifacts } from "../core/artifacts";
 import { YCore } from "../core/ycore";
@@ -662,6 +663,25 @@ app
           case "radar-refresh":
             if (configuring) throw Error("服务连接正在更新，请稍后整理");
             return radar.refresh(input.topicId, input.retry);
+          case "radar-organize": {
+            if (configuring) throw Error("服务连接正在更新，请稍后整理");
+            const sourceClient = client;
+            return organizeRadarTopic(
+              radar,
+              input.topicId,
+              sourceClient
+                ? {
+                    capabilities: async () => {
+                      const caps = await sourceClient.capabilities();
+                      return caps.processing ?? null;
+                    },
+                    process: (items, retry) =>
+                      sourceClient.processDerived(items, retry),
+                  }
+                : null,
+              input.retry,
+            );
+          }
           case "radar-stop":
             return radar.stop(input.jobId);
           case "radar-reconcile":
@@ -669,7 +689,18 @@ app
           case "radar-reference":
             return radar.reference(input.editionId);
           case "radar-reading":
-            return radar.reading(input.editionId, input.patch);
+            return radar.reading(
+              {
+                editionId: input.editionId,
+                materialId: input.materialId,
+                version: input.version,
+              },
+              input.patch,
+            );
+          case "radar-view":
+            return store.saveRadarView(input.view);
+          case "radar-archive-topic":
+            return radar.archiveTopic(input.id, input.revision, input.archived);
           case "layout":
             return store.saveLayout(input.layout);
           case "view":

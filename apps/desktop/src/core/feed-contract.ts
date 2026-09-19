@@ -21,6 +21,14 @@ export const feedReadResult = z.object({
         published_at: z.string().datetime().nullable(),
         publisher: z.string().nullable(),
         content_hash: z.string().regex(/^[a-f0-9]{64}$/),
+        image: z
+          .object({
+            url: z.string().url(),
+            origin: z.enum(["enclosure", "media", "content"]),
+            credit: z.string().max(300).nullable(),
+          })
+          .strict()
+          .optional(),
       }),
     )
     .max(100),

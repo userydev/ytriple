@@ -48,7 +48,7 @@ Postgres 的 `ytriple.workspaces` 为权威状态，保存独立所有者、元�
 
 ## 验证与后续执行接入
 
-`npm run test:db` 启动独立 loopback 55441 的临时 Postgres；`npm run check:service` 只访问硬编码的 `ytriple_test`，不接受生产数据库环境变量。测试使用真实受限角色验证 HTTP 两账号隔离、旧版本冲突、幂等结果、服务重建、领域版本规则、异常回滚及连接池 RLS 上下文；身份接口在常规套件中是明确替身。另有本机真实 Auth/ycore/产品服务进程链路证据，见 DELIVERY。
+`npm run test:db` 启动独立 loopback 55441 的临时 Postgres；`npm run check:service` 只访问硬编码的 `ytriple_test`，不接受生产数据库环境变量。测试使用真实受限角色验证 HTTP 两账号隔离、旧版本冲突、幂等结果、服务重建、领域版本规则、异常回滚及连接池 RLS 上下文；身份接口在常规套件中是明确替身。另有本机真实 Auth/ycore/产品服务进程链路证据，见 PLAN。
 
 测试还覆盖两个进程竞争租约、过期接管、迟到结果、版本冲突、提交保存失败时零模型调用、成果恢复不重发、按原记录继续剩余步骤，以及待决回答幂等。普通 Postgres 最初因没有 anon 角色不能运行平台 advisors；补充用于默认授权测试的 NOLOGIN 平台角色后，本地 CLI security advisors 返回无发现。此结果仅属于独立本机数据库，托管迁移和 advisors 要在实际部署时再次核验。
 
