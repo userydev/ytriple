@@ -14,8 +14,8 @@
 
 | 你要做什么 | 当前状态 | 实际边界 |
 | --- | --- | --- |
-| 安装、打开、升级客户端 | 部分 | 现有应用可安装；本轮只读确认安装包为 `764cf7f0adbb4c85`，不含最新 AI 合并包；跨构建钥匙串反复提示仍是阻塞 |
-| 连接自己的 ycore、调用 AI | 已走通 | 本人登录、调用及请求找回有阶段证据；新网关已在隔离环境实测，尚未部署。无需为此继续开发账户商业化 |
+| 安装、打开、升级客户端 | 部分 | 已安装 `414bd4087f3610f2` 本机自签名版并保留旧包/数据；首次启动等待系统钥匙串授权，跨构建免提示未解决 |
+| 连接自己的 ycore、调用 AI | 已走通 | 本人登录、调用及请求找回有阶段证据；新网关已部署；原预算账本保留，8 次上限已用 7 次，完整团队体验受限 |
 | 配置已有 AI / Code 文件夹 | 已走通 | 发现目录、手动选择、关联项目及原生选择器已有证据；路径关联不代表读取并理解全部文件 |
 | 保存草稿、成果与恢复工作 | 已走通 | 本地持久化、准确版本、草稿及备份恢复有测试/原生隔离证据；备份不含凭据和 AI/Code 全部原文件 |
 | 添加材料 | 部分 | 文本类导入支持 md/txt/csv/json；添加网址只保存链接，不抓正文；没有 PDF/Word/图片解析的完整导入链 |
@@ -99,12 +99,12 @@
 
 不开发：更多模型/来源/模板、自动学习、收费、复杂搜索、更多布局、通用同步平台。重复入口优先合并，保留用户数据、基本保存、权限、费用保护和恢复。
 
-本轮仅审查和改计划，未启动应用、调用模型或开发。实现按 AGENTS 派工。
+2026-09-19 按用户后续授权完成合并推送、服务部署和客户端更新；没有开发新功能。本机无 Apple Developer 会员，沿用固定自签名；尚未完成客户端登录后的真实路径验收。
 
 <details>
 <summary>开发接续与证据定位</summary>
 
-- 基线：ytriple dev `2fec3ca103f148d5cb5674432746c31743f15dbf`；ycore dev `7bdbb448ceae06af8b54f0ada4ed5616fd3d0d90`。AI 包已合入，未推送/部署/生产迁移/安装；不动 main。安装包读取 release.json 核对；线上仅有 `dev-20260918-c3c5ba9` 历史记录，未探测。
+- 发布：ytriple main 合并 `af097780f6af0ee45dd808b7d777bbe50e1e33c4`，安装 `414bd4087f3610f2`；ycore 部署 `main-20260919-03102b6`，API/worker 同版，原数据及预算迁移保留。两仓库 dev/main 已推送；后续仅同步发布记录。证据/旧包/数据备份在两树 `.local/release-20260919/`；完整真实使用仍待验收。
 - [x] 当前合并检查：306 桌面/18 私有服务/92 ycore 测试，check/build 等范围见 `.local/merge-ai-foundation/acceptance.json`；本轮复用证据，没有重跑。
 - [x] 历史路径：本树 `.local/` 的 `f1/`、`f2/`、`f3/`、`f3-radar-delivery/`；`project-context-validation/`、`project-files-validation/`（含 live-evidence）、`initialization-validation/`、`asset-validation/`、`backup-validation/`、`schedules-validation/`、`outcome-validation/` 保留隔离/真实范围区别。
 - [x] 新阅读证据：`.local/f3-radar-news/`。AI 新包证据仍在 `/Users/Admin/.codex/worktrees/08c0/ytriple-dev/.local/` 的 `ai-team/`、`agent-harness/`、`templates-subscriptions/`、`process-learning/`，未复制到当前树。
