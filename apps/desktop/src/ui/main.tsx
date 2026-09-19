@@ -1,6 +1,6 @@
 import { TeamTrace } from "./TeamTrace";
 import { UnknownRunActions } from "./UnknownRunActions";
-import { outcomeSnapshotChanged } from "../core/outcome-contract";
+import { processSnapshotStaleData } from "../core/process-scope-stale";
 import { scheduleProblem } from "../core/schedule-contract";
 import { versionLabel } from "../core/output";
 import { latestBrief, latestStandards } from "../core/project-contract";
@@ -58,6 +58,7 @@ import type {
   Reference,
   ArtifactVersion,
   Delivery,
+  Run,
 } from "../core/types";
 import { command } from "./api";
 import { Composer, IconButton } from "./Composer";
@@ -70,6 +71,11 @@ import { RadarHighlights } from "./RadarHighlights";
 import { WorkspaceActions } from "./WorkspaceActions";
 const MethodActions = lazy(() =>
   import("./MethodActions").then((m) => ({ default: m.MethodActions })),
+);
+const WorkflowCandidateActions = lazy(() =>
+  import("./WorkflowCandidateActions").then((m) => ({
+    default: m.WorkflowCandidateActions,
+  })),
 );
 const SchedulesPage = lazy(() =>
   import("./SchedulesPage").then((m) => ({ default: m.SchedulesPage })),
@@ -131,7 +137,27 @@ const VersionCompare = lazy(() =>
 const RadarPanel = lazy(() =>
   import("./RadarPanel").then((m) => ({ default: m.RadarPanel })),
 );
-import { coverageLabel, type RadarEdition } from "../core/radar-contract";
+import {
+  coverageLabel,
+  type RadarEdition,
+  type RadarTopic,
+} from "../core/radar-contract";
+import {
+  continueRadarResearch,
+  developmentTraceText,
+  followPlanText,
+  matchingTopicForMaterial,
+  materialResearchDraftId,
+  mergeResearchRefs,
+  boundedResearchRefs,
+  researchRefsForEdition,
+  researchRefsForMaterial,
+  topicEditionHistory,
+  topicListedMaterials,
+  uniqueRefs,
+  worksCitingReferences,
+  type RadarResearchAnchor,
+} from "../core/radar-reading";
 import "./style.css";
 import "./settings-layout.css";
 type Page = "home" | "radar" | "projects" | "assets" | "schedules" | "settings";
@@ -163,6 +189,12 @@ function App() {
     [immersive, setImmersive] = useState(false),
     [reading, setReading] = useState<Material | null>(null),
     [radarEditionId, setRadarEditionId] = useState<string | null>(null),
+    [radarMaterial, setRadarMaterial] = useState<Material | null>(null),
+    [radarTopicId, setRadarTopicId] = useState<string | null>(null),
+    [radarOpeningKey, setRadarOpeningKey] = useState(0),
+    [radarResearch, setRadarResearch] = useState<RadarResearchAnchor | null>(
+      null,
+    ),
     [scheduleId, setScheduleId] = useState<string | null>(null),
     [scheduleWork, setScheduleWork] = useState<string | null>(null),
     [dialog, setDialog] = useState<
@@ -284,10 +316,10 @@ function App() {
     setExtra([]);
     setComposerEpoch((n) => n + 1);
   }
-  function openWork(id: string, resultVersionId?: string) {
+  function openWork(id: string, resultVersionId?: string, snapshot = data) {
     setProjectTab("overview");
     changeContext(id);
-    const w = data!.works.find((w) => w.id === id);
+    const w = snapshot!.works.find((w) => w.id === id);
     setSelectedDelivery(w?.deliveryId ?? null);
     setProjectId(w?.projectId ?? null);
     if (w?.projectId) {
@@ -307,6 +339,10 @@ function App() {
     setProjectId(null);
     setSelectedDelivery(null);
     setReading(null);
+    setRadarEditionId(null);
+    setRadarMaterial(null);
+    setRadarTopicId(null);
+    setRadarResearch(null);
     setImmersive(false);
     changeContext("new");
   }
@@ -321,26 +357,53 @@ function App() {
       setSyncing(false);
     }
   }
-  async function useMaterial(m: Material) {
-    const next = "new:radar:" + m.id + "@" + m.version;
-    const ref: Reference = {
-      materialId: m.id,
-      version: m.version,
-      label: m.title,
-    };
+  async function useMaterial(
+    m: Material,
+    topic?: RadarTopic | null,
+    excerpt?: string,
+  ) {
+    const bound =
+      topic ??
+      matchingTopicForMaterial(
+        data!.radar.topics,
+        data!.radar.editions,
+        m,
+      );
+    const draftId = materialResearchDraftId(m, bound?.id);
+    const citing = worksCitingReferences(data!, researchRefsForMaterial(m));
+    const next = citing.length === 1 ? citing[0].id : draftId;
+    const draft = data!.drafts.find((d) => d.id === next || d.id === draftId);
+    const refs = mergeResearchRefs(draft?.refs ?? [], [
+      {
+        materialId: m.id,
+        version: m.version,
+        label: m.title,
+        ...(excerpt ? { excerpt } : {}),
+      },
+    ]);
     await command({
       type: "draft",
       id: next,
-      text: data!.drafts.find((d) => d.id === next)?.text ?? "",
-      refs: [ref],
-      recipient: null,
-      projectId: null,
+      text: draft?.text ?? "",
+      outputMode: draft?.outputMode ?? "explanation",
+      refs,
+      recipient: draft?.recipient ?? null,
+      projectId: draft?.projectId ?? null,
+      workspaceContext: draft?.workspaceContext ?? (bound
+        ? { kind: "radar-topic", id: bound.id, revision: bound.revision }
+        : undefined),
     });
     setData(await command<Snapshot>({ type: "snapshot" }));
     changeContext(next);
+    setRadarResearch({
+      kind: "object",
+      contextId: next,
+      topicId: bound?.id ?? null,
+      contentKey: `material:${m.id}@${m.version}`,
+    });
     setExtra([]);
     setReading(null);
-    setImmersive(true);
+    setComposerFocus((n) => n + 1);
   }
   async function useRadarEdition(edition: RadarEdition) {
     const reference = await command<Reference>({
@@ -349,31 +412,118 @@ function App() {
     });
     const next = `new:radar:${edition.id}`;
     const draft = data!.drafts.find((d) => d.id === next);
-    const refs = draft?.refs ?? [];
+    const topic = data!.radar.topics.find((item) => item.id === edition.topicId);
     await command({
       type: "draft",
       id: next,
       text: draft?.text ?? "",
-      refs: refs.some(
-        (r) =>
-          r.materialId === reference.materialId &&
-          r.version === reference.version,
-      )
-        ? refs
-        : [...refs, reference],
+      refs: mergeResearchRefs(draft?.refs ?? [], [
+        reference,
+        ...researchRefsForEdition(edition).filter(
+          (item) =>
+            item.materialId !== reference.materialId ||
+            item.version !== reference.version,
+        ),
+      ]),
       recipient: draft?.recipient ?? null,
-      projectId: null,
+      projectId: draft?.projectId ?? null,
+      workspaceContext: draft?.workspaceContext ?? (topic
+        ? { kind: "radar-topic", id: topic.id, revision: topic.revision }
+        : undefined),
     });
     setData(await command<Snapshot>({ type: "snapshot" }));
     changeContext(next);
+    setRadarResearch({
+      kind: "object",
+      contextId: next,
+      topicId: topic?.id ?? null,
+      contentKey: `edition:${edition.id}`,
+    });
+    setComposerFocus((n) => n + 1);
+  }
+  async function useTopicTrace(topic: RadarTopic) {
+    const next = `new:radar:trace:${topic.id}`;
+    const draft = data!.drafts.find((item) => item.id === next);
+    const history = topicEditionHistory(data!.radar.editions, topic.id);
+    const listed = topicListedMaterials(data!, topic);
+    const refs = uniqueRefs([
+      ...history.flatMap((item) => {
+        const edition = data!.radar.editions.find(
+          (entry) => entry.id === item.id,
+        );
+        return edition ? [{ materialId: edition.materialId, version: edition.number, label: edition.insight.title }] : [];
+      }),
+      ...listed.flatMap((item) => researchRefsForMaterial(item.material)),
+    ]);
+    const bounded = boundedResearchRefs(draft?.refs ?? [], refs);
+    const scopeNote = bounded.omitted
+      ? `\n本次最多附带 20 份材料，另有 ${bounded.omitted} 份未纳入；只依据实际附带材料梳理，明确证据缺口，不宣称完整发展史。`
+      : "";
+    await command({
+      type: "draft",
+      id: next,
+      text:
+        draft?.text ??
+        (developmentTraceText({
+          title: topic.title,
+          editions: history,
+          materials: listed.map((item) => ({
+            title: item.material.title,
+            coverage: item.material.coverage,
+            version: item.material.version,
+          })),
+        }) + scopeNote),
+      refs: bounded.refs,
+      recipient: draft?.recipient ?? null,
+      projectId: draft?.projectId ?? null,
+      workspaceContext: draft?.workspaceContext ?? {
+        kind: "radar-topic",
+        id: topic.id,
+        revision: topic.revision,
+      },
+    });
+    setData(await command<Snapshot>({ type: "snapshot" }));
+    changeContext(next);
+    setRadarResearch({
+      kind: "object",
+      contextId: next,
+      topicId: topic.id,
+      contentKey: `trace:${topic.id}`,
+    });
     setComposerFocus((n) => n + 1);
   }
   function openRadar(id: string | null) {
     setPage("radar");
     setProjectId(null);
     setSelectedDelivery(null);
+    setReading(null);
     changeContext("new");
     setRadarEditionId(id);
+    setRadarMaterial(null);
+    setRadarTopicId(null);
+    setRadarOpeningKey((value) => value + 1);
+  }
+  function openRadarMaterial(material: Material) {
+    setPage("radar");
+    setProjectId(null);
+    setSelectedDelivery(null);
+    setReading(null);
+    changeContext("new");
+    setRadarEditionId(null);
+    setRadarMaterial(material);
+    setRadarTopicId(null);
+    setRadarOpeningKey((value) => value + 1);
+  }
+  function openRadarTopic(id: string) {
+    setPage("radar");
+    setProjectId(null);
+    setSelectedDelivery(null);
+    setReading(null);
+    setImmersive(false);
+    setRadarEditionId(null);
+    setRadarMaterial(null);
+    setRadarTopicId(id);
+    setRadarOpeningKey((value) => value + 1);
   }
   function openSchedule(id: string) {
     setImmersive(false);
@@ -396,7 +546,8 @@ function App() {
       ? data!.works.find(
           (candidate) =>
             candidate.workspaceContext?.kind === workspaceContext.kind &&
-            candidate.workspaceContext.id === workspaceContext.id,
+            candidate.workspaceContext.id === workspaceContext.id &&
+            (surface !== "radar" || (candidate.id === context && radarResearch?.topicId === workspaceContext.id)),
         )
       : undefined;
     const next = existing?.id ?? `new:workspace:${crypto.randomUUID()}`;
@@ -410,10 +561,52 @@ function App() {
     setPage(surface);
     setProjectId(existing?.projectId ?? draft.projectId);
     setSelectedDelivery(existing?.deliveryId ?? null);
-    changeContext(existing?.id ?? draft.id);
+    const contextId = existing?.id ?? draft.id;
+    changeContext(contextId);
+    if (surface === "radar")
+      setRadarResearch({
+        kind: workspaceContext?.kind === "radar-topic" ? "object" : "follow",
+        contextId,
+        topicId: workspaceContext?.kind === "radar-topic" ? workspaceContext.id : null,
+        contentKey: workspaceContext
+          ? `topic:${workspaceContext.id}`
+          : `follow:${draft.id}`,
+      });
     setComposerEpoch((n) => n + 1);
-    setImmersive(true);
+    if (surface !== "radar") setImmersive(true);
     setComposerFocus((n) => n + 1);
+  }
+  async function planRadarFollow(intent: string, topic?: RadarTopic) {
+    const text = followPlanText(intent);
+    const next = `new:workspace:${crypto.randomUUID()}`;
+    const draft = await command<Draft>({
+      type: "prepare-workspace-chat",
+      context: next,
+      text,
+      workspaceContext: topic
+        ? { kind: "radar-topic", id: topic.id, revision: topic.revision }
+        : undefined,
+    });
+    const run = await command<Run>({
+      type: "submit",
+      key: crypto.randomUUID(),
+      context: draft.id,
+      text,
+      refs: [],
+      recipient: null,
+      projectId: draft.projectId,
+      outputMode: "explanation",
+      workspaceContext: draft.workspaceContext,
+    });
+    setData(await command<Snapshot>({ type: "snapshot" }));
+    changeContext(run.workId);
+    setRadarResearch({
+      kind: "follow",
+      contextId: run.workId,
+      topicId: topic?.id ?? null,
+      contentKey: `follow:${run.workId}`,
+    });
+    setComposerEpoch((n) => n + 1);
   }
   const composer = (
     <Composer
@@ -434,13 +627,29 @@ function App() {
           .catch(fail);
       }}
       onWork={(id) => {
-        if (context !== id) {
-          if (context === "new" || context.startsWith("new:")) {
-            const { id: _, ...previous } = viewState.read(context);
-            viewState.update(id, { ...previous, versionId: null });
+        void command<Snapshot>({ type: "snapshot" }).then((snapshot) => {
+          setData(snapshot);
+          if (page === "radar" && radarResearch) {
+            setRadarResearch((current) =>
+              continueRadarResearch(current, context, id),
+            );
+            if (context !== id) {
+              if (context === "new" || context.startsWith("new:")) {
+                const { id: _, ...previous } = viewState.read(context);
+                viewState.update(id, { ...previous, versionId: null });
+              }
+              changeContext(id);
+            }
+            return;
           }
-          openWork(id);
-        }
+          if (context !== id) {
+            if (context === "new" || context.startsWith("new:")) {
+              const { id: _, ...previous } = viewState.read(context);
+              viewState.update(id, { ...previous, versionId: null });
+            }
+            openWork(id, undefined, snapshot);
+          }
+        }).catch(fail);
       }}
       onManage={() => setDialog("work")}
       onTeam={() => setDialog("team")}
@@ -450,12 +659,10 @@ function App() {
         setSettingsTab("model");
       }}
       onClose={
-        !immersive && page === "radar" && context.startsWith("new:radar:")
+        !immersive && page === "radar" && radarResearch
           ? () => {
+              setRadarResearch(null);
               changeContext("new");
-              document
-                .querySelector<HTMLElement>("[data-radar-start]")
-                ?.focus({ preventScroll: true });
             }
           : undefined
       }
@@ -468,6 +675,14 @@ function App() {
       }}
       onError={fail}
       extraRefs={extra}
+      compactRadar={page === "radar" && !immersive}
+      radarTitle={
+        radarMaterial?.title ??
+        data.drafts.find((draft) => draft.id === context)?.refs[0]?.label
+      }
+      radarExcerpt={
+        data.drafts.find((draft) => draft.id === context)?.refs[0]?.excerpt
+      }
     />
   );
   async function prepareRevision(
@@ -801,21 +1016,40 @@ function App() {
               />
             </Suspense>
           ) : null}
+          {version.kind === "review" || version.kind === "method" ? (
+            <Suspense fallback={null}>
+              <WorkflowCandidateActions
+                key={`wfc-${version.id}`}
+                data={data}
+                version={version}
+                onPrepared={useMethodDraft}
+                onRefresh={async () => {
+                  setData(await command<Snapshot>({ type: "snapshot" }));
+                }}
+              />
+            </Suspense>
+          ) : null}
           <div className="version-context">
-            {data.runs
-              .find((r) => r.id === version.runId)
-              ?.refs.some((ref) =>
-                data.materials.some(
-                  (m) =>
-                    m.id === ref.materialId &&
-                    m.version === ref.version &&
-                    outcomeSnapshotChanged(m, data.outcomes),
-                ),
-              ) ? (
-              <span>
-                反馈记录已变化 · 此报告保留生成时的依据，可重新复盘或检查
-              </span>
-            ) : null}
+            {(() => {
+              const stale = data.runs
+                .find((r) => r.id === version.runId)
+                ?.refs.map((ref) =>
+                  data.materials.find(
+                    (m) =>
+                      m.id === ref.materialId && m.version === ref.version,
+                  ),
+                )
+                .filter(Boolean)
+                .map((m) => processSnapshotStaleData(m!, data))
+                .find((s) => s.status !== "current");
+              return stale ? (
+                <span role="status">
+                  {stale.status === "uncovered"
+                    ? stale.detail
+                    : stale.detail || "相关依据已变化，需复核"}
+                </span>
+              ) : null;
+            })()}
             {version.kind === "readiness" ? (
               <span>AI 检查意见 · 不代表已交接或已验证</span>
             ) : null}
@@ -1002,14 +1236,11 @@ function App() {
     <WorkspaceActions
       data={data}
       workId={work.id}
+      compactRadar={page === "radar" && radarResearch?.kind === "follow"}
       onError={fail}
       onRadar={(topicId) => {
         setImmersive(false);
-        openRadar(
-          data.radar.editions
-            .filter((edition) => edition.topicId === topicId)
-            .at(-1)?.id ?? null,
-        );
+        openRadarTopic(topicId);
       }}
       onSchedule={(id) => {
         openSchedule(id);
@@ -1132,7 +1363,7 @@ function App() {
           </WorkArea>
         ) : (
           <main
-            className={`page page-${page} ${work ? "with-conversation" : ""}`}
+            className={`page page-${page} ${work && page !== "radar" ? "with-conversation" : ""}`}
           >
             {page === "home" ? (
               <div className="home-content">
@@ -1261,7 +1492,7 @@ function App() {
                     </div>
 
                     <RadarHighlights
-                      onMaterial={setReading}
+                      onMaterial={openRadarMaterial}
                       data={data}
                       onOpen={openRadar}
                       onExplore={() => openRadar(null)}
@@ -1275,25 +1506,111 @@ function App() {
                 <RadarPanel
                   data={data}
                   selectedId={radarEditionId}
-                  onSelect={openRadar}
+                  openingMaterial={radarMaterial}
+                  openingTopicId={radarTopicId}
+                  openingKey={radarOpeningKey}
+                  onSelect={setRadarEditionId}
                   onUse={(edition) => void useRadarEdition(edition).catch(fail)}
-                  onMaterial={setReading}
-                  onWork={(id) => openWork(id)}
+                  onUseMaterial={(material, topic, excerpt) =>
+                    void useMaterial(material, topic, excerpt).catch(fail)
+                  }
+                  onTrace={(topic) => void useTopicTrace(topic).catch(fail)}
+                  onWork={(id, radarContentKey) => {
+                    const next = data.works.find((item) => item.id === id);
+                    changeContext(id);
+                    setSelectedDelivery(next?.deliveryId ?? null);
+                    setProjectId(next?.projectId ?? null);
+                    setRadarResearch((current) => ({
+                      kind: "object",
+                      contextId: id,
+                      topicId:
+                        next?.workspaceContext?.kind === "radar-topic"
+                          ? next.workspaceContext.id
+                          : current?.topicId ?? null,
+                      contentKey: radarContentKey ?? current?.contentKey ?? `work:${id}`,
+                    }));
+                    setComposerEpoch((value) => value + 1);
+                  }}
                   onSync={() => void sync()}
                   syncing={syncing}
                   onError={fail}
                   onPrepare={(text, topic) =>
-                    void prepareWorkspaceChat(
-                      "radar",
-                      text,
-                      topic
-                        ? {
-                            kind: "radar-topic",
-                            id: topic.id,
-                            revision: topic.revision,
-                          }
-                        : undefined,
-                    ).catch(fail)
+                    void planRadarFollow(text, topic).catch(fail)
+                  }
+                  onExpandDiscussion={() => setImmersive(true)}
+                  onBrowseDraft={(draftId) => {
+                    if (draftId) {
+                      if (context !== draftId) changeContext(draftId);
+                    } else if (context.startsWith("new:radar:") || context.startsWith("new:workspace:"))
+                      changeContext("new");
+                  }}
+                  researchAnchor={
+                    radarResearch && radarResearch.contextId === context
+                      ? radarResearch
+                      : null
+                  }
+                  research={
+                    page === "radar" &&
+                    !immersive &&
+                    radarResearch &&
+                    radarResearch.contextId === context ? (
+                      <div className="radar-research">
+                        {(radarResearch.kind === "follow"
+                          ? []
+                          : messages
+                        )
+                          .slice(-4)
+                          .map((message) => (
+                          <article
+                            className={`message ${message.role}`}
+                            key={message.id}
+                          >
+                            <small>
+                              {message.role === "user" ? "你" : "团队"}
+                            </small>
+                            <Markdown>{message.body}</Markdown>
+                          </article>
+                        ))}
+                        {runs
+                          .filter((item) => item.status === "unknown")
+                          .map((item) => (
+                            <UnknownRunActions
+                              key={item.id}
+                              id={item.id}
+                              kind="work"
+                              local={item.recovery === "local"}
+                              onError={fail}
+                            />
+                          ))}
+                        {latestRun ? (
+                          <p className="muted" role="status">
+                            {
+                              {
+                                queued: "待发",
+                                running: "团队处理中",
+                                succeeded: "已回复",
+                                failed: "运行失败",
+                                unknown: "状态待核",
+                                cancelled: "已停止",
+                                waiting: "待你决定",
+                              }[latestRun.status]
+                            }
+                          </p>
+                        ) : null}
+                        {latestRun?.error ? (
+                          <p className="error-inline">{latestRun.error}</p>
+                        ) : null}
+                        {data.contributions
+                          .filter((item) => item.runId === latestRun?.id && (item.tool?.status === "failed" || item.toolFormatError))
+                          .map((item) => (
+                            <p key={item.id} className="error-inline" role="alert">
+                              操作未完成：{item.toolFormatError?.message ?? item.tool?.output}
+                            </p>
+                          ))}
+                        {workspaceActionReceipts}
+                        {radarResearch.kind === "follow" ? null : composer}
+                      </div>
+                    ) : undefined
                   }
                 />
               </Suspense>
@@ -1823,7 +2140,7 @@ function App() {
                 </div>
               </section>
             ) : null}
-            {work ? (
+            {work && page !== "radar" ? (
               <section className="light-conversation">
                 <div className="section-heading conversation-heading">
                   <div>
@@ -1898,8 +2215,7 @@ function App() {
             {" "}
             {(page === "home" ||
               (page === "projects" && project && projectTab === "overview") ||
-              (page === "radar" && context.startsWith("new:radar:")) ||
-              work) &&
+              (work && page !== "radar")) &&
             !context.startsWith("select:delivery:") ? (
               <div
                 className={`composer-dock ${work ? "conversation-dock" : ""}`}
@@ -1932,6 +2248,23 @@ function App() {
           <div className="reading-body">
             <Markdown>{reading.body}</Markdown>
           </div>
+          <p className="muted">
+            此入口使用当前准确版本，不会改成最新修订，也不带入其他私有材料。
+          </p>
+          {worksCitingReferences(data, researchRefsForMaterial(reading)).map(
+            (work) => (
+              <button
+                className="text-action"
+                key={work.id}
+                onClick={() => {
+                  setReading(null);
+                  openWork(work.id);
+                }}
+              >
+                继续：{work.title}
+              </button>
+            ),
+          )}
           <div className="dialog-actions">
             <button
               onClick={() =>
@@ -1952,7 +2285,7 @@ function App() {
               className="primary"
               onClick={() => void useMaterial(reading).catch(fail)}
             >
-              围绕材料开展工作
+              围绕此版本深入研究
             </button>
           </div>
         </Dialog>

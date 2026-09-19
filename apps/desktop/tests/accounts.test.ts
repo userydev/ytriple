@@ -32,6 +32,8 @@ function fixture() {
     logoutFailure = false,
     writable = true,
     available = true;
+  let accountResponse: (() => Promise<Response>) | undefined;
+  const accountBody = () => ({ product_id: "ytriple", user_id: userId, access_state: "none", catalog: [], subscription: null, entitlement: null, usage_today: { requests: 0, budget_units: 0, note: "test" }, catalog_note: null });
   const authUrl = "https://auth.example.test/auth/v1";
   const vault = {
     available: () => available,
@@ -116,6 +118,10 @@ function fixture() {
       if (logoutFailure) return json({ msg: "expired JWT" }, 401);
       return new Response(null, { status: 204 });
     }
+    if (url.href === baseUrl + "/v1/account") {
+      assert.equal(new Headers(init?.headers).get("X-YCore-Product"), "ytriple");
+      return accountResponse ? accountResponse() : json(accountBody());
+    }
     if (url.href === baseUrl + "/v1/identity") {
       if (!entitled)
         return json(
@@ -153,6 +159,8 @@ function fixture() {
   ) =>
     account.signIn(baseUrl, "fixture@example.com", "fixture-password", guard);
   return {
+    accountBody, json,
+    set accountResponse(value: () => Promise<Response>) { accountResponse = value; },
     dir,
     make,
     login,
@@ -328,5 +336,47 @@ test("unconfirmed remote logout still removes the local session durably and repo
     assert.equal(f.make().info().state, "signed_out");
   } finally {
     f.close();
+  }
+});
+
+
+test("unentitled session can read own account; wrong user, product, version and oversized payload are rejected", async () => {
+  const f = fixture();
+  try {
+    f.entitled = false;
+    const a = f.make();
+    assert.equal(await f.login(a), undefined);
+    assert.equal(a.info().state, "signed_in");
+    assert.equal((await a.fetchAccountSummary())?.accessState, "none");
+    for (const body of [ { ...f.accountBody(), user_id: randomUUID() }, { ...f.accountBody(), product_id: "other" } ]) {
+      f.accountResponse = async () => f.json(body);
+      await assert.rejects(a.fetchAccountSummary());
+    }
+    for (const version of [null, "99.0.0"]) {
+      f.accountResponse = async () => new Response(JSON.stringify(f.accountBody()), { headers: version ? { "X-YCore-Contract": version } : {} });
+      await assert.rejects(a.fetchAccountSummary(), /契约版本/);
+    }
+    f.accountResponse = async () => f.json({ ...f.accountBody(), catalog_note: "x".repeat(1024 * 1024) });
+    await assert.rejects(a.fetchAccountSummary());
+  } finally { f.close(); }
+});
+
+test("late account response cannot cross sign-out or account replacement, including unsupported service", async () => {
+  for (const status of [200, 404]) {
+    const f = fixture();
+    try {
+      const a = f.make(); await f.login(a);
+      let release!: () => void, entered!: () => void;
+      const gate = new Promise<void>(r => { release = r; });
+      const started = new Promise<void>(r => { entered = r; });
+      const body = f.accountBody();
+      f.accountResponse = async () => { entered(); await gate; return f.json(body, status); };
+      const pending = a.fetchAccountSummary();
+      const rejected = assert.rejects(pending, /账号已变化/);
+      await started;
+      await a.signOut(() => {});
+      f.changeUser(); await f.login(a);
+      release(); await rejected;
+    } finally { f.close(); }
   }
 });

@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../src/core/store";
+import { legacyFinish, protocolModel } from "./team-response";
 import { Outcomes } from "../src/core/outcomes";
 import { ProcessRecords } from "../src/core/process";
 import { Artifacts } from "../src/core/artifacts";
@@ -47,7 +48,7 @@ function fixture(path = ":memory:") {
     createdAt: new Date().toISOString(),
   };
   store.put("contribution", c.id, c);
-  const version = store.finish(
+  const version = legacyFinish(store,
     run.id,
     "请主持人介绍三位嘉宾，设备和到场人数待核实。",
     true,
@@ -120,7 +121,7 @@ test("outcomes retain exact versions and frozen evidence; idempotent retries nei
       submit({ context: f.run.workId, projectId: f.project.id }),
     );
     f.store.setRun(nextRun.id, { status: "running" });
-    const next = f.store.finish(nextRun.id, "修改后开场。", true)!;
+    const next = legacyFinish(f.store, nextRun.id, "修改后开场。", true)!;
     assert.equal(
       f.store.snapshot().outcomes.filter((r) => r.versionId === next.id).length,
       0,
@@ -233,7 +234,7 @@ test("readiness executes as an independent support result and feedback reaches r
       }),
     );
     const model = new Capture(),
-      runtime = new Runtime(f.store, () => model);
+      runtime = new Runtime(f.store, () => protocolModel(model));
     const draft = f.service.prepare({
       versionId: f.version.id,
       recipient: "主持人",
@@ -295,7 +296,7 @@ test("review includes only scoped versions and records, while explicit historica
       submit({ context: f.run.workId, projectId: f.project.id }),
     );
     f.store.setRun(nextRun.id, { status: "running" });
-    const next = f.store.finish(nextRun.id, "后续不同版本", true)!;
+    const next = legacyFinish(f.store, nextRun.id, "后续不同版本", true)!;
     f.service.record(input(next.id, { body: "新版专属使用反馈" }));
     const d = new ProcessRecords(f.store).prepare({
       workId: f.run.workId,

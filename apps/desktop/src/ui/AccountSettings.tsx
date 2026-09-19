@@ -4,6 +4,7 @@ import type { Snapshot } from "../core/types";
 import { command } from "./api";
 import { Dialog } from "./Dialog";
 import "./settings-account.css";
+import { subscriptionPriceLabel } from "./subscription-price";
 
 export function AccountSettings({
   data,
@@ -18,6 +19,31 @@ export function AccountSettings({
   const info = data.service.account;
   const signedIn = info?.state === "signed_in";
   const email = info?.email ?? "已登录账号";
+  const summary = data.service.accountSummary;
+  const summaryState = data.service.accountSummaryState ?? "idle";
+  const accessLabel = (() => {
+    if (summaryState === "loading") return "正在读取账号信息…";
+    if (summaryState === "error")
+      return data.service.accountSummaryError ?? "账号信息读取失败";
+    if (summaryState === "unsupported") return "当前服务不支持账号详情";
+    switch (summary?.accessState) {
+      case "manual":
+        return "手工授权";
+      case "manual_expired":
+        return "手工授权已过期";
+      case "subscription_active":
+        return "订阅有效";
+      case "subscription_expired":
+        return "订阅已到期";
+      case "revoked":
+        return "权益已撤销";
+      case "none":
+        return "未开通服务";
+      default:
+        return signedIn ? "尚无权益记录" : "未登录";
+    }
+  })();
+  const priceLabel = summary?.subscription ? subscriptionPriceLabel(summary.subscription.price) : null;
   async function act(fn: () => Promise<unknown>) {
     if (lock.current) return;
     lock.current = true;
@@ -69,6 +95,75 @@ export function AccountSettings({
                 {data.service.connected ? "已连接" : "未连接"}
               </span>
             </div>
+            <div className="setting-row">
+              <div className="setting-copy">
+                <strong>产品权益</strong>
+                <small>
+                  {summary?.subscription
+                    ? `${summary.subscription.planName} · ${priceLabel ?? "未定价"}`
+                    : summary ? "暂无订阅" : "套餐信息待获取"}
+                </small>
+              </div>
+              <span className="status-badge">{accessLabel}</span>
+            </div>
+            <div className="settings-actions">
+              <button
+                type="button"
+                disabled={busy || !signedIn}
+                onClick={() => void act(() => command({ type: "account-refresh" }))}
+              >
+                <RefreshCw size={16} />
+                刷新账号信息
+              </button>
+            </div>
+            {summary ? (
+              <div className="account-usage-grid">
+                <div>
+                  <strong>今日已用请求</strong>
+                  <span>{summary.usageToday.requests}</span>
+                </div>
+                <div>
+                  <strong>今日剩余请求</strong>
+                  <span>{summary.entitlement?.remainingRequests ?? 0}</span>
+                </div>
+                <div>
+                  <strong>今日已用预算单位</strong>
+                  <span>{summary.usageToday.budgetUnits}</span>
+                </div>
+                <div>
+                  <strong>今日剩余预算单位</strong>
+                  <span>{summary.entitlement?.remainingBudgetUnits ?? 0}</span>
+                </div>
+                <p className="settings-note">{summary.usageToday.note}</p>
+                {summary.subscription?.validUntil ? (
+                  <p className="settings-note">
+                    权益到期：{summary.subscription.validUntil}（到期后失效，非自动续费）
+                  </p>
+                ) : null}
+                {summary.catalogNote ? (
+                  <p className="settings-note">{summary.catalogNote}</p>
+                ) : null}
+                {summary.catalog.length === 0 ? null : (
+                  <details>
+                    <summary>产品目录（只读）</summary>
+                    <ul>
+                      {summary.catalog.map((plan) => (
+                        <li key={`${plan.planId}@${plan.version}`}>
+                          {plan.displayName} v{plan.version}
+                          {plan.prices.length
+                            ? plan.prices.map((pr) =>
+                                ` · ${subscriptionPriceLabel(pr)}`,
+                              )
+                            : " · 未定价"}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
+            ) : summaryState === "unsupported" ? (
+              <p className="settings-note">连接的服务版本较旧，无法展示订阅详情。</p>
+            ) : null}
             <div className="settings-actions">
               <button
                 type="button"

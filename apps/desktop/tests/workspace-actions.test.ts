@@ -1,3 +1,4 @@
+import { followPlanText } from "../src/core/radar-reading";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -75,6 +76,10 @@ test("host-approved top-level topic creation applies once and undo archives at t
 test("policy-off, material-influenced, and delegated action intents remain pending", () => {
   for (const [direct, text, refs, depth] of [
     [false, "新建雷达议题", [], 0],
+    [true, "新建雷达议题，先给我确认，不启用自动整理", [], 0],
+    [true, followPlanText("开源机器人"), [], 0],
+    [true, "新建雷达议题，等我确认后再创建", [], 0],
+    [true, "Create a radar topic, ask me for confirmation", [], 0],
     [true, "根据材料新建雷达议题", [{ materialId: "m", version: 1, label: "m" }], 0],
     [true, "新建雷达议题", [], 1],
   ] as const) {
@@ -372,6 +377,23 @@ test("radar watch rate reduction is direct, while first enable remains confirmat
     assert.equal(proposal.status, "pending");
     assert.equal(enabled.store.require<any>("radar-watch", topic.id).enabled, false);
   } finally { enabled.store.close(); }
+});
+
+test("inspect explains real source coverage and refuses to treat an arbitrary URL as an implemented subscription", () => {
+  const f = fixture(false, "帮我订阅 https://example.com/news 并关注人工智能");
+  try {
+    f.store.put("meta", "sources", [
+      { id: "hn", name: "Hacker News", status: "ready", last_error: null },
+    ]);
+    const inventory = f.actions.inspect(f.run, "https://example.com/news");
+    assert.equal(inventory.subscription.viaChat, false);
+    assert.match(inventory.subscription.rejected, /普通网页/);
+    assert.equal(inventory.feeds.length, 0);
+    assert.equal(inventory.publicSources[0].id, "hn");
+    assert.match(inventory.capabilities.limitations.join("\n"), /话题详情/);
+    assert.equal(f.store.all("feed").length, 0);
+    assert.equal(f.store.all("radar-topic").length, 0);
+  } finally { f.store.close(); }
 });
 
 test("inspect always puts the bound object inside the bounded result even when query does not match", () => {

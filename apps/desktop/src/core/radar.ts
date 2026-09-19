@@ -10,10 +10,12 @@ import type { Material, Reference, Source } from "./types";
 import type { FeedSource } from "./feed-contract";
 import type { RadarWatch } from "./radar-watch-contract";
 import { visibleRadarMaterials } from "./material-list";
+import { materialMatchesTopic, topicExecutionScope } from "./radar-match";
 import {
   topicInputSchema,
   insightSchema,
   coverageLabel,
+  materialReadingId,
   type TopicInput,
   type RadarTopic,
   type RadarSource,
@@ -41,20 +43,9 @@ export class Radar {
       : undefined;
     if ((previous?.revision ?? 0) !== input.revision)
       throw Error("议题设置已变化，请重新打开后修改");
-    if (
-      previous &&
-      previous.title === input.title &&
-      previous.focus === input.focus &&
-      JSON.stringify(previous.feedIds ?? []) ===
-        JSON.stringify(input.feedIds ?? []) &&
-      (previous.feedLimit ?? 8) === (input.feedLimit ?? 8) &&
-      JSON.stringify(previous.sourceIds ?? []) ===
-        JSON.stringify(input.sourceIds ?? []) &&
-      JSON.stringify(previous.keywords ?? []) ===
-        JSON.stringify(input.keywords ?? []) &&
-      JSON.stringify(previous.sources) === JSON.stringify(input.sources)
-    )
-      return previous;
+    const sameScope =
+      !!previous && topicExecutionScope(previous) === topicExecutionScope(input);
+    if (previous && sameScope && previous.title === input.title) return previous;
     for (const source of input.sources) this.latestMaterial(source.materialId);
     for (const id of input.feedIds ?? [])
       this.store.require<FeedSource>("feed", id);
@@ -72,10 +63,17 @@ export class Radar {
     this.store.transaction(() => {
       this.store.put("radar-topic", topic.id, topic);
       const watch = this.store.get<RadarWatch>("radar-watch", topic.id);
-      if (watch?.enabled)
+      if (!watch?.enabled) return;
+      if (sameScope)
+        this.store.put("radar-watch", watch.id, {
+          ...watch,
+          topicRevision: topic.revision,
+        });
+      else
         this.store.put("radar-watch", watch.id, {
           ...watch,
           revision: watch.revision + 1,
+          topicRevision: topic.revision,
           enabled: false,
           nextAt: null,
           error: "议题范围已变化，请重新确认自动整理设置",
@@ -173,9 +171,8 @@ export class Radar {
           )
         )
           return false;
-        if (!keywords.length) return true;
-        const text = `${material.title}\n${material.body}`.toLocaleLowerCase();
-        return keywords.some((keyword) => text.includes(keyword));
+        if (!keywords.length && !topic.matchRules) return true;
+        return materialMatchesTopic(material, topic);
       })
       .sort(newestFirst);
     const publicLimit = Math.max(
@@ -245,9 +242,15 @@ export class Radar {
       },
     };
   }
-  private sources(topic: RadarTopic) {
+  private materialize(
+    entries: {
+      materialId: string;
+      policy: "auto" | "keep" | "exclude";
+      reason: string;
+    }[],
+  ): RadarSource[] {
     const seen = new Map<string, string>();
-    return this.selection(topic).sources.map((source, index): RadarSource => {
+    return entries.map((source, index): RadarSource => {
       const material = this.latestMaterial(source.materialId);
       if (source.policy !== "exclude" && material.readError)
         throw Error(`材料“${material.title}”尚未就绪，请先修复或排除`);
@@ -279,6 +282,94 @@ export class Radar {
       };
     });
   }
+  private sources(topic: RadarTopic) {
+    return this.materialize(this.selection(topic).sources);
+  }
+  private readable(sources: RadarSource[]) {
+    return sources.some(
+      (s) =>
+        s.coverage !== "title_only" &&
+        s.body.trim() &&
+        s.policy !== "exclude" &&
+        (!s.duplicateOf || s.policy === "keep"),
+    );
+  }
+  private withinPromptLimit(prompt: Prompt) {
+    return (
+      !prompt.messages.some((m) => m.content.length > 32000) &&
+      prompt.messages.reduce((n, m) => n + Buffer.byteLength(m.content), 0) <=
+        64000
+    );
+  }
+  private promptOverflow() {
+    return Error("本次议题材料超过模型输入范围，请减少材料；不会自动截掉正文");
+  }
+  private trialPrompt(
+    topic: RadarTopic,
+    sources: RadarSource[],
+    supply: NonNullable<RadarJob["supply"]>,
+    previousId: string | null,
+  ) {
+    return this.prompt({
+      id: "budget-trial",
+      topic,
+      fingerprint: "",
+      previousId,
+      sources,
+      supply,
+      status: "running",
+      body: "",
+      remoteId: null,
+      error: null,
+      createdAt: "",
+    });
+  }
+  private budgetNotes(
+    supply: NonNullable<RadarJob["supply"]>,
+    omittedTitles: string[],
+  ) {
+    if (!omittedTitles.length) return supply;
+    return {
+      ...supply,
+      included: supply.included - omittedTitles.length,
+      omitted: supply.omitted + omittedTitles.length,
+      notes: [
+        ...supply.notes,
+        `因模型输入范围未纳入 ${omittedTitles.length} 篇完整材料（未截断）：${omittedTitles.map((title) => `「${title}」`).join("、")}`,
+      ],
+    };
+  }
+  private fitPromptBudget(
+    topic: RadarTopic,
+    selected: ReturnType<Radar["selection"]>,
+    previousId: string | null,
+  ) {
+    const fixed = selected.sources.slice(0, topic.sources.length);
+    const automatic = selected.sources.slice(topic.sources.length);
+    const fits = (
+      entries: typeof selected.sources,
+      supply: NonNullable<RadarJob["supply"]>,
+    ) =>
+      this.withinPromptLimit(
+        this.trialPrompt(topic, this.materialize(entries), supply, previousId),
+      );
+    if (!fits(fixed, selected.supply)) throw this.promptOverflow();
+    const chosen = [...fixed];
+    const omittedTitles: string[] = [];
+    for (const entry of automatic) {
+      const trialSupply = this.budgetNotes(selected.supply, omittedTitles);
+      if (fits([...chosen, entry], trialSupply)) chosen.push(entry);
+      else omittedTitles.push(this.latestMaterial(entry.materialId).title);
+    }
+    let supply = this.budgetNotes(selected.supply, omittedTitles);
+    while (chosen.length > fixed.length && !fits(chosen, supply)) {
+      const removed = chosen.pop()!;
+      omittedTitles.push(this.latestMaterial(removed.materialId).title);
+      supply = this.budgetNotes(selected.supply, omittedTitles);
+    }
+    if (!fits(chosen, supply)) throw this.promptOverflow();
+    return { sources: this.materialize(chosen), supply };
+  }
   matchingJob(topicId: string) {
     const topic = this.store.require<RadarTopic>("radar-topic", topicId);
     if (topic.archived) throw Error("议题已归档");
@@ -290,16 +381,7 @@ export class Radar {
   }
   hasReadableEvidence(topicId: string) {
     const topic = this.store.require<RadarTopic>("radar-topic", topicId);
-    return (
-      !topic.archived &&
-      this.sources(topic).some(
-        (s) =>
-          s.coverage !== "title_only" &&
-          s.body.trim() &&
-          s.policy !== "exclude" &&
-          (!s.duplicateOf || s.policy === "keep"),
-      )
-    );
+    return !topic.archived && this.readable(this.sources(topic));
   }
   refresh(topicId: string, retry = false, automatic?: RadarJob["automatic"]) {
     const topic = this.store.require<RadarTopic>("radar-topic", topicId);
@@ -311,21 +393,15 @@ export class Radar {
           j.topic.id === topicId && ["running", "unknown"].includes(j.status),
       );
     if (active) return active;
-    const sources = this.sources(topic);
-    const supply = this.selection(topic).supply;
-    if (
-      !sources.some(
-        (s) =>
-          s.coverage !== "title_only" &&
-          s.body.trim() &&
-          s.policy !== "exclude" &&
-          (!s.duplicateOf || s.policy === "keep"),
-      )
-    )
+    const selected = this.selection(topic);
+    const sources = this.materialize(selected.sources);
+    if (!this.readable(sources))
       throw Error(
-        topic.sourceIds?.length
-          ? "当前已同步公开材料中没有符合来源和关键词的可读证据；未调用模型，也未主动抓取来源"
-          : "请至少保留一份可读取的材料",
+        !topic.sources.length && !topic.feedIds?.length && !topic.sourceIds?.length
+          ? "当前还没有可读材料；未调用模型"
+          : topic.sourceIds?.length
+            ? "当前已同步公开材料中没有符合来源和关键词的可读证据；未调用模型，也未主动抓取来源"
+            : "请至少保留一份可读取的材料",
       );
     const fingerprint = digest({ topic, sources });
     const same = this.store
@@ -333,19 +409,21 @@ export class Radar {
       .filter((j) => j.topic.id === topicId && j.fingerprint === fingerprint)
       .at(-1);
     if (same && (!retry || same.status === "succeeded")) return same;
-    const model = this.model();
     const previous = this.store
       .all<RadarEdition>("radar-edition")
       .filter((e) => e.topicId === topicId)
       .at(-1);
+    const fitted = this.fitPromptBudget(topic, selected, previous?.id ?? null);
+    if (!this.readable(fitted.sources)) throw this.promptOverflow();
+    const model = this.model();
     const job: RadarJob = {
       automatic,
       id: randomUUID(),
       topic,
       fingerprint,
       previousId: previous?.id ?? null,
-      sources,
-      supply,
+      sources: fitted.sources,
+      supply: fitted.supply,
       status: "running",
       body: "",
       remoteId: null,
@@ -356,12 +434,7 @@ export class Radar {
       createdAt: new Date(this.clock()).toISOString(),
     };
     const prompt = this.prompt(job);
-    if (
-      prompt.messages.some((m) => m.content.length > 32000) ||
-      prompt.messages.reduce((n, m) => n + Buffer.byteLength(m.content), 0) >
-        64000
-    )
-      throw Error("本次议题材料超过模型输入范围，请减少材料；不会自动截掉正文");
+    if (!this.withinPromptLimit(prompt)) throw this.promptOverflow();
     this.store.put("radar-job", job.id, job);
     const controller = new AbortController();
     this.active.set(job.id, controller);
@@ -602,18 +675,62 @@ export class Radar {
     });
     this.changed();
   }
-  reading(id: string, patch: Partial<Omit<RadarReading, "id">>) {
-    this.store.require<RadarEdition>("radar-edition", id);
+  reading(
+    target: {
+      editionId?: string;
+      materialId?: string;
+      version?: number;
+    },
+    patch: Partial<Omit<RadarReading, "id">> & { pinSavedVersion?: boolean },
+  ) {
+    const editionId = target.editionId;
+    const materialId = target.materialId;
+    if (Boolean(editionId) === Boolean(materialId))
+      throw Error("阅读状态需要准确的解读或材料版本");
+    if (editionId) {
+      this.store.require<RadarEdition>("radar-edition", editionId);
+      const previous = this.store.get<RadarReading>("radar-reading", editionId) ?? {
+        id: editionId,
+        saved: false,
+        read: false,
+        scroll: 0,
+      };
+      const value = this.store.put("radar-reading", editionId, {
+        ...previous,
+        ...patch,
+        id: editionId,
+        savedRef: undefined,
+      });
+      if (patch.saved !== undefined || patch.read !== undefined) this.changed();
+      return value;
+    }
+    const version = target.version;
+    if (!materialId || !version) throw Error("材料阅读需要准确版本");
+    this.store.require<Material>("material", `${materialId}@${version}`);
+    const id = materialReadingId(materialId);
     const previous = this.store.get<RadarReading>("radar-reading", id) ?? {
       id,
       saved: false,
       read: false,
       scroll: 0,
+      positions: {},
     };
+    const positions = { ...(previous.positions ?? {}) };
+    if (patch.scroll !== undefined) positions[String(version)] = patch.scroll;
+    let savedRef = previous.savedRef;
+    const saved = patch.saved ?? previous.saved;
+    if (patch.saved === true) {
+      if (!savedRef || patch.pinSavedVersion)
+        savedRef = { materialId, version };
+    } else if (patch.saved === false) savedRef = undefined;
     const value = this.store.put("radar-reading", id, {
       ...previous,
       ...patch,
       id,
+      saved,
+      savedRef,
+      positions,
+      scroll: patch.scroll ?? positions[String(version)] ?? previous.scroll,
     });
     if (patch.saved !== undefined || patch.read !== undefined) this.changed();
     return value;

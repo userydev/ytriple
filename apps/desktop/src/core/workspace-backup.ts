@@ -24,7 +24,13 @@ import {
 } from "./backup-contract";
 import { teamSchema, workflowSchema } from "./configuration";
 import { layoutSchema, viewSchema } from "./view";
-import { insightSchema, topicInputSchema } from "./radar-contract";
+import {
+  insightSchema,
+  radarViewSchema,
+  topicInputSchema,
+  isMaterialReadingId,
+  materialIdFromReading,
+} from "./radar-contract";
 import { skillDefinition } from "./skill-contract";
 import { workspaceActionProposalSchema } from "./workspace-action-contract";
 
@@ -135,6 +141,22 @@ const fields: Record<string, z.ZodType> = {
       })
       .strict()
       .optional(),
+    execution: z
+      .object({
+        kernelId: z.string().min(1),
+        kernelVersion: z.number().int().positive(),
+        strategyId: z.enum(["fixed-stages", "adaptive-delegation"]),
+      })
+      .strict()
+      .optional(),
+    executionCheckpoint: z
+      .object({
+        kernelId: z.string().min(1),
+        kernelVersion: z.number().int().positive(),
+        strategyId: z.enum(["fixed-stages", "adaptive-delegation"]),
+      })
+      .strict()
+      .optional(),
     id: z.string(),
     workId: z.string(),
     text: z.string(),
@@ -208,6 +230,14 @@ const fields: Record<string, z.ZodType> = {
     saved: z.boolean(),
     read: z.boolean(),
     scroll: z.number(),
+    savedRef: z
+      .object({
+        materialId: z.string(),
+        version: z.number().int().positive(),
+      })
+      .strict()
+      .optional(),
+    positions: z.record(z.string(), z.number()).optional(),
   }),
   feed: z.object({
     id: z.string(),
@@ -246,7 +276,7 @@ const fields: Record<string, z.ZodType> = {
   }),
 };
 const kinds = new Set(
-  "tool-call workspace-action direct-call asset candidate contribution decision decision-answer delivery draft feed feed-check feed-preview initialization initialization-form local-source local-system-plan material message meta model-call model-input outcome outcome-input project project-brief project-inspection project-reading-work project-standard radar-auto-check radar-edition radar-job radar-reading radar-topic radar-watch run schedule schedule-occurrence schedule-version skill skill-adoption skill-state suggestion-document suggestion-preview suggestion-receipt team version view work work-event workflow".split(
+  "tool-call workspace-action direct-call asset candidate contribution decision decision-answer delivery draft feed feed-check feed-preview initialization initialization-form input-manifest local-source local-system-plan material message meta model-call model-input outcome outcome-input project project-brief project-inspection project-reading-work project-standard radar-auto-check radar-edition radar-job radar-reading radar-topic radar-watch run schedule schedule-occurrence schedule-version skill skill-adoption skill-state suggestion-document suggestion-preview suggestion-receipt team version view work work-event workflow workflow-candidate".split(
     " ",
   ),
 );
@@ -288,6 +318,8 @@ export function validateWorkspace(data: WorkspaceData) {
                 ? rootsSchema
                 : row.id === "workspace-policy"
                   ? z.object({ direct: z.boolean() }).strict()
+                : row.id === "radar-view"
+                  ? radarViewSchema
                 : null;
       if (schema && !schema.safeParse(value).success)
         throw Error(`备份设置格式不符：${row.id}`);
@@ -339,6 +371,29 @@ export function validateWorkspace(data: WorkspaceData) {
   );
   for (const [kind, values] of indexed)
     for (const [id, value] of values) {
+      if (kind === "input-manifest") {
+        if (value.id !== id || !Array.isArray(value.entries)) throw Error("输入清单格式不符");
+        required("run", value.runId); required("contribution", value.contributionId);
+        const c = indexed.get("contribution")!.get(value.contributionId);
+        if (c.workId !== value.workId || c.runId !== value.runId || c.inputManifestId !== id) throw Error("输入清单归属不一致");
+        for (const entry of value.entries) {
+          if (!["message", "decision", "outcome", "material"].includes(entry.kind) || !["full", "excerpt", "summary", "truncated", "omitted"].includes(entry.coverage) || typeof entry.id !== "string" || typeof entry.label !== "string") throw Error("输入来源格式不符");
+          required(entry.kind, entry.entityId);
+          const entity = indexed.get(entry.kind)!.get(entry.entityId);
+          if (entry.kind !== "material" && entity.workId !== value.workId) throw Error("输入来源跨工作");
+        }
+      }
+      if (kind === "contribution" && value.inputManifestId) required("input-manifest", value.inputManifestId);
+      if (kind === "workflow-candidate") {
+        if (value.id !== id) throw Error("流程候选身份不一致");
+        required("run", value.runId); required("version", value.sourceVersionId);
+        const r = indexed.get("run")!.get(value.runId), v = indexed.get("version")!.get(value.sourceVersionId);
+        if (r.workId !== value.sourceWorkId || v.workId !== value.sourceWorkId) throw Error("流程候选来源跨工作");
+        if (value.status === "saved") {
+          required("workflow", value.savedWorkflowKey);
+          if (indexed.get("workflow")!.get(value.savedWorkflowKey)?.learning?.candidateId !== id) throw Error("流程候选保存版本不一致");
+        }
+      }
       if (kind === "tool-call") {
         required("run", value.runId);
         required("contribution", value.contributionId);
@@ -423,7 +478,19 @@ export function validateWorkspace(data: WorkspaceData) {
         required("radar-topic", value.topic.id);
         refs(value.sources.map((s: any) => s.reference));
       }
-      if (kind === "radar-reading") required("radar-edition", id);
+      if (kind === "radar-reading") {
+        if (isMaterialReadingId(id) || value.savedRef) {
+          const materialId =
+            value.savedRef?.materialId ?? materialIdFromReading(id);
+          if (!materialId || !materialIds.has(materialId))
+            throw Error("备份缺少关联记录：material");
+          if (value.savedRef)
+            required(
+              "material",
+              `${value.savedRef.materialId}@${value.savedRef.version}`,
+            );
+        } else required("radar-edition", id);
+      }
       if (kind === "radar-topic") {
         for (const s of value.sources) {
           if (!materialIds.has(s.materialId)) throw Error("议题引用的材料缺失");

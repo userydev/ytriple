@@ -20,6 +20,7 @@ import type {
   Contribution,
   Work,
 } from "../src/core/types";
+import { teamResponse, boundBaseFromPrompt } from "./team-response";
 const input = (context = "new", text = "整理证据并形成说明"): SubmitInput => ({
   key: randomUUID(),
   context,
@@ -45,11 +46,19 @@ class ModelFixture implements Model {
       yield { type: "run.started", run_id: key };
       await new Promise((r) => setTimeout(r, 3));
       if (signal.aborted) throw new DOMException("Stopped", "AbortError");
+      const answer =
+        this.calls % 3 === 2 ? "依据不足，保留限制" : "测试成果，保留限制";
+      const system =
+        _prompt.messages.find((m) => m.role === "system")?.content ?? "";
+      const allowsArtifact = !system.includes("不允许提交 artifact");
+      const baseVersionId = boundBaseFromPrompt(_prompt);
       yield {
         type: "text.delta",
         run_id: key,
-        text:
-          this.calls % 3 === 2 ? "依据不足，保留限制" : "测试成果，保留限制",
+        text: teamResponse(
+          answer,
+          allowsArtifact ? { body: answer, baseVersionId } : null,
+        ),
       };
       if (this.fail)
         throw new ServiceError(
@@ -332,7 +341,12 @@ test("reconcile retrieves original paid stage and resumes without replaying it",
     async lookup() {
       return {
         status: "succeeded",
-        result: { text: "已找回原运行的研究结果" },
+        result: {
+          text: teamResponse("已找回原运行的研究结果", {
+            body: "已找回原运行的研究结果",
+            baseVersionId: null,
+          }),
+        },
         error: null,
       };
     }
@@ -712,7 +726,8 @@ test("invalid stream before the first event finds the same submitted stage witho
     },
     async lookupByKey(key) {
       lookups++;
-      assert.equal(key, `${run.id}-0`);
+      const remoteKey = store.all<Contribution>("contribution")[0].remoteKey!;
+      assert.equal(key, remoteKey);
       return {
         id: "original-remote-run",
         status: "succeeded",

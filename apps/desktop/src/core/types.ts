@@ -44,6 +44,12 @@ export type Draft = {
   skillKeys?: string[];
   outputMode?: OutputMode;
   preparedProcess?: { materialId: string; instruction: string; added: boolean };
+  preparedWorkflow?: {
+    sourceVersionId: string;
+    materialId: string;
+    instruction: string;
+    added: boolean;
+  };
   id: string;
   text: string;
   refs: Reference[];
@@ -136,7 +142,9 @@ export type Delivery = {
   adoptedVersionId: string | null;
 };
 export type Work = {
+  keepResearchReferences?: boolean;
   workspaceContext?: WorkspaceContext;
+  nextSubmitSeq?: number;
   id: string;
   title: string;
   projectId: string | null;
@@ -148,6 +156,12 @@ export type Work = {
   queuePaused: boolean;
   teamKey?: string;
   workflowKey?: string;
+};
+export type ContextSnapshot = {
+  text: string;
+  scope: ContextScope;
+  capturedAt: string;
+  sources?: import("./input-manifest").InputManifestEntry[];
 };
 export type Material = {
   feedSource?: {
@@ -194,6 +208,11 @@ export type Material = {
     outcomeState?: string;
     versionIds: string[];
     capturedAt: string;
+    cutoffWorkSeq?: number;
+    scopeDigest?: string;
+    scopeKind?: "work" | "run" | "selection";
+    sources?: import("./input-manifest").InputManifestEntry[];
+    evidenceState?: { kind: string; id: string; value: string }[];
     mode: OutputMode;
   };
   url?: string;
@@ -227,27 +246,133 @@ export type Message = {
   refs: Reference[];
   createdAt: string;
 };
+export type MemberProvenance = {
+  templateId: string;
+  templateRevision: string;
+  source: {
+    repository: string;
+    commit: string;
+    path: string;
+    contentSha256: string;
+    license: "MIT";
+    adaptation: string;
+  };
+};
 export type Member = {
   toolKeys?: import("./tool-contract").ToolKey[];
   id: string;
   name: string;
   instruction: string;
   skillKeys?: string[];
+  provenance?: MemberProvenance;
 };
+export type AccountAccessState =
+  | "none"
+  | "manual"
+  | "manual_expired"
+  | "subscription_active"
+  | "subscription_expired"
+  | "revoked";
+export type AccountSummary = {
+  productId: string;
+  userId: string;
+  accessState: AccountAccessState;
+  catalogNote: string | null;
+  subscription: {
+    planId: string;
+    planName: string;
+    planVersion: number;
+    priceId: string | null;
+    price: {
+      amountMinor: number | null;
+      currency: string | null;
+      billingPeriod: string | null;
+      priced: boolean;
+    } | null;
+    validFrom: string;
+    validUntil: string | null;
+    revision: number;
+    revokedAt: string | null;
+  } | null;
+  entitlement: {
+    ownership: "manual" | "subscription";
+    dailyRequests: number;
+    dailyBudgetUnits: number;
+    validUntil: string | null;
+    remainingRequests: number;
+    remainingBudgetUnits: number;
+  } | null;
+  usageToday: { requests: number; budgetUnits: number; note: string };
+  catalog: {
+    planId: string;
+    displayName: string;
+    version: number;
+    prices: {
+      priceId: string;
+      amountMinor: number | null;
+      currency: string | null;
+      billingPeriod: string | null;
+      priced: boolean;
+    }[];
+  }[];
+};
+export type AccountSummaryState =
+  | "idle"
+  | "loading"
+  | "ready"
+  | "error"
+  | "unsupported";
 export type Team = {
   id: string;
   version: number;
   name: string;
   members: Member[];
 };
+export type ExecutionStrategyId = "fixed-stages" | "adaptive-delegation";
+export type FrozenExecution = {
+  kernelId: string;
+  kernelVersion: number;
+  strategyId: ExecutionStrategyId;
+};
 export type Workflow = {
   delegation?: { maxTasks: number; maxDepth: number };
+  executionStrategy?: ExecutionStrategyId;
+  learning?: {
+    candidateId: string;
+    sourceVersionId: string;
+    applicability: string;
+    unverified: string[];
+    sourceNotes: string;
+  };
   id: string;
   version: number;
   name: string;
   stages: { role: string; objective: string; result: boolean }[];
 };
+export type ContextScope = {
+  outputMode: OutputMode;
+  processScoped: boolean;
+  includesResultBase: boolean;
+  includesExplicitMaterials: boolean;
+  includesCurrentResult: boolean;
+  currentResultTruncated: boolean;
+  inheritedMaterials: boolean;
+  exchangeTurns: number;
+  exchangeOmitted: number;
+  exchangeFailedTurns: number;
+  exchangeTruncated: boolean;
+  exchangeHistoryBytes: number;
+  backgroundOmitted: number;
+  backgroundTruncated: boolean;
+};
 export type Run = {
+  execution?: FrozenExecution;
+  executionCheckpoint?: FrozenExecution;
+  workSeq?: number;
+  responseProtocol?: string;
+  contextSnapshot?: ContextSnapshot;
+  inheritedRefs?: boolean;
+  contextScope?: ContextScope;
   workspacePolicy?: { direct: boolean };
   workspaceContext?: WorkspaceContext;
   tools?: import("./tool-contract").ToolPolicy;
@@ -275,6 +400,28 @@ export type Run = {
   serviceScope?: string;
   resumeRequested?: boolean;
   projectContext?: ProjectContext | null;
+  workflowCandidateSource?: string;
+};
+export type WorkflowCandidate = {
+  id: string;
+  sourceVersionId: string;
+  sourceWorkId: string;
+  runId: string;
+  fingerprint: string;
+  parseError?: string;
+  preview: {
+    name: string;
+    applicability: string;
+    unverified: string[];
+    sourceNotes: string;
+    stages: Workflow["stages"];
+    executionStrategy?: Workflow["executionStrategy"];
+    delegation?: Workflow["delegation"];
+  };
+  targetWorkflowId: string;
+  status: "draft" | "saved";
+  savedWorkflowKey?: string;
+  createdAt: string;
 };
 export type DecisionRequest = {
   question: string;
@@ -334,6 +481,17 @@ export type Contribution = {
   remoteKey?: string;
   error: string | null;
   createdAt: string;
+  inputManifestId?: string;
+  publicProcess?: {
+    basis?: string;
+    uncertainties?: string[];
+    feedback?: {
+      sourceId: string;
+      stance: "used" | "not_used" | "clarify" | "unchecked";
+      note?: string;
+    }[];
+  };
+  publicProcessWarnings?: string[];
 };
 export type ArtifactVersion = {
   kind?: "result" | "summary" | "review" | "readiness" | "method";
@@ -387,6 +545,9 @@ export type Source = {
 };
 export type ServiceStatus = {
   account?: import("./accounts").AccountInfo;
+  accountSummary?: AccountSummary | null;
+  accountSummaryState?: AccountSummaryState;
+  accountSummaryError?: string | null;
   configured: boolean;
   baseUrl: string;
   connected: boolean;
@@ -435,6 +596,8 @@ export type Snapshot = {
   contributions: Contribution[];
   versions: ArtifactVersion[];
   candidates: ArtifactCandidate[];
+  workflowCandidates: WorkflowCandidate[];
+  inputManifests: import("./input-manifest").InputManifest[];
   decisions: Decision[];
   materials: Material[];
   assets: Asset[];

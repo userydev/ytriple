@@ -11,6 +11,12 @@ import { Artifacts } from "../src/core/artifacts";
 import { Decisions } from "../src/core/decisions";
 import type { Contribution, Draft, Run, SubmitInput } from "../src/core/types";
 import type { Model, Prompt } from "../src/core/ycore";
+import {
+  legacyFinish,
+  protocolModel,
+  teamResponse,
+  boundBaseFromPrompt,
+} from "./team-response";
 const request = (
   context = "new",
   extra: Partial<SubmitInput> = {},
@@ -45,7 +51,8 @@ function fixture(path = ":memory:") {
     createdAt: new Date().toISOString(),
   };
   store.put("contribution", contribution.id, contribution);
-  const version = store.finish(
+  const version = legacyFinish(
+    store,
     run.id,
     "先展示结果，保留未知的出席人数。",
     true,
@@ -69,7 +76,20 @@ class Capture implements Model {
     yield {
       type: "text.delta" as const,
       run_id: key,
-      text: "依据记录：报名意向无法证明实际出席。缺少实际反馈，不判断效果。",
+      text: teamResponse(
+        "依据记录：报名意向无法证明实际出席。缺少实际反馈，不判断效果。",
+        (() => {
+          const system =
+            prompt.messages.find((m) => m.role === "system")?.content ?? "";
+          const baseVersionId = boundBaseFromPrompt(prompt);
+          return system.includes("不允许提交 artifact")
+            ? null
+            : {
+                body: "依据记录：报名意向无法证明实际出席。缺少实际反馈，不判断效果。",
+                baseVersionId,
+              };
+        })(),
+      ),
     };
     yield { type: "run.completed" as const, run_id: key };
   }
@@ -131,7 +151,7 @@ test("explanation is a reply; summary and review have independent version chains
   const f = fixture();
   try {
     const model = new Capture(),
-      runtime = new Runtime(f.store, () => model);
+      runtime = new Runtime(f.store, () => protocolModel(model));
     const follow = f.records.prepare({
       workId: f.run.workId,
       mode: "explanation",
@@ -312,7 +332,7 @@ test("queued review keeps frozen evidence and output mode through restart and ex
     reopened.recover();
     assert.equal(reopened.require<Run>("run", queued.id).outputMode, "review");
     const model = new Capture(),
-      runtime = new Runtime(reopened, () => model);
+      runtime = new Runtime(reopened, () => protocolModel(model));
     runtime.resume(queued.workId);
     await runtime.settled(queued.workId);
     assert.ok(model.prompts[0].messages[1].content.includes(body));

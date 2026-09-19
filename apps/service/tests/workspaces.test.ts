@@ -21,6 +21,7 @@ import { transaction, assertRuntimeRole } from "../src/db.ts";
 import { migrate } from "../scripts/migrate.ts";
 import { defaultTeam, defaultWorkflow } from "../../desktop/src/core/types.ts";
 import { versionKey } from "../../desktop/src/core/configuration.ts";
+import { protocolModel } from "../../desktop/tests/team-response.ts";
 
 // This suite never accepts DATABASE_URL: it can only touch its dedicated loopback fixture.
 const ownerUrl =
@@ -492,7 +493,8 @@ async function serialSpace() {
   assert.equal(selected.status, 200);
   return s;
 }
-const remoteFixture = (stream: Model["stream"]): Model => ({
+// Match the final response contract while preserving raw intermediate controls.
+const remoteFixture = (stream: Model["stream"]): Model => protocolModel({
   scope: "fixture:remote:ytriple",
   recovery: "remote",
   stream,

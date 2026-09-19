@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { Store } from "../src/core/store";
+import { legacyFinish } from "./team-response";
 import { LocalDirectories } from "../src/core/local-directories";
 import {
   ProjectInitialization,
@@ -72,7 +73,7 @@ async function fixture() {
     recipient: null,
   });
   store.setRun(run.id, { status: "running" });
-  store.finish(
+  legacyFinish(store,
     run.id,
     "# 阅读札记\n\n目标：本地整理笔记。\n流程：添加笔记、检索、回看。\n验收：重启后笔记可找回。\n未决：是否支持导入旧笔记。",
     true,

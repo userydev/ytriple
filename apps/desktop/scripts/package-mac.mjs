@@ -336,9 +336,9 @@ try {
     !cdhash ||
     !designatedRequirement ||
     !designatedRequirement.includes('identifier "work.ydev.ytriple"') ||
-    !designatedRequirement.includes(
-      `certificate root = H"${signing.identity.toLowerCase()}"`,
-    )
+    !["root", "leaf"].some((position) => designatedRequirement.includes(
+      `certificate ${position} = H"${signing.identity.toLowerCase()}"`,
+    ))
   )
     throw Error("无法读取安装包签名标识");
   const imageRoot = join(temporary, "image");

@@ -327,6 +327,76 @@ test("an empty public match is reported honestly and never calls the model", () 
   store.close();
 });
 
+test("short English keywords use word boundaries and OpenAI only matches as an alias", async () => {
+  const store = new Store(":memory:");
+  const source = addPublicSource(store);
+  const missSaid = publicMaterial(
+    "ycore:managed:said",
+    "said",
+    source.id,
+    1,
+    "They said it failed in Spain",
+    "Witnesses said the sandwich failed.",
+    "2026-09-18T01:00:00Z",
+  );
+  const hitAlias = publicMaterial(
+    "ycore:managed:openai",
+    "openai",
+    source.id,
+    1,
+    "OpenAI shipping note",
+    "OpenAI published measured limits.",
+    "2026-09-18T02:00:00Z",
+  );
+  const hitWord = publicMaterial(
+    "ycore:managed:ai",
+    "ai",
+    source.id,
+    1,
+    "An AI briefing",
+    "An AI system was compared with prior evidence.",
+    "2026-09-18T03:00:00Z",
+  );
+  for (const material of [missSaid, hitAlias, hitWord])
+    store.put("material", `${material.id}@${material.version}`, material);
+  const model = new EditorialFixture();
+  const radar = new Radar(store, () => model);
+  const byAi = radar.saveTopic({
+    revision: 0,
+    title: "人工智能",
+    focus: "",
+    sourceIds: [source.id],
+    keywords: ["AI"],
+    sources: [],
+  });
+  const aiJob = radar.refresh(byAi.id);
+  await radar.settled(aiJob.id);
+  assert.deepEqual(
+    store
+      .require<RadarJob>("radar-job", aiJob.id)
+      .sources.map((item) => item.reference.materialId)
+      .sort(),
+    [hitWord.id],
+  );
+  const byAlias = radar.saveTopic({
+    revision: 0,
+    title: "OpenAI 别名",
+    focus: "",
+    sourceIds: [source.id],
+    keywords: ["OpenAI"],
+    sources: [],
+  });
+  const aliasJob = radar.refresh(byAlias.id);
+  await radar.settled(aliasJob.id);
+  assert.deepEqual(
+    store
+      .require<RadarJob>("radar-job", aliasJob.id)
+      .sources.map((item) => item.reference.materialId),
+    [hitAlias.id],
+  );
+  store.close();
+});
+
 test("legacy fixed-material topics remain valid and unchanged by omitted dynamic supply fields", () => {
   const { store, radar, topic } = setup();
   const unchanged = radar.saveTopic({
@@ -401,7 +471,7 @@ test("radar integrates a collection, preserves dedup reasons and exact editions,
     JSON.parse(model.prompts[1].messages[1].content).previous.summary,
     original.insight.summary,
   );
-  radar.reading(original.id, { saved: true, read: true, scroll: 410 });
+  radar.reading({ editionId: original.id }, { saved: true, read: true, scroll: 410 });
   assert.equal(store.snapshot().radar.reading[0].scroll, 410);
   assert.equal(model.calls, 2);
   store.close();
@@ -664,4 +734,141 @@ test("radar keeps execution-lost and provider-unknown terminal events recoverabl
     assert.equal(model.lookups, 1);
     store.close();
   }
+});
+
+test("v2 prompt budget omits whole auto-selected articles after previous insight without truncating, dropping keep, or recharging", async () => {
+  const store = new Store(":memory:");
+  const source = addPublicSource(store);
+  const at = (index: number) =>
+    new Date(Date.parse("2026-09-18T00:00:00.000Z") + index * 60_000).toISOString();
+  const body = (index: number, size = 1480) => `${"E".repeat(size)}#${index}#`;
+  const keep = store.addMaterial("固定保留", "PINNED-KEEP-FULL-TEXT", "local_text");
+  const articles = Array.from({ length: 18 }, (_, index) => {
+    const material = publicMaterial(
+      `ycore:managed:ars-${index}`,
+      `ars-${index}`,
+      source.id,
+      1,
+      `Ars ${String(index).padStart(2, "0")}`,
+      body(index),
+      at(index),
+    );
+    store.put("material", `${material.id}@${material.version}`, material);
+    return material;
+  });
+  const model = new EditorialFixture();
+  const radar = new Radar(store, () => model);
+  const topic = radar.saveTopic({
+    revision: 0,
+    title: "Ars 持续观察",
+    focus: "真实节选",
+    sourceIds: [source.id],
+    sources: [{ materialId: keep.id, policy: "keep", reason: "用户指定保留" }],
+  });
+  const first = radar.refresh(topic.id);
+  await radar.settled(first.id);
+  const v1 = JSON.parse(model.prompts[0].messages[1].content);
+  assert.equal(v1.previous, null);
+  assert.equal(v1.sources.length, 18);
+  assert.ok(
+    model.prompts[0].messages.every((message) => message.content.length <= 32000),
+  );
+  assert.ok(
+    model.prompts[0].messages.reduce(
+      (n, message) => n + Buffer.byteLength(message.content),
+      0,
+    ) <= 64000,
+  );
+  assert.equal(first.supply?.omitted, 1);
+  assert.equal(model.calls, 1);
+
+  for (const index of Array.from({ length: 17 }, (_, offset) => 18 + offset)) {
+    const material = publicMaterial(
+      `ycore:managed:ars-${index}`,
+      `ars-${index}`,
+      source.id,
+      1,
+      `Ars ${String(index).padStart(2, "0")}`,
+      body(index, 1800),
+      at(index),
+    );
+    store.put("material", `${material.id}@${material.version}`, material);
+    articles.push(material);
+  }
+  const second = radar.refresh(topic.id);
+  await radar.settled(second.id);
+  assert.notEqual(second.id, first.id);
+  const v2 = JSON.parse(model.prompts[1].messages[1].content);
+  assert.ok(v2.previous);
+  assert.ok(v2.sources.length < 18);
+  assert.ok(v2.sources.length >= 2);
+  assert.equal(
+    v2.sources.some(
+      (item: { policy: string; body: string }) =>
+        item.policy === "keep" && item.body === "PINNED-KEEP-FULL-TEXT",
+    ),
+    true,
+  );
+  for (const item of v2.sources) {
+    if (item.policy === "keep") continue;
+    const index = Number(/#(\d+)#$/.exec(item.body)?.[1]);
+    assert.equal(item.body, body(index, index >= 18 ? 1800 : 1480));
+  }
+  assert.ok(
+    model.prompts[1].messages.every((message) => message.content.length <= 32000),
+  );
+  assert.ok(
+    model.prompts[1].messages.reduce(
+      (n, message) => n + Buffer.byteLength(message.content),
+      0,
+    ) <= 64000,
+  );
+  assert.ok((second.supply?.omitted ?? 0) > (first.supply?.omitted ?? 0));
+  assert.ok((second.supply?.included ?? 0) < 17);
+  assert.match(second.supply?.notes.join("\n") ?? "", /模型输入范围/);
+  assert.match(second.supply?.notes.join("\n") ?? "", /未截断/);
+  assert.equal(model.calls, 2);
+  assert.equal(radar.refresh(topic.id).id, second.id);
+  assert.equal(radar.matchingJob(topic.id)?.id, second.id);
+  assert.equal(model.calls, 2);
+  store.close();
+});
+
+test("fixed materials that overflow the prompt never call the model or drop keep by truncation", () => {
+  const store = new Store(":memory:");
+  const model = new EditorialFixture();
+  const radar = new Radar(store, () => model);
+  const keep = store.addMaterial("超限固定", "文".repeat(40000), "local_text");
+  const extra = store.addMaterial("自动候选", `${"E".repeat(1450)}#auto#`, "summary");
+  const topic = radar.saveTopic({
+    revision: 0,
+    title: "固定材料超限",
+    focus: "",
+    sources: [
+      { materialId: keep.id, policy: "keep", reason: "必须保留" },
+      { materialId: extra.id, policy: "auto", reason: "" },
+    ],
+  });
+  assert.throws(() => radar.refresh(topic.id), /超过模型输入范围/);
+  assert.equal(model.calls, 0);
+  assert.equal(store.snapshot().radar.jobs.length, 0);
+  store.close();
+});
+
+test("a follow intent without sources is saved and never calls the model", () => {
+  const store = new Store(":memory:");
+  const model = new EditorialFixture();
+  const radar = new Radar(store, () => model);
+  const topic = radar.saveTopic({
+    revision: 0,
+    title: "尚无材料的方向",
+    focus: "",
+    sources: [],
+  });
+  assert.equal(topic.sources.length, 0);
+  assert.equal(radar.hasReadableEvidence(topic.id), false);
+  assert.throws(() => radar.refresh(topic.id), /还没有可读材料；未调用模型/);
+  assert.equal(model.calls, 0);
+  assert.equal(store.snapshot().radar.jobs.length, 0);
+  store.close();
 });

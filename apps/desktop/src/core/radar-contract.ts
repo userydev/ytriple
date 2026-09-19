@@ -2,6 +2,36 @@ import { z } from "zod";
 import type { RadarWatch, RadarAutoCheck } from "./radar-watch-contract";
 import type { Reference, RunStatus } from "./types";
 
+const uniqueInsensitive = (items: string[]) =>
+  new Set(items.map((value) => value.toLocaleLowerCase())).size === items.length;
+
+export const matchTermSchema = z.string().trim().min(1).max(80);
+export const matchRulesSchema = z
+  .object({
+    version: z.literal(1),
+    groups: z
+      .array(
+        z
+          .object({
+            terms: z
+              .array(matchTermSchema)
+              .min(1)
+              .max(8)
+              .refine(uniqueInsensitive, "同一组内词条只需一次"),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(6),
+    exclude: z
+      .array(matchTermSchema)
+      .max(12)
+      .refine(uniqueInsensitive, "排除词条只需一次")
+      .optional(),
+  })
+  .strict();
+export type MatchRules = z.infer<typeof matchRulesSchema>;
+
 export const topicInputSchema = z
   .object({
     id: z.string().uuid().optional(),
@@ -25,13 +55,9 @@ export const topicInputSchema = z
     keywords: z
       .array(z.string().trim().min(1).max(120))
       .max(12)
-      .refine(
-        (a) =>
-          new Set(a.map((value) => value.toLocaleLowerCase())).size ===
-          a.length,
-        "同一关键词只需填写一次",
-      )
+      .refine(uniqueInsensitive, "同一关键词只需填写一次")
       .optional(),
+    matchRules: matchRulesSchema.optional(),
     sources: z
       .array(
         z
@@ -49,11 +75,7 @@ export const topicInputSchema = z
         "同一材料只需选择一次",
       ),
   })
-  .strict()
-  .refine(
-    (t) => t.sources.length || t.feedIds?.length || t.sourceIds?.length,
-    "请选择材料、持续订阅或公开来源",
-  );
+  .strict();
 export type TopicInput = z.infer<typeof topicInputSchema>;
 export type RadarTopic = Omit<TopicInput, "id" | "archived"> & {
   id: string;
@@ -147,6 +169,53 @@ export type RadarReading = {
   saved: boolean;
   read: boolean;
   scroll: number;
+  savedRef?: { materialId: string; version: number };
+  positions?: Record<string, number>;
+};
+export const radarContentRefSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("material"),
+      id: z.string().min(1).max(300),
+      version: z.number().int().positive(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("edition"),
+      id: z.string().min(1).max(300),
+    })
+    .strict(),
+]);
+export type RadarContentRef = z.infer<typeof radarContentRefSchema>;
+export const radarViewSchema = z
+  .object({
+    scope: z.enum(["all", "followed", "saved", "topic"]),
+    topicId: z.string().uuid().nullable(),
+    query: z.string().max(200),
+    object: radarContentRefSchema.nullable(),
+    returnStack: z.array(radarContentRefSchema).max(8),
+    queue: z.array(radarContentRefSchema).max(200),
+    listAnchor: radarContentRefSchema.nullable(),
+    listOffset: z.number().min(0).max(10000000).optional().default(0),
+    workId: z.string().max(300).nullable(),
+    researchRef: radarContentRefSchema.nullable(),
+    followDraft: z.string().max(2000),
+  })
+  .strict();
+export type RadarView = z.infer<typeof radarViewSchema>;
+export const defaultRadarView: RadarView = {
+  scope: "all",
+  topicId: null,
+  query: "",
+  object: null,
+  returnStack: [],
+  queue: [],
+  listAnchor: null,
+  listOffset: 0,
+  workId: null,
+  researchRef: null,
+  followDraft: "",
 };
 export type RadarSnapshot = {
   watches: RadarWatch[];
@@ -155,7 +224,17 @@ export type RadarSnapshot = {
   editions: RadarEdition[];
   jobs: RadarJob[];
   reading: RadarReading[];
+  view?: RadarView;
 };
+export function materialReadingId(materialId: string) {
+  return `m:${materialId}`;
+}
+export function isMaterialReadingId(id: string) {
+  return id.startsWith("m:");
+}
+export function materialIdFromReading(id: string) {
+  return isMaterialReadingId(id) ? id.slice(2) : null;
+}
 
 export function coverageLabel(value: string) {
   return (

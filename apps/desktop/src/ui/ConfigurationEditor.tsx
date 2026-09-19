@@ -10,6 +10,13 @@ import {
 } from "../core/configuration";
 import { command } from "./api";
 import { IconButton } from "./Composer";
+import {
+  instantiateMemberTemplate,
+  listMemberTemplates,
+  memberTemplateCatalog,
+  memberTemplateLicenseText,
+  MEMBER_TEMPLATE_SOURCE_URL,
+} from "../core/member-templates";
 
 export function ConfigurationEditor({
   data,
@@ -33,6 +40,11 @@ export function ConfigurationEditor({
     [busy, setBusy] = useState(false),
     [notice, setNotice] = useState(""),
     [error, setError] = useState("");
+  const [license, setLicense] = useState("");
+  const [licenseBusy, setLicenseBusy] = useState(false);
+  const memberTemplates = listMemberTemplates();
+  const [templateId, setTemplateId] = useState(memberTemplates[0]?.id ?? "");
+  const templatePreview = memberTemplateCatalog.find((t) => t.id === templateId);
   const [directActions, setDirectActions] = useState(
     data.workspacePolicy.direct,
   );
@@ -102,16 +114,31 @@ export function ConfigurationEditor({
       setBusy(false);
     }
   }
+  const appliedTeamKey = versionKey(initialTeam),
+    appliedFlowKey = versionKey(initialFlow);
+  const isApplied =
+    !dirty.team &&
+    !dirty.flow &&
+    versionKey(team) === appliedTeamKey &&
+    versionKey(flow) === appliedFlowKey;
+  const configStatus = isApplied
+    ? "当前应用组合"
+    : dirty.team || dirty.flow
+      ? "正在编辑，尚未保存"
+      : "已选版本尚未应用，需点「应用组合」";
   const records = data.runs
     .filter((r) => !work || r.workId === work.id)
     .slice()
     .reverse();
   return (
     <div className="configuration-editor">
-      <p className="muted">
-        {work
-          ? `应用于「${work.title}」的后续提交`
-          : "设置新工作的默认搭配；已有工作保持各自配置"}
+      <p className="settings-note" role="status">
+        {configStatus}。保存只产生新版本；「应用组合」才影响
+        {work ? "此工作" : "新工作"}的后续提交。已提交与排队运行保留原搭配/流程快照。
+      </p>
+      <p className="settings-note">
+        所有成员共用当前 AI 连接；「应用组合」只影响
+        {work ? "此工作" : "新工作"}的后续提交。历史运行详情保留当时的搭配与连接记录，供诊断使用。
       </p>
       <div className="config-tabs" aria-label="配置内容">
         {(
@@ -274,7 +301,7 @@ export function ConfigurationEditor({
               <details>
                 <summary>成员可用工具 · {m.toolKeys?.length ?? 0}</summary>
                 <p className="muted">
-                  本机计算与已分配材料查阅。只对之后明确采用此搭配的运行生效。
+                  运行权限为三者交集：成员勾选的工具、流程/运行授权，以及宿主工作台规则（如直接办理与待确认）。职责说明本身不授予工具。
                 </p>
                 {toolCatalog.map((tool) => (
                   <label key={tool.key}>
@@ -307,6 +334,91 @@ export function ConfigurationEditor({
               </details>
             </fieldset>
           ))}
+          <fieldset className="form-section">
+            <legend>从固定模板添加</legend>
+            <p className="settings-note">
+              模板只写入职责与出处元数据；技能和工具默认为空，需按既有机制授予。保存/应用流程与手动成员相同，不会自动改默认团队。
+            </p>
+            <label>
+              成员模板
+              <select
+                aria-label="成员模板"
+                disabled={!teamEditable}
+                value={templateId}
+                onChange={(e) => setTemplateId(e.target.value)}
+              >
+                {memberTemplates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {templatePreview ? (
+              <>
+                <p className="settings-note">{templatePreview.summary}</p>
+                <details>
+                  <summary>预览职责与约束</summary>
+                  <pre className="template-preview">{templatePreview.instruction}</pre>
+                </details>
+                <p className="muted">
+                  {memberTemplateLicenseText()}
+                  {templatePreview ? (
+                    <>
+                      {" "}
+                      <a
+                        href={MEMBER_TEMPLATE_SOURCE_URL(
+                          templatePreview.provenance.source.path,
+                        )}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        查看上游角色来源
+                      </a>
+                    </>
+                  ) : null}
+                </p>
+                <button
+                  type="button"
+                  className="quiet"
+                  disabled={licenseBusy}
+                  onClick={async () => {
+                    if (license) { setLicense(""); return; }
+                    setLicenseBusy(true);
+                    try {
+                      const text = await command({ type: "read-member-template-license" });
+                      if (typeof text !== "string" || !text) throw Error("许可文件不可用");
+                      setLicense(text);
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : "许可读取失败");
+                    } finally { setLicenseBusy(false); }
+                  }}
+                >
+                  {licenseBusy ? "正在读取许可…" : license ? "收起 MIT 许可" : "查看完整 MIT 许可"}
+                </button>
+                {license ? <pre className="template-preview" aria-label="MIT 许可正文">{license}</pre> : null}
+              </>
+            ) : null}
+            <button
+              type="button"
+              disabled={!teamEditable || !templateId || team.members.length >= 12}
+              onClick={() => {
+                try {
+                  const member = instantiateMemberTemplate(
+                    templateId,
+                    team.members,
+                  );
+                  editTeam({ ...team, members: [...team.members, member] });
+                  setNotice(`已把「${member.name}」加入搭配草稿，请保存后应用。`);
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : String(e));
+                }
+              }}
+            >
+              <Plus size={16} />
+              从模板加入草稿
+            </button>
+          </fieldset>
           <div className="dialog-actions">
             <button
               disabled={!teamEditable || team.members.length >= 12}
@@ -325,7 +437,7 @@ export function ConfigurationEditor({
               }
             >
               <Plus size={16} />
-              添加成员
+              添加空白成员
             </button>
             <button
               disabled={!dirty.team || busy}
@@ -374,23 +486,40 @@ export function ConfigurationEditor({
                 ))}
               </select>
             </label>
-            <label className="inline-choice">
-              <input
-                type="checkbox"
-                checked={!!flow.delegation}
+            <label>
+              执行策略
+              <select
+                aria-label="执行策略"
                 disabled={!flowEditable}
+                value={
+                  flow.executionStrategy ??
+                  (flow.delegation ? "adaptive-delegation" : "fixed-stages")
+                }
                 onChange={(e) => {
-                  const { delegation: _, ...fixed } = flow;
-                  editFlow(
-                    e.target.checked
-                      ? { ...flow, delegation: { maxTasks: 4, maxDepth: 2 } }
-                      : fixed,
-                  );
+                  const strategy = e.target.value as
+                    | "fixed-stages"
+                    | "adaptive-delegation";
+                  if (strategy === "adaptive-delegation") {
+                    editFlow({
+                      ...flow,
+                      executionStrategy: strategy,
+                      delegation: flow.delegation ?? {
+                        maxTasks: 4,
+                        maxDepth: 2,
+                      },
+                    });
+                  } else {
+                    const { delegation: _, ...rest } = flow;
+                    editFlow({ ...rest, executionStrategy: strategy });
+                  }
                 }}
-              />
-              允许成员按需委派
+              >
+                <option value="fixed-stages">固定步骤顺序</option>
+                <option value="adaptive-delegation">负责人按需委派</option>
+              </select>
             </label>
-            {flow.delegation ? (
+            {flow.delegation ||
+            flow.executionStrategy === "adaptive-delegation" ? (
               <div className="outcome-fields">
                 <label>
                   每轮最多子任务
@@ -398,7 +527,7 @@ export function ConfigurationEditor({
                     type="number"
                     min={1}
                     max={8}
-                    value={flow.delegation.maxTasks}
+                    value={flow.delegation?.maxTasks ?? 4}
                     disabled={!flowEditable}
                     onChange={(e) =>
                       editFlow({
@@ -417,7 +546,7 @@ export function ConfigurationEditor({
                     type="number"
                     min={1}
                     max={3}
-                    value={flow.delegation.maxDepth}
+                    value={flow.delegation?.maxDepth ?? 2}
                     disabled={!flowEditable}
                     onChange={(e) =>
                       editFlow({
@@ -680,6 +809,10 @@ export function ConfigurationEditor({
         >
           应用组合
         </button>
+        <p className="muted">
+          「保存搭配/流程新版本」只存档；「应用组合」写入
+          {work ? "此工作" : "全局默认"}。有未保存修改时请先保存或撤销。
+        </p>
       </footer>
     </div>
   );
