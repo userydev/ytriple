@@ -1,10 +1,14 @@
 node_modules/
 dist/
+dist-server/
 release/
+playwright-report/
+test-results/
+.local/
 .env
 .env.*
 !.env.example
+apps/desktop/build/
+apps/desktop/out/
 *.log
 .DS_Store
-coverage/
-.ytriple/

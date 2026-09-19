@@ -1,0 +1,2541 @@
+import { TeamTrace } from "./TeamTrace";
+import { UnknownRunActions } from "./UnknownRunActions";
+import { processSnapshotStaleData } from "../core/process-scope-stale";
+import { scheduleProblem } from "../core/schedule-contract";
+import { versionLabel } from "../core/output";
+import { latestBrief, latestStandards } from "../core/project-contract";
+import {
+  StrictMode,
+  Suspense,
+  lazy,
+  useEffect,
+  useCallback,
+  useLayoutEffect,
+  useState,
+  useRef,
+} from "react";
+import { createRoot } from "react-dom/client";
+import Markdown from "./Markdown";
+import {
+  House,
+  Menu,
+  UserRound,
+  Cpu,
+  HardDrive,
+  Users,
+  Info,
+  Radar,
+  Folder,
+  Library,
+  Clock,
+  Settings,
+  ArrowLeft,
+  ArrowUpRight,
+  Search,
+  RefreshCw,
+  Download,
+  PanelLeftClose,
+  Check,
+  X,
+  FileText,
+  FileOutput,
+  FolderGit2,
+  ClipboardCheck,
+  Plus,
+  BookOpen,
+  ArrowRight,
+  PanelsTopLeft,
+  Layers,
+  SlidersHorizontal,
+  Ellipsis,
+} from "lucide-react";
+import type {
+  Snapshot,
+  Draft,
+  Work,
+  Project,
+  Material,
+  Reference,
+  ArtifactVersion,
+  Delivery,
+  Run,
+} from "../core/types";
+import { command } from "./api";
+import { Composer, IconButton } from "./Composer";
+import { ConfigurationEditor } from "./ConfigurationEditor";
+import { WorkEditor } from "./WorkEditor";
+import { WorkArea } from "./WorkArea";
+import { useWorkViews } from "./useWorkViews";
+import { Dialog } from "./Dialog";
+import { RadarHighlights } from "./RadarHighlights";
+import { WorkspaceActions } from "./WorkspaceActions";
+const MethodActions = lazy(() =>
+  import("./MethodActions").then((m) => ({ default: m.MethodActions })),
+);
+const WorkflowCandidateActions = lazy(() =>
+  import("./WorkflowCandidateActions").then((m) => ({
+    default: m.WorkflowCandidateActions,
+  })),
+);
+const SchedulesPage = lazy(() =>
+  import("./SchedulesPage").then((m) => ({ default: m.SchedulesPage })),
+);
+const ScheduleEditor = lazy(() =>
+  import("./SchedulesPage").then((m) => ({ default: m.ScheduleEditor })),
+);
+const OutcomeDialog = lazy(() =>
+  import("./OutcomeDialog").then((m) => ({ default: m.OutcomeDialog })),
+);
+const ProjectFilesPanel = lazy(() =>
+  import("./ProjectFilesPanel").then((m) => ({ default: m.ProjectFilesPanel })),
+);
+const ProjectInitializer = lazy(() =>
+  import("./ProjectInitializer").then((m) => ({
+    default: m.ProjectInitializer,
+  })),
+);
+const SuggestionLocation = lazy(() =>
+  import("./ProjectSuggestions").then((m) => ({
+    default: m.SuggestionLocation,
+  })),
+);
+const SuggestionDialog = lazy(() =>
+  import("./ProjectSuggestions").then((m) => ({ default: m.SuggestionDialog })),
+);
+const ProcessPane = lazy(() =>
+  import("./ProcessPane").then((m) => ({ default: m.ProcessPane })),
+);
+const AssetLibrary = lazy(() =>
+  import("./AssetLibrary").then((m) => ({ default: m.AssetLibrary })),
+);
+const AccountSettings = lazy(() =>
+  import("./AccountSettings").then((m) => ({ default: m.AccountSettings })),
+);
+const ModelSettings = lazy(() =>
+  import("./ModelSettings").then((m) => ({ default: m.ModelSettings })),
+);
+const WorkspaceSettings = lazy(() =>
+  import("./WorkspaceSettings").then((m) => ({ default: m.WorkspaceSettings })),
+);
+const LocalFolderSettings = lazy(() =>
+  import("./LocalFolders").then((m) => ({ default: m.LocalFolderSettings })),
+);
+const LocalProjects = lazy(() =>
+  import("./LocalFolders").then((m) => ({ default: m.LocalProjects })),
+);
+const ProjectFolder = lazy(() =>
+  import("./LocalFolders").then((m) => ({ default: m.ProjectFolder })),
+);
+const ProjectContextEditor = lazy(() =>
+  import("./ProjectContextEditor").then((m) => ({
+    default: m.ProjectContextEditor,
+  })),
+);
+const VersionCompare = lazy(() =>
+  import("./VersionCompare").then((m) => ({ default: m.VersionCompare })),
+);
+const RadarPanel = lazy(() =>
+  import("./RadarPanel").then((m) => ({ default: m.RadarPanel })),
+);
+import {
+  coverageLabel,
+  type RadarEdition,
+  type RadarTopic,
+} from "../core/radar-contract";
+import {
+  continueRadarResearch,
+  developmentTraceText,
+  followPlanText,
+  matchingTopicForMaterial,
+  materialResearchDraftId,
+  mergeResearchRefs,
+  boundedResearchRefs,
+  researchRefsForEdition,
+  researchRefsForMaterial,
+  topicEditionHistory,
+  topicListedMaterials,
+  uniqueRefs,
+  worksCitingReferences,
+  type RadarResearchAnchor,
+} from "../core/radar-reading";
+import "./style.css";
+import "./settings-layout.css";
+type Page = "home" | "radar" | "projects" | "assets" | "schedules" | "settings";
+const names: Record<Page, string> = {
+  home: "首页",
+  radar: "雷达",
+  projects: "项目",
+  assets: "资产",
+  schedules: "定时任务",
+  settings: "设置",
+};
+const icons = {
+  home: House,
+  radar: Radar,
+  projects: Folder,
+  assets: Library,
+  schedules: Clock,
+  settings: Settings,
+};
+function App() {
+  const [data, setData] = useState<Snapshot | null>(null),
+    [error, setError] = useState(""),
+    [page, setPage] = useState<Page>("home"),
+    [expanded, setExpanded] = useState(true),
+    [projectTab, setProjectTab] = useState<"overview" | "files">("overview"),
+    [settingsTab, setSettingsTab] = useState("account"),
+    [projectId, setProjectId] = useState<string | null>(null),
+    [context, setContext] = useState("new"),
+    [immersive, setImmersive] = useState(false),
+    [reading, setReading] = useState<Material | null>(null),
+    [radarEditionId, setRadarEditionId] = useState<string | null>(null),
+    [radarMaterial, setRadarMaterial] = useState<Material | null>(null),
+    [radarTopicId, setRadarTopicId] = useState<string | null>(null),
+    [radarOpeningKey, setRadarOpeningKey] = useState(0),
+    [radarResearch, setRadarResearch] = useState<RadarResearchAnchor | null>(
+      null,
+    ),
+    [scheduleId, setScheduleId] = useState<string | null>(null),
+    [scheduleWork, setScheduleWork] = useState<string | null>(null),
+    [dialog, setDialog] = useState<
+      "project" | "delivery" | "search" | "team" | "work" | null
+    >(null),
+    [query, setQuery] = useState(""),
+    [extra, setExtra] = useState<Reference[]>([]),
+    [composerEpoch, setComposerEpoch] = useState(0),
+    [composerFocus, setComposerFocus] = useState(0),
+    [syncing, setSyncing] = useState(false),
+    [selectedDelivery, setSelectedDelivery] = useState<string | null>(null),
+    [outcomeVersion, setOutcomeVersion] = useState<string | null>(null),
+    [comparing, setComparing] = useState<string | null>(null),
+    [initializing, setInitializing] = useState<string | null>(null),
+    [suggestion, setSuggestion] = useState<{
+      projectId: string;
+      version: ArtifactVersion;
+      excerpt?: string;
+    } | null>(null),
+    [requirementsProject, setRequirementsProject] = useState<string | null>(
+      null,
+    ),
+    [standardCandidate, setStandardCandidate] = useState<
+      { version: ArtifactVersion; excerpt?: string } | undefined
+    >(undefined),
+    [showArchived, setShowArchived] = useState(false),
+    [processFocus, setProcessFocus] = useState<string[] | undefined>(undefined),
+    [selectedPassage, setSelectedPassage] = useState<{
+      versionId: string;
+      text: string;
+    } | null>(null);
+  const pagePositions = useRef(new Map<string, number>());
+  const pagePositionKey = `${page}:${projectId ?? ""}:${projectTab}:${data?.works.some((w) => w.id === context) ? context : "browse"}`;
+  useLayoutEffect(() => {
+    const node = document.querySelector<HTMLElement>("main.page");
+    if (!node) return;
+    const key = pagePositionKey;
+    node.scrollTop = pagePositions.current.get(key) ?? 0;
+    return () => {
+      pagePositions.current.set(key, node.scrollTop);
+    };
+  }, [pagePositionKey, immersive, !!data]);
+  const fail = useCallback(
+    (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
+    [],
+  );
+  useLayoutEffect(() => {
+    if (composerFocus)
+      document
+        .querySelector<HTMLTextAreaElement>(
+          'textarea[aria-label="工作目标或补充"]',
+        )
+        ?.focus();
+  }, [composerFocus]);
+  useEffect(() => {
+    const capture = () => {
+      const s = window.getSelection();
+      const parent =
+        s?.anchorNode instanceof Element
+          ? s.anchorNode
+          : s?.anchorNode?.parentElement;
+      const doc = parent?.closest<HTMLElement>(".document[data-version-id]");
+      if (
+        doc &&
+        s?.focusNode &&
+        doc.contains(s.focusNode) &&
+        s.toString().trim()
+      )
+        setSelectedPassage({
+          versionId: doc.dataset.versionId!,
+          text: s.toString(),
+        });
+    };
+    document.addEventListener("selectionchange", capture);
+    return () => document.removeEventListener("selectionchange", capture);
+  }, []);
+  useEffect(() => {
+    document.title = names[page];
+  }, [page]);
+  const viewState = useWorkViews(data, context, fail);
+  const selectedVersion = viewState.view.versionId;
+  const setSelectedVersion = (versionId: string | null) =>
+    viewState.update(context, { versionId });
+  useEffect(() => {
+    let live = true;
+    const off = window.ytriple.subscribe((s) => {
+      if (live) setData(s);
+    });
+    command<Snapshot>({ type: "snapshot" })
+      .then((s) => {
+        if (live) setData(s);
+      })
+      .catch(fail);
+    return () => {
+      live = false;
+      off();
+    };
+  }, []);
+  if (!data)
+    return (
+      <main className="boot">
+        <h1>ytriple</h1>
+        <p>{error || "打开你的工作空间…"}</p>
+      </main>
+    );
+  const work = data.works.find((w) => w.id === context),
+    project = data.projects.find((p) => p.id === projectId),
+    works = data.works.filter((w) => !w.archived),
+    versions = data.versions.filter((v) => v.workId === context),
+    version = versions.find((v) => v.id === selectedVersion) ?? versions.at(-1),
+    runs = data.runs.filter((r) => r.workId === context),
+    latestRun = runs.at(-1),
+    messages = data.messages.filter((m) => m.workId === context);
+  function changeContext(id: string) {
+    setSelectedPassage(null);
+    setProcessFocus(undefined);
+    setContext(id);
+    viewState.flush();
+    setExtra([]);
+    setComposerEpoch((n) => n + 1);
+  }
+  function openWork(id: string, resultVersionId?: string, snapshot = data) {
+    setProjectTab("overview");
+    changeContext(id);
+    const w = snapshot!.works.find((w) => w.id === id);
+    setSelectedDelivery(w?.deliveryId ?? null);
+    setProjectId(w?.projectId ?? null);
+    if (w?.projectId) {
+      setProjectId(w.projectId);
+      setPage("projects");
+    }
+    if (resultVersionId)
+      viewState.update(id, {
+        surface: "result",
+        versionId: resultVersionId,
+        focused: null,
+      });
+  }
+  function navigate(next: Page) {
+    setProjectTab("overview");
+    setPage(next);
+    setProjectId(null);
+    setSelectedDelivery(null);
+    setReading(null);
+    setRadarEditionId(null);
+    setRadarMaterial(null);
+    setRadarTopicId(null);
+    setRadarResearch(null);
+    setImmersive(false);
+    changeContext("new");
+  }
+  async function sync() {
+    setSyncing(true);
+    setError("");
+    try {
+      await command({ type: "sync" });
+    } catch (e) {
+      fail(e);
+    } finally {
+      setSyncing(false);
+    }
+  }
+  async function useMaterial(
+    m: Material,
+    topic?: RadarTopic | null,
+    excerpt?: string,
+  ) {
+    const bound =
+      topic ??
+      matchingTopicForMaterial(
+        data!.radar.topics,
+        data!.radar.editions,
+        m,
+      );
+    const draftId = materialResearchDraftId(m, bound?.id);
+    const citing = worksCitingReferences(data!, researchRefsForMaterial(m));
+    const next = citing.length === 1 ? citing[0].id : draftId;
+    const draft = data!.drafts.find((d) => d.id === next || d.id === draftId);
+    const refs = mergeResearchRefs(draft?.refs ?? [], [
+      {
+        materialId: m.id,
+        version: m.version,
+        label: m.title,
+        ...(excerpt ? { excerpt } : {}),
+      },
+    ]);
+    await command({
+      type: "draft",
+      id: next,
+      text: draft?.text ?? "",
+      outputMode: draft?.outputMode ?? "explanation",
+      refs,
+      recipient: draft?.recipient ?? null,
+      projectId: draft?.projectId ?? null,
+      workspaceContext: draft?.workspaceContext ?? (bound
+        ? { kind: "radar-topic", id: bound.id, revision: bound.revision }
+        : undefined),
+    });
+    setData(await command<Snapshot>({ type: "snapshot" }));
+    changeContext(next);
+    setRadarResearch({
+      kind: "object",
+      contextId: next,
+      topicId: bound?.id ?? null,
+      contentKey: `material:${m.id}@${m.version}`,
+    });
+    setExtra([]);
+    setReading(null);
+    setComposerFocus((n) => n + 1);
+  }
+  async function useRadarEdition(edition: RadarEdition) {
+    const reference = await command<Reference>({
+      type: "radar-reference",
+      editionId: edition.id,
+    });
+    const next = `new:radar:${edition.id}`;
+    const draft = data!.drafts.find((d) => d.id === next);
+    const topic = data!.radar.topics.find((item) => item.id === edition.topicId);
+    await command({
+      type: "draft",
+      id: next,
+      text: draft?.text ?? "",
+      refs: mergeResearchRefs(draft?.refs ?? [], [
+        reference,
+        ...researchRefsForEdition(edition).filter(
+          (item) =>
+            item.materialId !== reference.materialId ||
+            item.version !== reference.version,
+        ),
+      ]),
+      recipient: draft?.recipient ?? null,
+      projectId: draft?.projectId ?? null,
+      workspaceContext: draft?.workspaceContext ?? (topic
+        ? { kind: "radar-topic", id: topic.id, revision: topic.revision }
+        : undefined),
+    });
+    setData(await command<Snapshot>({ type: "snapshot" }));
+    changeContext(next);
+    setRadarResearch({
+      kind: "object",
+      contextId: next,
+      topicId: topic?.id ?? null,
+      contentKey: `edition:${edition.id}`,
+    });
+    setComposerFocus((n) => n + 1);
+  }
+  async function useTopicTrace(topic: RadarTopic) {
+    const next = `new:radar:trace:${topic.id}`;
+    const draft = data!.drafts.find((item) => item.id === next);
+    const history = topicEditionHistory(data!.radar.editions, topic.id);
+    const listed = topicListedMaterials(data!, topic);
+    const refs = uniqueRefs([
+      ...history.flatMap((item) => {
+        const edition = data!.radar.editions.find(
+          (entry) => entry.id === item.id,
+        );
+        return edition ? [{ materialId: edition.materialId, version: edition.number, label: edition.insight.title }] : [];
+      }),
+      ...listed.flatMap((item) => researchRefsForMaterial(item.material)),
+    ]);
+    const bounded = boundedResearchRefs(draft?.refs ?? [], refs);
+    const scopeNote = bounded.omitted
+      ? `\n本次最多附带 20 份材料，另有 ${bounded.omitted} 份未纳入；只依据实际附带材料梳理，明确证据缺口，不宣称完整发展史。`
+      : "";
+    await command({
+      type: "draft",
+      id: next,
+      text:
+        draft?.text ??
+        (developmentTraceText({
+          title: topic.title,
+          editions: history,
+          materials: listed.map((item) => ({
+            title: item.material.title,
+            coverage: item.material.coverage,
+            version: item.material.version,
+          })),
+        }) + scopeNote),
+      refs: bounded.refs,
+      recipient: draft?.recipient ?? null,
+      projectId: draft?.projectId ?? null,
+      workspaceContext: draft?.workspaceContext ?? {
+        kind: "radar-topic",
+        id: topic.id,
+        revision: topic.revision,
+      },
+    });
+    setData(await command<Snapshot>({ type: "snapshot" }));
+    changeContext(next);
+    setRadarResearch({
+      kind: "object",
+      contextId: next,
+      topicId: topic.id,
+      contentKey: `trace:${topic.id}`,
+    });
+    setComposerFocus((n) => n + 1);
+  }
+  function openRadar(id: string | null) {
+    setPage("radar");
+    setProjectId(null);
+    setSelectedDelivery(null);
+    setReading(null);
+    changeContext("new");
+    setRadarEditionId(id);
+    setRadarMaterial(null);
+    setRadarTopicId(null);
+    setRadarOpeningKey((value) => value + 1);
+  }
+  function openRadarMaterial(material: Material) {
+    setPage("radar");
+    setProjectId(null);
+    setSelectedDelivery(null);
+    setReading(null);
+    changeContext("new");
+    setRadarEditionId(null);
+    setRadarMaterial(material);
+    setRadarTopicId(null);
+    setRadarOpeningKey((value) => value + 1);
+  }
+  function openRadarTopic(id: string) {
+    setPage("radar");
+    setProjectId(null);
+    setSelectedDelivery(null);
+    setReading(null);
+    setImmersive(false);
+    setRadarEditionId(null);
+    setRadarMaterial(null);
+    setRadarTopicId(id);
+    setRadarOpeningKey((value) => value + 1);
+  }
+  function openSchedule(id: string) {
+    setImmersive(false);
+    setPage("schedules");
+    setProjectId(null);
+    setSelectedDelivery(null);
+    changeContext("new");
+    setScheduleId(id);
+  }
+  async function prepareWorkspaceChat(
+    surface: "radar" | "schedules",
+    text: string,
+    workspaceContext?: {
+      kind: "radar-topic" | "schedule";
+      id: string;
+      revision: number;
+    },
+  ) {
+    const existing = workspaceContext
+      ? data!.works.find(
+          (candidate) =>
+            candidate.workspaceContext?.kind === workspaceContext.kind &&
+            candidate.workspaceContext.id === workspaceContext.id &&
+            (surface !== "radar" || (candidate.id === context && radarResearch?.topicId === workspaceContext.id)),
+        )
+      : undefined;
+    const next = existing?.id ?? `new:workspace:${crypto.randomUUID()}`;
+    const draft = await command<Draft>({
+      type: "prepare-workspace-chat",
+      context: next,
+      text,
+      workspaceContext,
+    });
+    setData(await command<Snapshot>({ type: "snapshot" }));
+    setPage(surface);
+    setProjectId(existing?.projectId ?? draft.projectId);
+    setSelectedDelivery(existing?.deliveryId ?? null);
+    const contextId = existing?.id ?? draft.id;
+    changeContext(contextId);
+    if (surface === "radar")
+      setRadarResearch({
+        kind: workspaceContext?.kind === "radar-topic" ? "object" : "follow",
+        contextId,
+        topicId: workspaceContext?.kind === "radar-topic" ? workspaceContext.id : null,
+        contentKey: workspaceContext
+          ? `topic:${workspaceContext.id}`
+          : `follow:${draft.id}`,
+      });
+    setComposerEpoch((n) => n + 1);
+    if (surface !== "radar") setImmersive(true);
+    setComposerFocus((n) => n + 1);
+  }
+  async function planRadarFollow(intent: string, topic?: RadarTopic) {
+    const text = followPlanText(intent);
+    const next = `new:workspace:${crypto.randomUUID()}`;
+    const draft = await command<Draft>({
+      type: "prepare-workspace-chat",
+      context: next,
+      text,
+      workspaceContext: topic
+        ? { kind: "radar-topic", id: topic.id, revision: topic.revision }
+        : undefined,
+    });
+    const run = await command<Run>({
+      type: "submit",
+      key: crypto.randomUUID(),
+      context: draft.id,
+      text,
+      refs: [],
+      recipient: null,
+      projectId: draft.projectId,
+      outputMode: "explanation",
+      workspaceContext: draft.workspaceContext,
+    });
+    setData(await command<Snapshot>({ type: "snapshot" }));
+    changeContext(run.workId);
+    setRadarResearch({
+      kind: "follow",
+      contextId: run.workId,
+      topicId: topic?.id ?? null,
+      contentKey: `follow:${run.workId}`,
+    });
+    setComposerEpoch((n) => n + 1);
+  }
+  const composer = (
+    <Composer
+      key={`${context}:${composerEpoch}`}
+      data={data}
+      context={context}
+      projectId={work?.projectId ?? projectId}
+      deliveryId={work?.deliveryId ?? selectedDelivery}
+      immersive={immersive}
+      surface={page}
+      onExpand={() => {
+        void command<Snapshot>({ type: "snapshot" })
+          .then((s) => {
+            setData(s);
+            viewState.flush();
+            setImmersive((v) => !v);
+          })
+          .catch(fail);
+      }}
+      onWork={(id) => {
+        void command<Snapshot>({ type: "snapshot" }).then((snapshot) => {
+          setData(snapshot);
+          if (page === "radar" && radarResearch) {
+            setRadarResearch((current) =>
+              continueRadarResearch(current, context, id),
+            );
+            if (context !== id) {
+              if (context === "new" || context.startsWith("new:")) {
+                const { id: _, ...previous } = viewState.read(context);
+                viewState.update(id, { ...previous, versionId: null });
+              }
+              changeContext(id);
+            }
+            return;
+          }
+          if (context !== id) {
+            if (context === "new" || context.startsWith("new:")) {
+              const { id: _, ...previous } = viewState.read(context);
+              viewState.update(id, { ...previous, versionId: null });
+            }
+            openWork(id, undefined, snapshot);
+          }
+        }).catch(fail);
+      }}
+      onManage={() => setDialog("work")}
+      onTeam={() => setDialog("team")}
+      onSettings={() => {
+        setImmersive(false);
+        setPage("settings");
+        setSettingsTab("model");
+      }}
+      onClose={
+        !immersive && page === "radar" && radarResearch
+          ? () => {
+              setRadarResearch(null);
+              changeContext("new");
+            }
+          : undefined
+      }
+      onContext={(id) => {
+        if (data.works.some((w) => w.id === id)) openWork(id);
+        else {
+          setSelectedDelivery(null);
+          changeContext(id);
+        }
+      }}
+      onError={fail}
+      extraRefs={extra}
+      compactRadar={page === "radar" && !immersive}
+      radarTitle={
+        radarMaterial?.title ??
+        data.drafts.find((draft) => draft.id === context)?.refs[0]?.label
+      }
+      radarExcerpt={
+        data.drafts.find((draft) => draft.id === context)?.refs[0]?.excerpt
+      }
+    />
+  );
+  async function prepareRevision(
+    versionId: string,
+    excerpt?: string,
+    candidateId?: string,
+  ) {
+    await command({
+      type: "prepare-revision",
+      workId: context,
+      versionId,
+      excerpt,
+      candidateId,
+    });
+    setData(await command<Snapshot>({ type: "snapshot" }));
+    setExtra([]);
+    setComposerEpoch((n) => n + 1);
+    if (viewState.view.focused || window.innerWidth < 900)
+      viewState.update(context, { focused: "decision" });
+    setSelectedPassage(null);
+    setComposerFocus((n) => n + 1);
+  }
+  function workList(list: Work[]) {
+    return list.length ? (
+      <div className="work-list">
+        {list.map((w) => {
+          const p = data!.projects.find((p) => p.id === w.projectId),
+            v = data!.versions.filter((v) => v.workId === w.id).at(-1),
+            pending = data!.decisions.find(
+              (d) => d.workId === w.id && d.status === "pending",
+            ),
+            workspacePending = data!.workspaceActions.find(
+              (action) => action.workId === w.id && action.status === "pending",
+            ),
+            workspaceApplied = data!.workspaceActions
+              .filter(
+                (action) =>
+                  action.workId === w.id && action.status === "applied",
+              )
+              .at(-1),
+            r =
+              (pending
+                ? data!.runs.find((r) => r.id === pending.runId)
+                : undefined) ??
+              data!.runs.filter((r) => r.workId === w.id).at(-1);
+          const displayStatus = w.completedAt
+            ? "succeeded"
+            : workspacePending || pending
+              ? "waiting"
+              : v || workspaceApplied
+                ? "succeeded"
+                : (r?.status ?? "");
+          return (
+            <article
+              className={`work-card ${pending || workspacePending ? "needs-decision" : ""}`}
+              key={w.id}
+            >
+              <div className="work-card-meta">
+                <span>{p?.name ?? "独立工作"}</span>
+                <span className={`status-label ${displayStatus}`}>
+                  {w.completedAt
+                    ? "已完成"
+                    : workspacePending
+                      ? "待确认"
+                      : pending
+                        ? "待你决定"
+                        : v
+                          ? "已有成果"
+                          : workspaceApplied
+                            ? "已办理"
+                            : r
+                              ? {
+                                  queued: "待发",
+                                  running: "团队处理中",
+                                  succeeded: "已回复",
+                                  failed: "运行失败",
+                                  unknown: "状态待核",
+                                  cancelled: "已停止",
+                                  waiting: "待你决定",
+                                }[r.status]
+                              : "待开始"}
+                </span>
+              </div>
+              <button className="work-title" onClick={() => openWork(w.id)}>
+                {w.title}
+                <ArrowUpRight size={17} />
+              </button>
+              {pending ? (
+                <p>{pending.question}</p>
+              ) : workspacePending ? (
+                <p>{workspacePending.summary}</p>
+              ) : v ? (
+                <div className="work-excerpt">
+                  <Markdown>{v.body}</Markdown>
+                </div>
+              ) : workspaceApplied ? (
+                <p>{workspaceApplied.summary}</p>
+              ) : null}
+              {r ? (
+                <TeamTrace
+                  compact
+                  run={r}
+                  records={data!.contributions}
+                  onRecord={(id) => {
+                    openWork(w.id);
+                    setProcessFocus([id]);
+                    setImmersive(true);
+                    viewState.update(w.id, { focused: "process" });
+                  }}
+                />
+              ) : null}
+              <div className="work-card-actions">
+                <button
+                  className="continue-action"
+                  onClick={() => {
+                    openWork(w.id);
+                    if (!pending) {
+                      setImmersive(true);
+                      viewState.update(w.id, {
+                        focused: null,
+                        surface: "process",
+                      });
+                    }
+                  }}
+                >
+                  <PanelsTopLeft size={16} />
+                  {pending ? "回答问题" : "团队工作区"}
+                </button>
+                {!w.completedAt &&
+                !w.archived &&
+                data!.runs.some(
+                  (r) => r.workId === w.id && r.status === "succeeded",
+                ) ? (
+                  <IconButton
+                    label={`设为定时任务 ${w.title}`}
+                    onClick={() => setScheduleWork(w.id)}
+                  >
+                    <Clock size={16} />
+                  </IconButton>
+                ) : null}
+                {v ? (
+                  <button
+                    className="text-action muted"
+                    onClick={() => {
+                      openWork(w.id, v.id);
+                      setImmersive(true);
+                    }}
+                  >
+                    {versionLabel(v)}
+                  </button>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    ) : (
+      <div className="empty">
+        <h3>从一个具体问题开始</h3>
+        <p>交给团队一个目标，过程与成果会保留在这里。</p>
+      </div>
+    );
+  }
+  async function useMethodDraft(draft: Draft) {
+    setData(await command<Snapshot>({ type: "snapshot" }));
+    changeContext(draft.id);
+    setProjectId(draft.projectId);
+    setSelectedDelivery(null);
+    setImmersive(true);
+    setComposerFocus((n) => n + 1);
+  }
+  const openMethodSource = (id: string, versionId?: string) => {
+    openWork(id, versionId);
+    setImmersive(true);
+  };
+  const process = (
+    <Suspense fallback={<p>打开过程…</p>}>
+      <ProcessPane
+        key={context}
+        data={data}
+        workId={context}
+        focusIds={processFocus}
+        onError={fail}
+        onPrepare={async (request) => {
+          await command({ type: "prepare-process", ...request });
+          setData(await command<Snapshot>({ type: "snapshot" }));
+          setExtra([]);
+          setComposerEpoch((n) => n + 1);
+          if (viewState.view.focused || window.innerWidth < 900)
+            viewState.update(context, { focused: "decision" });
+          setComposerFocus((n) => n + 1);
+        }}
+      />
+    </Suspense>
+  );
+  const result = (
+    <section className="result-pane">
+      <div className="section-heading">
+        <h2>成果</h2>
+        {version ? (
+          <div className="toolbar">
+            <select
+              aria-label="成果版本"
+              value={version.id}
+              onChange={(e) => setSelectedVersion(e.target.value)}
+            >
+              {versions.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {versionLabel(v)}
+                  {v.author === "user" ? " · 手动编辑" : ""}
+                </option>
+              ))}
+            </select>
+            {version.kind !== "method" && version.author === "team" ? (
+              <IconButton
+                label="沉淀为可复用方法"
+                onClick={() => {
+                  void (async () => {
+                    await command({
+                      type: "prepare-process",
+                      workId: version.workId,
+                      versionId: version.id,
+                      mode: "method",
+                    });
+                    setData(await command<Snapshot>({ type: "snapshot" }));
+                    setExtra([]);
+                    setComposerEpoch((n) => n + 1);
+                    if (viewState.view.focused || window.innerWidth < 900)
+                      viewState.update(context, { focused: "decision" });
+                    setComposerFocus((n) => n + 1);
+                  })().catch(fail);
+                }}
+              >
+                <BookOpen size={17} />
+              </IconButton>
+            ) : null}
+            {!version.kind || version.kind === "result" ? (
+              <IconButton
+                label="交接与使用反馈"
+                onClick={() => setOutcomeVersion(version.id)}
+              >
+                <ClipboardCheck size={17} />
+              </IconButton>
+            ) : null}
+            <IconButton
+              label="导出此版本"
+              onClick={() =>
+                void command({ type: "export", versionId: version.id }).catch(
+                  fail,
+                )
+              }
+            >
+              <Download size={17} />
+            </IconButton>
+            {work?.projectId &&
+            data.projects.some((p) => p.id === work.projectId && p.directory) &&
+            version.author === "team" &&
+            (!version.kind || version.kind === "result") ? (
+              <IconButton
+                label="写入项目建议"
+                onClick={() =>
+                  setSuggestion({
+                    projectId: work.projectId!,
+                    version,
+                    ...(selectedPassage?.versionId === version.id
+                      ? { excerpt: selectedPassage.text }
+                      : {}),
+                  })
+                }
+              >
+                <FileOutput size={17} />
+              </IconButton>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      {data.candidates
+        .filter((c) => c.workId === context)
+        .map((c) => (
+          <div className="candidate-row" key={c.id}>
+            <details>
+              <summary>
+                {c.status === "pending"
+                  ? "待整理的生成内容"
+                  : c.status === "resolved"
+                    ? "已合并的生成内容"
+                    : "已搁置的生成内容"}
+              </summary>
+              <Markdown>{c.body}</Markdown>
+            </details>
+            {c.status === "pending" && version ? (
+              <>
+                <button
+                  onClick={() =>
+                    void prepareRevision(
+                      versions
+                        .filter((v) => v.artifactId === c.artifactId)
+                        .at(-1)!.id,
+                      undefined,
+                      c.id,
+                    ).catch(fail)
+                  }
+                >
+                  交给 AI 重新整理
+                </button>
+                <button
+                  className="quiet"
+                  onClick={() =>
+                    void command({
+                      type: "dismiss-candidate",
+                      candidateId: c.id,
+                    }).catch(fail)
+                  }
+                >
+                  保留记录，暂不处理
+                </button>
+              </>
+            ) : null}
+          </div>
+        ))}
+      {version ? (
+        <>
+          {version.kind === "method" ? (
+            <Suspense fallback={null}>
+              <MethodActions
+                key={version.id}
+                data={data}
+                version={version}
+                onPrepared={useMethodDraft}
+                onNavigate={openMethodSource}
+              />
+            </Suspense>
+          ) : null}
+          {version.kind === "review" || version.kind === "method" ? (
+            <Suspense fallback={null}>
+              <WorkflowCandidateActions
+                key={`wfc-${version.id}`}
+                data={data}
+                version={version}
+                onPrepared={useMethodDraft}
+                onRefresh={async () => {
+                  setData(await command<Snapshot>({ type: "snapshot" }));
+                }}
+              />
+            </Suspense>
+          ) : null}
+          <div className="version-context">
+            {(() => {
+              const stale = data.runs
+                .find((r) => r.id === version.runId)
+                ?.refs.map((ref) =>
+                  data.materials.find(
+                    (m) =>
+                      m.id === ref.materialId && m.version === ref.version,
+                  ),
+                )
+                .filter(Boolean)
+                .map((m) => processSnapshotStaleData(m!, data))
+                .find((s) => s.status !== "current");
+              return stale ? (
+                <span role="status">
+                  {stale.status === "uncovered"
+                    ? stale.detail
+                    : stale.detail || "相关依据已变化，需复核"}
+                </span>
+              ) : null;
+            })()}
+            {version.kind === "readiness" ? (
+              <span>AI 检查意见 · 不代表已交接或已验证</span>
+            ) : null}
+            {data.outcomes.some(
+              (r) => r.versionId === version.id && !r.withdrawn,
+            ) ? (
+              <button
+                className="quiet"
+                onClick={() => setOutcomeVersion(version.id)}
+              >
+                交接与反馈 ·{" "}
+                {
+                  data.outcomes.filter(
+                    (r) => r.versionId === version.id && !r.withdrawn,
+                  ).length
+                }{" "}
+                条用户记录
+              </button>
+            ) : null}
+            {data.deliveries.some((d) => d.adoptedVersionId === version.id) ? (
+              <span>交付已采用此版本</span>
+            ) : null}
+            {versions.at(-1)?.id !== version.id ? (
+              <button
+                className="quiet"
+                onClick={() => setSelectedVersion(versions.at(-1)!.id)}
+              >
+                查看最新 · {versionLabel(versions.at(-1)!)}
+              </button>
+            ) : null}
+          </div>
+          <div className="document" data-version-id={version.id}>
+            <Markdown>{version.body}</Markdown>
+          </div>
+          <div className="result-actions">
+            {work?.projectId ? (
+              <button
+                className="quiet"
+                onClick={() => {
+                  const excerpt =
+                    selectedPassage?.versionId === version.id
+                      ? selectedPassage.text
+                      : undefined;
+                  if (excerpt && !version.body.includes(excerpt)) {
+                    setError("所选文字不属于准确正文范围，请重新选择");
+                    return;
+                  }
+                  setStandardCandidate({ version, excerpt });
+                  setRequirementsProject(work.projectId);
+                }}
+              >
+                采纳为项目标准
+              </button>
+            ) : null}
+            {data.runs
+              .find((r) => r.id === version.runId)
+              ?.refs.some((ref) =>
+                data.materials.some(
+                  (m) =>
+                    m.id === ref.materialId &&
+                    m.version === ref.version &&
+                    m.processSource,
+                ),
+              ) ? (
+              <button
+                className="quiet"
+                onClick={() => {
+                  const run = data.runs.find((r) => r.id === version.runId)!;
+                  setProcessFocus(
+                    run.refs.flatMap(
+                      (ref) =>
+                        data.materials.find(
+                          (m) =>
+                            m.id === ref.materialId &&
+                            m.version === ref.version,
+                        )?.processSource?.contributionIds ?? [],
+                    ),
+                  );
+                  viewState.update(context, {
+                    surface: "process",
+                    focused: viewState.view.focused ? "process" : null,
+                  });
+                }}
+              >
+                查看依据记录
+              </button>
+            ) : null}
+            <button
+              disabled={
+                versions.filter((v) => v.artifactId === version.artifactId)
+                  .length < 2
+              }
+              onClick={() => setComparing(version.id)}
+            >
+              比较版本
+            </button>
+            <button
+              onClick={() => {
+                const excerpt =
+                  selectedPassage?.versionId === version.id
+                    ? selectedPassage.text
+                    : undefined;
+                if (excerpt && !version.body.includes(excerpt)) {
+                  setError(
+                    "所选文字跨越了正文格式边界，请在引用预览中选择准确范围",
+                  );
+                  return;
+                }
+                void prepareRevision(version.id, excerpt).catch(fail);
+              }}
+            >
+              {selectedPassage?.versionId === version.id
+                ? "让 AI 整理选段"
+                : "让 AI 重新整理"}
+            </button>
+            {selectedPassage?.versionId === version.id ? (
+              <button
+                className="quiet"
+                onClick={() => {
+                  setSelectedPassage(null);
+                  window.getSelection()?.removeAllRanges();
+                }}
+              >
+                清除选段
+              </button>
+            ) : null}
+            <button
+              disabled={data.assets.some(
+                (a) =>
+                  a.reference.materialId === version.artifactId &&
+                  a.reference.version === version.number &&
+                  a.reference.excerpt === undefined,
+              )}
+              onClick={() =>
+                void command<Reference>({
+                  type: "reference",
+                  versionId: version.id,
+                })
+                  .then((reference) =>
+                    command({
+                      type: "asset",
+                      reference,
+                      label: work?.title ?? "成果",
+                    }),
+                  )
+                  .catch(fail)
+              }
+            >
+              {data.assets.some(
+                (a) =>
+                  a.reference.materialId === version.artifactId &&
+                  a.reference.version === version.number &&
+                  a.reference.excerpt === undefined,
+              )
+                ? "已加入资产"
+                : "加入资产"}
+            </button>
+            {work?.deliveryId &&
+            (!version.kind || version.kind === "result") ? (
+              <button
+                onClick={() =>
+                  void command({
+                    type: "adopt",
+                    deliveryId: work.deliveryId!,
+                    versionId: version.id,
+                  }).catch(fail)
+                }
+              >
+                <Check size={15} />
+                采用此版本
+              </button>
+            ) : null}
+          </div>
+        </>
+      ) : (
+        <div className="empty">
+          <h3>成果尚未形成</h3>
+          <p>完成分析与核查后，可在这里阅读、修订和导出。</p>
+        </div>
+      )}
+    </section>
+  );
+  const workspaceActionReceipts = work ? (
+    <WorkspaceActions
+      data={data}
+      workId={work.id}
+      compactRadar={page === "radar" && radarResearch?.kind === "follow"}
+      onError={fail}
+      onRadar={(topicId) => {
+        setImmersive(false);
+        openRadarTopic(topicId);
+      }}
+      onSchedule={(id) => {
+        openSchedule(id);
+      }}
+    />
+  ) : null;
+  const decision = (
+    <section className="decision-pane">
+      <div className="conversation">
+        <small>当前目标</small>
+        <h2>{work?.title ?? "开始一项工作"}</h2>
+        {messages.map((m) => (
+          <article key={m.id} className={`message ${m.role}`}>
+            <small>{m.role === "user" ? "你" : "团队"}</small>
+            <Markdown>{m.body}</Markdown>
+          </article>
+        ))}
+        {runs
+          .filter((r) => r.status === "unknown")
+          .map((r) => (
+            <UnknownRunActions
+              key={r.id}
+              id={r.id}
+              kind="work"
+              local={r.recovery === "local"}
+              onError={fail}
+            />
+          ))}
+        {latestRun?.error ? (
+          <p className="error-inline">{latestRun.error}</p>
+        ) : null}
+        {immersive ? workspaceActionReceipts : null}
+      </div>
+      {composer}
+    </section>
+  );
+  return (
+    <div
+      className={`app ${immersive ? "immersive" : ""} ${expanded ? "nav-wide" : ""}`}
+    >
+      {!immersive ? (
+        <aside className="navigation">
+          <div className="navigation-brand">
+            <IconButton
+              label={expanded ? "收起导航" : "展开导航"}
+              aria-expanded={expanded}
+              aria-controls="primary-navigation"
+              className="brand-toggle"
+              onClick={() => setExpanded((v) => !v)}
+            >
+              <Menu size={21} />
+            </IconButton>
+            <strong className="brand-wordmark">YTRIPLE</strong>
+          </div>
+          <nav id="primary-navigation" aria-label="主导航">
+            {(Object.keys(names) as Page[]).map((p) => {
+              const Icon = icons[p];
+              return (
+                <button
+                  key={p}
+                  className={page === p ? "selected" : ""}
+                  aria-current={page === p ? "page" : undefined}
+                  title={names[p]}
+                  aria-label={names[p]}
+                  onClick={() => navigate(p)}
+                >
+                  <Icon size={21} />
+                  <span>{names[p]}</span>
+                </button>
+              );
+            })}
+          </nav>
+        </aside>
+      ) : null}
+      <div className="workspace">
+        <header className="topbar">
+          {immersive ? (
+            <>
+              <button className="quiet" onClick={() => setImmersive(false)}>
+                <ArrowLeft size={16} />
+                返回{project ? "项目" : names[page]}
+              </button>
+              <span className="breadcrumb">
+                {project?.name ?? "独立工作"} / {work?.title ?? "新工作"}
+              </span>
+              <div className="toolbar">
+                <button onClick={() => setDialog("team")}>团队与流程</button>
+              </div>
+            </>
+          ) : (
+            <>
+              <span className="breadcrumb">{names[page]}</span>
+              <button
+                className="quiet top-search"
+                onClick={() => setDialog("search")}
+              >
+                <Search size={16} />
+                查找工作
+              </button>
+            </>
+          )}
+        </header>
+        {error ? (
+          <div className="error-banner" role="alert">
+            {error}
+            <IconButton label="关闭提示" onClick={() => setError("")}>
+              <X size={15} />
+            </IconButton>
+          </div>
+        ) : null}
+        {immersive ? (
+          <WorkArea
+            view={viewState.view}
+            layout={viewState.layout}
+            onLayout={viewState.configure}
+            onView={(patch) => viewState.update(context, patch)}
+            onScroll={(key, top) => viewState.position(context, key, top)}
+          >
+            {{ decision, process, result }}
+          </WorkArea>
+        ) : (
+          <main
+            className={`page page-${page} ${work && page !== "radar" ? "with-conversation" : ""}`}
+          >
+            {page === "home" ? (
+              <div className="home-content">
+                <header className="page-intro">
+                  <div>
+                    <h1>你的工作台</h1>
+                    <p>接续手头的工作，也看看新的变化。</p>
+                  </div>
+                  <span className="today-label">
+                    {new Date().toLocaleDateString("zh-CN", {
+                      month: "long",
+                      day: "numeric",
+                      weekday: "long",
+                    })}
+                  </span>
+                </header>
+                <div className="dashboard">
+                  <section>
+                    {data.schedules
+                      .filter(
+                        (s, i, all) =>
+                          scheduleProblem(
+                            s,
+                            data.scheduleOccurrences,
+                            data.runs,
+                          ) &&
+                          all.findIndex(
+                            (other) =>
+                              other.workId === s.workId &&
+                              scheduleProblem(
+                                other,
+                                data.scheduleOccurrences,
+                                data.runs,
+                              ),
+                          ) === i,
+                      )
+                      .map((s) => (
+                        <article className="schedule-attention" key={s.id}>
+                          <small>定时任务需处理</small>
+                          <h2>{s.name}</h2>
+                          <p>
+                            {scheduleProblem(
+                              s,
+                              data.scheduleOccurrences,
+                              data.runs,
+                            )}
+                          </p>
+                          <button
+                            className="text-action"
+                            onClick={() => openSchedule(s.id)}
+                          >
+                            查看任务
+                            <ArrowUpRight size={16} />
+                          </button>
+                        </article>
+                      ))}
+                    <div className="section-heading">
+                      <h2>
+                        <Layers size={17} />
+                        继续工作
+                      </h2>
+                      <small>
+                        {works.filter((w) => !w.completedAt).length
+                          ? `${works.filter((w) => !w.completedAt).length} 项进行中`
+                          : ""}
+                      </small>
+                    </div>
+                    {workList(
+                      works
+                        .filter(
+                          (w) =>
+                            !w.completedAt &&
+                            !data.schedules.some(
+                              (s) =>
+                                s.workId === w.id &&
+                                scheduleProblem(
+                                  s,
+                                  data.scheduleOccurrences,
+                                  data.runs,
+                                ),
+                            ),
+                        )
+                        .slice()
+                        .reverse()
+                        .sort(
+                          (a, b) =>
+                            Number(
+                              data.decisions.some(
+                                (d) =>
+                                  d.workId === b.id && d.status === "pending",
+                              ) ||
+                                data.workspaceActions.some(
+                                  (action) =>
+                                    action.workId === b.id &&
+                                    action.status === "pending",
+                                ),
+                            ) -
+                            Number(
+                              data.decisions.some(
+                                (d) =>
+                                  d.workId === a.id && d.status === "pending",
+                              ) ||
+                                data.workspaceActions.some(
+                                  (action) =>
+                                    action.workId === a.id &&
+                                    action.status === "pending",
+                                ),
+                            ),
+                        )
+                        .slice(0, 5),
+                    )}
+                  </section>
+                  <section className="radar-column">
+                    <div className="section-heading">
+                      <h2>
+                        <Radar size={18} />
+                        雷达观察
+                      </h2>
+                      <IconButton
+                        label="同步来源材料"
+                        disabled={syncing}
+                        onClick={() => void sync()}
+                      >
+                        <RefreshCw size={18} />
+                      </IconButton>
+                    </div>
+
+                    <RadarHighlights
+                      onMaterial={openRadarMaterial}
+                      data={data}
+                      onOpen={openRadar}
+                      onExplore={() => openRadar(null)}
+                    />
+                  </section>
+                </div>
+              </div>
+            ) : null}
+            {page === "radar" ? (
+              <Suspense fallback={<p className="wide-content">打开雷达…</p>}>
+                <RadarPanel
+                  data={data}
+                  selectedId={radarEditionId}
+                  openingMaterial={radarMaterial}
+                  openingTopicId={radarTopicId}
+                  openingKey={radarOpeningKey}
+                  onSelect={setRadarEditionId}
+                  onUse={(edition) => void useRadarEdition(edition).catch(fail)}
+                  onUseMaterial={(material, topic, excerpt) =>
+                    void useMaterial(material, topic, excerpt).catch(fail)
+                  }
+                  onTrace={(topic) => void useTopicTrace(topic).catch(fail)}
+                  onWork={(id, radarContentKey) => {
+                    const next = data.works.find((item) => item.id === id);
+                    changeContext(id);
+                    setSelectedDelivery(next?.deliveryId ?? null);
+                    setProjectId(next?.projectId ?? null);
+                    setRadarResearch((current) => ({
+                      kind: "object",
+                      contextId: id,
+                      topicId:
+                        next?.workspaceContext?.kind === "radar-topic"
+                          ? next.workspaceContext.id
+                          : current?.topicId ?? null,
+                      contentKey: radarContentKey ?? current?.contentKey ?? `work:${id}`,
+                    }));
+                    setComposerEpoch((value) => value + 1);
+                  }}
+                  onSync={() => void sync()}
+                  syncing={syncing}
+                  onError={fail}
+                  onPrepare={(text, topic) =>
+                    void planRadarFollow(text, topic).catch(fail)
+                  }
+                  onExpandDiscussion={() => setImmersive(true)}
+                  onBrowseDraft={(draftId) => {
+                    if (draftId) {
+                      if (context !== draftId) changeContext(draftId);
+                    } else if (context.startsWith("new:radar:") || context.startsWith("new:workspace:"))
+                      changeContext("new");
+                  }}
+                  researchAnchor={
+                    radarResearch && radarResearch.contextId === context
+                      ? radarResearch
+                      : null
+                  }
+                  research={
+                    page === "radar" &&
+                    !immersive &&
+                    radarResearch &&
+                    radarResearch.contextId === context ? (
+                      <div className="radar-research">
+                        {(radarResearch.kind === "follow"
+                          ? []
+                          : messages
+                        )
+                          .slice(-4)
+                          .map((message) => (
+                          <article
+                            className={`message ${message.role}`}
+                            key={message.id}
+                          >
+                            <small>
+                              {message.role === "user" ? "你" : "团队"}
+                            </small>
+                            <Markdown>{message.body}</Markdown>
+                          </article>
+                        ))}
+                        {runs
+                          .filter((item) => item.status === "unknown")
+                          .map((item) => (
+                            <UnknownRunActions
+                              key={item.id}
+                              id={item.id}
+                              kind="work"
+                              local={item.recovery === "local"}
+                              onError={fail}
+                            />
+                          ))}
+                        {latestRun ? (
+                          <p className="muted" role="status">
+                            {
+                              {
+                                queued: "待发",
+                                running: "团队处理中",
+                                succeeded: "已回复",
+                                failed: "运行失败",
+                                unknown: "状态待核",
+                                cancelled: "已停止",
+                                waiting: "待你决定",
+                              }[latestRun.status]
+                            }
+                          </p>
+                        ) : null}
+                        {latestRun?.error ? (
+                          <p className="error-inline">{latestRun.error}</p>
+                        ) : null}
+                        {data.contributions
+                          .filter((item) => item.runId === latestRun?.id && (item.tool?.status === "failed" || item.toolFormatError))
+                          .map((item) => (
+                            <p key={item.id} className="error-inline" role="alert">
+                              操作未完成：{item.toolFormatError?.message ?? item.tool?.output}
+                            </p>
+                          ))}
+                        {workspaceActionReceipts}
+                        {radarResearch.kind === "follow" ? null : composer}
+                      </div>
+                    ) : undefined
+                  }
+                />
+              </Suspense>
+            ) : null}
+            {page === "projects" ? (
+              <section className="wide-content">
+                {project ? (
+                  <>
+                    <button
+                      className="quiet"
+                      onClick={() => {
+                        setProjectId(null);
+                        setSelectedDelivery(null);
+                        changeContext("new");
+                      }}
+                    >
+                      <ArrowLeft size={15} />
+                      所有项目
+                    </button>
+                    <header className="page-intro project-intro">
+                      <div>
+                        <span className="eyebrow">
+                          {project.kind === "media" ? "创作项目" : "软件项目"}
+                        </span>
+                        <h1>{project.name}</h1>
+                        <p>{project.goal}</p>
+                      </div>
+                      <button
+                        className="secondary-action"
+                        onClick={() => {
+                          setStandardCandidate(undefined);
+                          setRequirementsProject(project.id);
+                        }}
+                      >
+                        <SlidersHorizontal size={17} />
+                        项目设置
+                      </button>
+                    </header>
+                    <nav className="section-tabs" aria-label="项目内容">
+                      <button
+                        aria-pressed={projectTab === "overview"}
+                        onClick={() => setProjectTab("overview")}
+                      >
+                        <Layers size={16} />
+                        概览与交付
+                      </button>
+                      <button
+                        aria-pressed={projectTab === "files"}
+                        onClick={() => setProjectTab("files")}
+                      >
+                        <Folder size={16} />
+                        项目资料
+                      </button>
+                    </nav>
+                    {projectTab === "files" ? (
+                      <div className="project-files-view">
+                        <Suspense fallback={null}>
+                          <ProjectFolder
+                            data={data}
+                            project={project}
+                            onError={fail}
+                          />
+                        </Suspense>
+                        <div className="project-context-summary">
+                          <span>
+                            {
+                              latestStandards(
+                                data.projectStandards,
+                                project.id,
+                              ).filter((s) => s.enabled).length
+                            }{" "}
+                            条已采纳标准 ·{" "}
+                            {latestBrief(data.projectBriefs, project.id)?.refs
+                              .length ?? 0}{" "}
+                            份参考资料
+                          </span>
+                          <button
+                            className="quiet"
+                            onClick={() => {
+                              setStandardCandidate(undefined);
+                              setRequirementsProject(project.id);
+                            }}
+                          >
+                            目标、标准与资料
+                          </button>
+                        </div>
+                        {project.kind === "software" &&
+                        (!project.directory ||
+                          data.initializations.some(
+                            (p) => p.input.projectId === project.id,
+                          )) ? (
+                          <button
+                            className="quiet"
+                            onClick={() => setInitializing(project.id)}
+                          >
+                            <FolderGit2 size={17} />
+                            {project.directory
+                              ? "查看初始化与交接"
+                              : "初始化本地项目"}
+                          </button>
+                        ) : null}
+                        {project.directory ? (
+                          <Suspense fallback={null}>
+                            <ProjectFilesPanel
+                              key={project.id + project.directory}
+                              data={data}
+                              project={project}
+                              onError={fail}
+                              onWork={(id, versionId) => {
+                                openWork(id, versionId);
+                                setImmersive(true);
+                              }}
+                              onDraft={async (draft) => {
+                                setData(
+                                  await command<Snapshot>({ type: "snapshot" }),
+                                );
+                                changeContext(draft.id);
+                                setProjectId(project.id);
+                                setSelectedDelivery(null);
+                                setImmersive(true);
+                                setComposerFocus((n) => n + 1);
+                              }}
+                            />
+                            <SuggestionLocation
+                              data={data}
+                              project={project}
+                              onError={fail}
+                            />
+                          </Suspense>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <div className="project-overview">
+                        <div className="section-heading">
+                          <h2>
+                            {project.kind === "media"
+                              ? "作品与交付"
+                              : "版本与交付"}
+                          </h2>
+                          <button onClick={() => setDialog("delivery")}>
+                            <Plus size={15} />
+                            新增交付
+                          </button>
+                        </div>
+                        {data.deliveries
+                          .filter((d) => d.projectId === project.id)
+                          .map((d) => (
+                            <article className="delivery" key={d.id}>
+                              <button
+                                className="work-title"
+                                onClick={() => {
+                                  const related = works.filter(
+                                    (w) => w.deliveryId === d.id,
+                                  );
+                                  setSelectedDelivery(d.id);
+                                  if (related.length === 1)
+                                    openWork(related[0].id);
+                                  else
+                                    changeContext(
+                                      (related.length
+                                        ? "select:delivery:"
+                                        : "new:delivery:") + d.id,
+                                    );
+                                }}
+                              >
+                                {d.title}
+                                {selectedDelivery === d.id ? (
+                                  <Check size={16} />
+                                ) : null}
+                              </button>
+                              {d.adoptedVersionId ? (
+                                <button
+                                  className="quiet"
+                                  onClick={() => {
+                                    const adopted = data.versions.find(
+                                      (v) => v.id === d.adoptedVersionId,
+                                    );
+                                    if (adopted) {
+                                      openWork(adopted.workId, adopted.id);
+                                      setImmersive(true);
+                                    }
+                                  }}
+                                >
+                                  已采用 · v
+                                  {
+                                    data.versions.find(
+                                      (v) => v.id === d.adoptedVersionId,
+                                    )?.number
+                                  }
+                                </button>
+                              ) : (
+                                <p>尚未采用成果版本</p>
+                              )}
+                              {d.adoptedVersionId ? (
+                                <details className="delivery-options">
+                                  <summary
+                                    aria-label={`交付操作 ${d.title}`}
+                                    title="交付操作"
+                                  >
+                                    <Ellipsis size={18} />
+                                  </summary>
+                                  <div>
+                                    <button
+                                      className="quiet"
+                                      onClick={() =>
+                                        void command({
+                                          type: "clear-adoption",
+                                          deliveryId: d.id,
+                                          expectedVersionId:
+                                            d.adoptedVersionId!,
+                                        }).catch(fail)
+                                      }
+                                    >
+                                      解除采用
+                                    </button>
+                                  </div>
+                                </details>
+                              ) : null}
+                            </article>
+                          ))}
+                        <div className="section-heading">
+                          <h2>相关工作</h2>
+                          <button
+                            onClick={() => {
+                              changeContext(
+                                selectedDelivery
+                                  ? "new:delivery:" + selectedDelivery
+                                  : "new:" + project.id,
+                              );
+                            }}
+                          >
+                            开始另一项工作
+                          </button>
+                        </div>
+                        {selectedDelivery ? (
+                          <p className="muted">
+                            {
+                              data.deliveries.find(
+                                (d) => d.id === selectedDelivery,
+                              )?.title
+                            }{" "}
+                            · 选择要接续的工作{" "}
+                            <button
+                              className="quiet"
+                              onClick={() => {
+                                setSelectedDelivery(null);
+                                changeContext("new:" + project.id);
+                              }}
+                            >
+                              全部交付
+                            </button>
+                          </p>
+                        ) : null}
+                        {workList(
+                          works.filter(
+                            (w) =>
+                              w.projectId === project.id &&
+                              (!selectedDelivery ||
+                                w.deliveryId === selectedDelivery),
+                          ),
+                        )}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="section-heading page-intro">
+                      <div>
+                        <h1>项目</h1>
+                        <p>管理持续目标、资料与交付。</p>
+                      </div>
+                      <button
+                        className="primary"
+                        onClick={() => setDialog("project")}
+                      >
+                        新建项目
+                      </button>
+                    </div>
+                    <details className="local-project-discovery">
+                      <summary>
+                        <FolderGit2 size={16} />从 Code 目录关联项目
+                      </summary>
+                      <Suspense fallback={null}>
+                        <LocalProjects data={data} onError={fail} />
+                      </Suspense>
+                    </details>
+                    <div className="project-grid">
+                      {data.projects.length ? (
+                        data.projects.map((p) => (
+                          <article className="project-row" key={p.id}>
+                            <div className="project-card-icon">
+                              {p.kind === "media" ? (
+                                <FileText size={23} />
+                              ) : (
+                                <FolderGit2 size={23} />
+                              )}
+                            </div>
+                            <button
+                              className="work-title"
+                              onClick={() => {
+                                setProjectId(p.id);
+                                setProjectTab("overview");
+                                setSelectedDelivery(null);
+                                changeContext("new:" + p.id);
+                              }}
+                            >
+                              {p.name}
+                              <ArrowUpRight size={20} />
+                            </button>
+                            <p>{p.goal}</p>
+                            <div className="project-card-footer">
+                              <small>
+                                {p.kind === "media" ? "创作" : "软件"}
+                              </small>
+                              <span>
+                                {
+                                  data.deliveries.filter(
+                                    (d) => d.projectId === p.id,
+                                  ).length
+                                }{" "}
+                                项交付 ·{" "}
+                                {
+                                  works.filter(
+                                    (w) =>
+                                      w.projectId === p.id && !w.completedAt,
+                                  ).length
+                                }{" "}
+                                项进行中
+                              </span>
+                            </div>
+                          </article>
+                        ))
+                      ) : (
+                        <div className="empty">
+                          <h2>为持续的目标留一个位置</h2>
+                          <p>
+                            项目组织作品、版本和相关工作。临时问题可以直接从首页开始。
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                )}
+              </section>
+            ) : null}
+            {page === "assets" ? (
+              <Suspense fallback={<p className="wide-content">打开资产…</p>}>
+                <AssetLibrary
+                  data={data}
+                  onMethodPrepared={useMethodDraft}
+                  onNavigate={openMethodSource}
+                  onError={fail}
+                  onUse={async (assetId) => {
+                    const draft = await command<import("../core/types").Draft>({
+                      type: "asset-use",
+                      assetId,
+                    });
+                    setData(await command<Snapshot>({ type: "snapshot" }));
+                    changeContext(draft.id);
+                    setProjectId(draft.projectId);
+                    setSelectedDelivery(null);
+                    setExtra([]);
+                    setImmersive(true);
+                    setComposerFocus((n) => n + 1);
+                  }}
+                />
+              </Suspense>
+            ) : null}
+            {page === "schedules" ? (
+              <Suspense
+                fallback={<p className="wide-content">打开定时任务…</p>}
+              >
+                <SchedulesPage
+                  data={data}
+                  onRadar={openRadar}
+                  selectedId={scheduleId}
+                  onSelect={setScheduleId}
+                  onWork={(id, versionId) => {
+                    openWork(id, versionId);
+                    setImmersive(true);
+                  }}
+                  onPrepare={(text, schedule) =>
+                    void prepareWorkspaceChat(
+                      "schedules",
+                      text,
+                      schedule
+                        ? {
+                            kind: "schedule",
+                            id: schedule.id,
+                            revision: schedule.revision,
+                          }
+                        : undefined,
+                    ).catch(fail)
+                  }
+                />
+              </Suspense>
+            ) : null}
+            {page === "settings" ? (
+              <section className="settings-content">
+                <header className="page-intro">
+                  <div>
+                    <h1>设置</h1>
+                    <p>账号、工作方式与本机数据。</p>
+                  </div>
+                </header>
+                <div className="settings-layout">
+                  <nav className="settings-nav" aria-label="设置分类">
+                    {(
+                      [
+                        ["account", "账号", UserRound],
+                        ["model", "AI 模型", Cpu],
+                        ["files", "本地目录", Folder],
+                        ["space", "空间与备份", HardDrive],
+                        ["team", "团队与流程", Users],
+                        ["about", "关于应用", Info],
+                      ] as const
+                    ).map(([id, label, Icon]) => (
+                      <button
+                        key={id}
+                        aria-pressed={settingsTab === id}
+                        aria-controls="settings-panel"
+                        onClick={() => setSettingsTab(id)}
+                      >
+                        <Icon size={17} />
+                        {label}
+                      </button>
+                    ))}
+                  </nav>
+                  <div className="settings-panel" id="settings-panel">
+                    <Suspense fallback={<p role="status">正在打开设置…</p>}>
+                      {settingsTab === "account" ? (
+                        <AccountSettings data={data} onError={fail} />
+                      ) : null}
+                      {settingsTab === "model" ? (
+                        <ModelSettings data={data} onError={fail} />
+                      ) : null}
+                      {settingsTab === "files" ? (
+                        <LocalFolderSettings data={data} onError={fail} />
+                      ) : null}
+                      {settingsTab === "space" ? (
+                        <WorkspaceSettings onError={fail} />
+                      ) : null}
+                    </Suspense>
+                    {settingsTab === "team" ? (
+                      <section className="settings-section">
+                        <header className="settings-section-header">
+                          <div>
+                            <h2>团队与流程</h2>
+                            <p>设置新工作的默认协作方式。</p>
+                          </div>
+                        </header>
+                        <div className="setting-row">
+                          <div className="setting-copy">
+                            <strong>默认团队</strong>
+                            <span className="setting-value">
+                              {data.team.name}
+                            </span>
+                          </div>
+                          <button onClick={() => setDialog("team")}>
+                            管理团队与流程
+                            <ArrowUpRight size={16} />
+                          </button>
+                        </div>
+                        <div className="setting-row">
+                          <div className="setting-copy">
+                            <strong>默认流程</strong>
+                            <span className="setting-value">
+                              {data.workflow.name}
+                            </span>
+                          </div>
+                        </div>
+                      </section>
+                    ) : null}
+                    {settingsTab === "about" ? (
+                      <section className="settings-section">
+                        <header className="settings-section-header">
+                          <div>
+                            <h2>关于应用</h2>
+                            <p>版本与本机存储信息。</p>
+                          </div>
+                        </header>
+                        {data.desktop ? (
+                          <>
+                            <div className="setting-row">
+                              <div className="setting-copy">
+                                <strong>应用版本</strong>
+                                <span className="setting-value">
+                                  {data.desktop.version}
+                                </span>
+                              </div>
+                              <span className="status-badge">
+                                {data.desktop.packaged ? "已安装" : "开发模式"}
+                              </span>
+                            </div>
+                            <div className="setting-row">
+                              <div className="setting-copy">
+                                <strong>设备</strong>
+                                <span className="setting-value">
+                                  {data.desktop.platform} · {data.desktop.arch}
+                                </span>
+                              </div>
+                            </div>
+                            <div className="setting-row">
+                              <div className="setting-copy">
+                                <strong>数据位置</strong>
+                                <span className="setting-value local-path">
+                                  {data.desktop.dataDirectory}
+                                </span>
+                                <small>
+                                  工作、材料和成果保存在这台设备，尚未开启跨设备同步。
+                                </small>
+                              </div>
+                            </div>
+                            <details className="settings-disclosure">
+                              <summary>构建信息</summary>
+                              <p className="local-path">
+                                {data.desktop.buildId}
+                              </p>
+                            </details>
+                          </>
+                        ) : (
+                          <p className="settings-note">应用信息暂不可用。</p>
+                        )}
+                      </section>
+                    ) : null}
+                  </div>
+                </div>
+              </section>
+            ) : null}
+            {work && page !== "radar" ? (
+              <section className="light-conversation">
+                <div className="section-heading conversation-heading">
+                  <div>
+                    <span className="eyebrow">
+                      {project?.name ?? "独立工作"}
+                    </span>
+                    <h1>{work.title}</h1>
+                  </div>
+                  <IconButton
+                    label="收起对话"
+                    onClick={() => {
+                      changeContext(projectId ? "new:" + projectId : "new");
+                    }}
+                  >
+                    <X size={19} />
+                  </IconButton>
+                </div>
+                <div className="work-view-shortcuts">
+                  <button
+                    className="team-workspace-entry"
+                    onClick={() => setImmersive(true)}
+                  >
+                    <PanelsTopLeft size={19} />
+                    <span>
+                      团队工作区<small>决策 · 过程 · 结果</small>
+                    </span>
+                    <ArrowUpRight size={17} />
+                  </button>
+                  {version ? (
+                    <button
+                      onClick={() => {
+                        setSelectedVersion(version.id);
+                        viewState.update(context, { surface: "result" });
+                        setImmersive(true);
+                      }}
+                    >
+                      <FileOutput size={18} />
+                      <span>
+                        查看成果<small>{versionLabel(version)}</small>
+                      </span>
+                      <ArrowUpRight size={16} />
+                    </button>
+                  ) : null}
+                </div>
+                {messages.slice(-4).map((m) => (
+                  <article className={`message ${m.role}`} key={m.id}>
+                    <small>{m.role === "user" ? "你" : "团队"}</small>
+                    <Markdown>{m.body}</Markdown>
+                  </article>
+                ))}
+                {runs
+                  .filter((r) => r.status === "unknown")
+                  .map((r) => (
+                    <UnknownRunActions
+                      key={r.id}
+                      id={r.id}
+                      kind="work"
+                      local={r.recovery === "local"}
+                      onError={fail}
+                    />
+                  ))}
+                {latestRun?.error ? (
+                  <p className="error-inline">{latestRun.error}</p>
+                ) : null}
+                {!immersive ? workspaceActionReceipts : null}
+              </section>
+            ) : null}
+          </main>
+        )}
+        {!immersive ? (
+          <>
+            {" "}
+            {(page === "home" ||
+              (page === "projects" && project && projectTab === "overview") ||
+              (work && page !== "radar")) &&
+            !context.startsWith("select:delivery:") ? (
+              <div
+                className={`composer-dock ${work ? "conversation-dock" : ""}`}
+              >
+                {composer}
+              </div>
+            ) : null}
+          </>
+        ) : null}
+      </div>
+      {reading ? (
+        <Dialog title={reading.title} onClose={() => setReading(null)}>
+          <small>
+            v{reading.version} · {coverageLabel(reading.coverage)}
+          </small>
+          {reading.url ? <p className="source-url">{reading.url}</p> : null}
+          {reading.feedSource ? (
+            <p className="muted">
+              来自订阅{" "}
+              {data.feeds.find((s) => s.id === reading.feedSource?.sourceId)
+                ?.name ?? reading.feedSource.sourceUrl}{" "}
+              · 读取于 {new Date(reading.feedSource.fetchedAt).toLocaleString()}{" "}
+              ·{" "}
+              {reading.feedSource.publishedAt
+                ? `发布于 ${new Date(reading.feedSource.publishedAt).toLocaleString()}`
+                : "发布时间未知"}
+              。订阅节选不代表网站全文。
+            </p>
+          ) : null}
+          <div className="reading-body">
+            <Markdown>{reading.body}</Markdown>
+          </div>
+          <p className="muted">
+            此入口使用当前准确版本，不会改成最新修订，也不带入其他私有材料。
+          </p>
+          {worksCitingReferences(data, researchRefsForMaterial(reading)).map(
+            (work) => (
+              <button
+                className="text-action"
+                key={work.id}
+                onClick={() => {
+                  setReading(null);
+                  openWork(work.id);
+                }}
+              >
+                继续：{work.title}
+              </button>
+            ),
+          )}
+          <div className="dialog-actions">
+            <button
+              onClick={() =>
+                void command({
+                  type: "asset",
+                  label: reading.title,
+                  reference: {
+                    materialId: reading.id,
+                    version: reading.version,
+                    label: reading.title,
+                  },
+                }).catch(fail)
+              }
+            >
+              加入资产
+            </button>
+            <button
+              className="primary"
+              onClick={() => void useMaterial(reading).catch(fail)}
+            >
+              围绕此版本深入研究
+            </button>
+          </div>
+        </Dialog>
+      ) : null}
+      {dialog === "project" ? (
+        <Dialog title="新建项目" onClose={() => setDialog(null)}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const f = new FormData(e.currentTarget);
+              void command<Project>({
+                type: "project",
+                name: String(f.get("name")),
+                goal: String(f.get("goal")),
+                kind: f.get("kind") as Project["kind"],
+              })
+                .then((p) => {
+                  setProjectId(p.id);
+                  setSelectedDelivery(null);
+                  changeContext("new:" + p.id);
+                  setDialog(null);
+                })
+                .catch(fail);
+            }}
+          >
+            <label>
+              项目名称
+              <input autoFocus name="name" required />
+            </label>
+            <label>
+              持续目标
+              <textarea name="goal" rows={3} />
+            </label>
+            <label>
+              项目类型
+              <select name="kind">
+                <option value="software">软件项目</option>
+                <option value="media">创作项目</option>
+              </select>
+            </label>
+            <button type="submit" className="primary">
+              创建项目
+            </button>
+          </form>
+        </Dialog>
+      ) : null}
+      {dialog === "delivery" && project ? (
+        <Dialog title="新增交付" onClose={() => setDialog(null)}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const title = String(new FormData(e.currentTarget).get("title"));
+              void command<Delivery>({
+                type: "delivery",
+                projectId: project.id,
+                title,
+              })
+                .then(() => setDialog(null))
+                .catch(fail);
+            }}
+          >
+            <label>
+              这次要交付什么
+              <input autoFocus name="title" required />
+            </label>
+            <button type="submit" className="primary">
+              创建交付
+            </button>
+          </form>
+        </Dialog>
+      ) : null}
+      {dialog === "search" ? (
+        <Dialog title="查找工作" onClose={() => setDialog(null)}>
+          <input
+            autoFocus
+            aria-label="搜索工作"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="名称、目标…"
+          />
+          <label className="search-filters">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(e) => setShowArchived(e.target.checked)}
+            />
+            包含已归档
+          </label>
+          {data.works
+            .filter((w) => showArchived || !w.archived)
+            .filter((w) => w.title.includes(query))
+            .map((w) => (
+              <button
+                className="search-result"
+                key={w.id}
+                onClick={() => {
+                  openWork(w.id);
+                  setDialog(null);
+                }}
+              >
+                {w.title}
+                {w.archived ? " · 已归档" : w.completedAt ? " · 已完成" : ""}
+                <ArrowUpRight size={16} />
+              </button>
+            ))}
+        </Dialog>
+      ) : null}
+      {dialog === "team" ? (
+        <Dialog title="团队与流程" onClose={() => setDialog(null)}>
+          <ConfigurationEditor
+            data={data}
+            work={work}
+            onApplied={() => {
+              void command<Snapshot>({ type: "snapshot" })
+                .then(setData)
+                .catch(fail);
+            }}
+          />
+        </Dialog>
+      ) : null}
+      {dialog === "work" && work ? (
+        <Dialog title="工作名称与归属" onClose={() => setDialog(null)}>
+          {!work.archived &&
+          !work.completedAt &&
+          data.runs.some(
+            (r) => r.workId === work.id && r.status === "succeeded",
+          ) ? (
+            <button
+              className="text-action"
+              onClick={() => {
+                setDialog(null);
+                setScheduleWork(work.id);
+              }}
+            >
+              <Clock size={16} />
+              设为定时任务
+            </button>
+          ) : null}
+          <WorkEditor
+            work={work}
+            data={data}
+            onSaved={(w) => {
+              setProjectId(w.projectId);
+              setSelectedDelivery(w.deliveryId);
+              setDialog(null);
+              if (w.projectId) setPage("projects");
+              else setPage("home");
+              void command<Snapshot>({ type: "snapshot" })
+                .then(setData)
+                .catch(fail);
+            }}
+          />
+        </Dialog>
+      ) : null}
+      {scheduleWork ? (
+        <Suspense fallback={null}>
+          <ScheduleEditor
+            data={data}
+            workId={scheduleWork}
+            onClose={() => setScheduleWork(null)}
+            onSaved={(s) => {
+              setScheduleWork(null);
+              setScheduleId(s.id);
+              setImmersive(false);
+              setPage("schedules");
+            }}
+          />
+        </Suspense>
+      ) : null}
+      {initializing && data.projects.some((p) => p.id === initializing) ? (
+        <Suspense fallback={null}>
+          <ProjectInitializer
+            key={initializing}
+            data={data}
+            project={data.projects.find((p) => p.id === initializing)!}
+            onClose={() => setInitializing(null)}
+            onSettings={() => {
+              setInitializing(null);
+              setImmersive(false);
+              setPage("settings");
+            }}
+          />
+        </Suspense>
+      ) : null}
+      {outcomeVersion && data.versions.some((v) => v.id === outcomeVersion) ? (
+        <Suspense fallback={null}>
+          <OutcomeDialog
+            key={outcomeVersion}
+            data={data}
+            version={data.versions.find((v) => v.id === outcomeVersion)!}
+            onClose={() => setOutcomeVersion(null)}
+            onVersion={(id) => {
+              setSelectedVersion(id);
+              setOutcomeVersion(null);
+            }}
+            onPrepared={async (draft) => {
+              setData(await command<Snapshot>({ type: "snapshot" }));
+              setOutcomeVersion(null);
+              changeContext(draft.id);
+              setExtra([]);
+              setComposerEpoch((n) => n + 1);
+              if (viewState.view.focused || window.innerWidth < 900)
+                viewState.update(draft.id, { focused: "decision" });
+              setComposerFocus((n) => n + 1);
+            }}
+          />
+        </Suspense>
+      ) : null}
+      {suggestion &&
+      data.projects.some((p) => p.id === suggestion.projectId) ? (
+        <Suspense fallback={null}>
+          <SuggestionDialog
+            key={suggestion.version.id}
+            data={data}
+            project={data.projects.find((p) => p.id === suggestion.projectId)!}
+            version={suggestion.version}
+            excerpt={suggestion.excerpt}
+            onClose={() => setSuggestion(null)}
+          />
+        </Suspense>
+      ) : null}
+      {requirementsProject &&
+      data.projects.find((p) => p.id === requirementsProject) ? (
+        <Suspense fallback={<p role="status">打开项目要求…</p>}>
+          <ProjectContextEditor
+            key={requirementsProject}
+            project={data.projects.find((p) => p.id === requirementsProject)!}
+            data={data}
+            candidate={standardCandidate}
+            onClose={() => {
+              setRequirementsProject(null);
+              setStandardCandidate(undefined);
+            }}
+          />
+        </Suspense>
+      ) : null}
+      {comparing && data.versions.find((v) => v.id === comparing) ? (
+        <Suspense fallback={<p role="status">打开版本比较…</p>}>
+          <VersionCompare
+            versions={data.versions}
+            selected={data.versions.find((v) => v.id === comparing)!}
+            onClose={() => setComparing(null)}
+          />
+        </Suspense>
+      ) : null}
+    </div>
+  );
+}
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <App />
+  </StrictMode>,
+);

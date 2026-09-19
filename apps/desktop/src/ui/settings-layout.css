@@ -1,0 +1,397 @@
+/* Shared application hierarchy: navigation, settings rows and editable forms. */
+.navigation {
+  border-right: 1px solid #e8ebf0;
+  gap: 18px;
+}
+.navigation-brand {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 6px;
+  min-height: 40px;
+}
+.navigation .brand-toggle {
+  flex: none;
+  padding: 9px;
+  background: transparent;
+}
+.brand-wordmark {
+  font-size: 14px;
+  letter-spacing: 0.1em;
+  color: #273447;
+  white-space: nowrap;
+}
+.app:not(.nav-wide) .brand-wordmark {
+  display: none;
+}
+.nav-wide .navigation {
+  width: 184px;
+}
+.navigation nav button {
+  border-radius: 8px;
+  color: #606b7a;
+}
+.navigation nav button.selected {
+  background: #eaf0ef;
+  color: #2e5145;
+}
+.topbar {
+  height: 48px;
+  border-bottom: 1px solid #e8ebf0;
+}
+.topbar .breadcrumb {
+  color: #596575;
+  font-size: 13px;
+}
+.page-intro {
+  margin-bottom: 26px;
+  align-items: center;
+}
+.page-intro h1 {
+  font-size: 28px;
+  letter-spacing: -0.6px;
+  margin: 0 0 7px;
+}
+.page-intro p {
+  color: #677386;
+}
+.section-tabs {
+  gap: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e3e7ee;
+  margin-bottom: 24px;
+}
+.section-tabs button {
+  min-height: 36px;
+}
+.settings-content {
+  max-width: 1080px;
+}
+.settings-layout {
+  grid-template-columns: 170px minmax(0, 1fr);
+  gap: 28px;
+}
+.settings-nav {
+  gap: 5px;
+  position: sticky;
+  top: 0;
+}
+.settings-nav button {
+  color: #626e80;
+  min-height: 42px;
+  gap: 10px;
+  padding: 10px 13px;
+}
+.settings-nav button[aria-pressed="true"] {
+  color: #2e5145;
+  background: #e6eeeb;
+  font-weight: 600;
+}
+.settings-panel {
+  background: transparent;
+  border-radius: 0;
+  padding: 0;
+  display: grid;
+  gap: 18px;
+}
+.settings-section {
+  background: #fff;
+  border: 1px solid #e2e7ed;
+  border-radius: 12px;
+  padding: 0 24px;
+  overflow: hidden;
+}
+.settings-section-header {
+  padding: 22px 0 18px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 0;
+}
+.settings-section-header h2,
+.settings-panel h2 {
+  font-size: 17px;
+  margin: 0;
+  line-height: 1.5;
+}
+.settings-section-header p {
+  margin: 5px 0 0;
+  font-size: 13px;
+  color: #6a7584;
+}
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 0;
+  border-top: 1px solid #edf0f3;
+  min-width: 0;
+}
+.setting-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.setting-copy > strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: #334052;
+}
+.setting-copy small {
+  color: #718092;
+  line-height: 1.6;
+  font-size: 12px;
+}
+.setting-value {
+  font-size: 13px;
+  color: #5c6979;
+  overflow-wrap: anywhere;
+}
+.setting-row > button,
+.settings-actions > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.settings-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.settings-actions button {
+  margin: 0;
+}
+.settings-note {
+  font-size: 12px;
+  color: #6b7685;
+  line-height: 1.7;
+  margin: 0;
+  padding: 14px 0;
+}
+.settings-panel .settings-note {
+  margin: 0;
+}
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: #f0f2f5;
+  color: #667181;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.status-badge.success {
+  background: #eaf3ed;
+  color: #3d6a4f;
+}
+.status-badge.warning {
+  background: #faf0df;
+  color: #936521;
+}
+.settings-disclosure {
+  padding: 16px 0;
+  border-top: 1px solid #edf0f3;
+}
+.settings-disclosure > summary {
+  color: #596779;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 3px 0;
+}
+.settings-disclosure[open] > summary {
+  margin-bottom: 14px;
+}
+.settings-form {
+  display: grid;
+  gap: 16px;
+  width: 100%;
+}
+.settings-form label {
+  margin: 0;
+}
+.settings-content form {
+  max-width: none;
+}
+.form-section {
+  border: 1px solid #e3e7ed;
+  border-radius: 10px;
+  padding: 16px 18px;
+  margin: 0 0 18px;
+  min-width: 0;
+}
+.form-section > legend {
+  padding: 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #3c4b5d;
+}
+.form-section > label:first-of-type {
+  margin-top: 4px;
+}
+.form-section > label:last-child {
+  margin-bottom: 0;
+}
+.form-section p {
+  color: #6b7685;
+  font-size: 12px;
+  line-height: 1.6;
+}
+form .dialog-actions {
+  border-top: 1px solid #e8ebf0;
+  padding-top: 18px;
+  margin-top: 22px;
+}
+form .dialog-actions button {
+  margin: 0;
+}
+.secondary-action {
+  white-space: nowrap;
+}
+.local-project-discovery {
+  padding: 14px 16px;
+  border: 1px solid #e2e7ed;
+  border-radius: 10px;
+  background: #fff;
+  margin-bottom: 22px;
+}
+.local-project-discovery > summary {
+  cursor: pointer;
+  color: #536579;
+  font-size: 13px;
+}
+:is(summary, button):focus-visible {
+  outline: 2px solid #4162ba;
+  outline-offset: 3px;
+}
+@media (max-width: 1050px) {
+  .settings-layout {
+    grid-template-columns: 145px minmax(0, 1fr);
+    gap: 18px;
+  }
+  .settings-section {
+    padding: 0 18px;
+  }
+  .setting-row {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .setting-copy {
+    flex: 1 1 220px;
+  }
+}
+@media (max-width: 900px) {
+  .settings-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .settings-nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .settings-nav button {
+    padding: 8px 10px;
+    min-height: 38px;
+  }
+  .settings-panel {
+    padding: 0;
+  }
+}
+
+.settings-page,
+.workspace-settings {
+  display: grid;
+  gap: 18px;
+  margin: 0;
+}
+.settings-section > .settings-actions {
+  padding: 10px 0 22px;
+}
+.settings-section > .settings-form {
+  padding-bottom: 22px;
+}
+.settings-section.advanced-settings {
+  padding: 18px 24px;
+}
+.setting-row .settings-actions {
+  margin: 0;
+}
+.setting-row > .setting-value {
+  text-align: right;
+}
+.setting-copy .setting-value {
+  text-align: left;
+}
+.local-folders .setting-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+}
+.local-folders .setting-row > .setting-value {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  grid-row: 2;
+  grid-column: 1 / -1;
+  text-align: left;
+}
+.local-folders .setting-row > .settings-actions {
+  grid-row: 1;
+  grid-column: 2;
+}
+.local-folders .local-system-setup {
+  margin-top: 0;
+  border-top: 1px solid #e2e7ed;
+}
+.settings-section-header > button {
+  white-space: nowrap;
+  flex: none;
+}
+.model-choice {
+  border: 1px solid #dfe5ea;
+}
+.settings-panel .local-path {
+  margin: 0;
+  word-break: break-word;
+}
+.settings-page .advanced-settings > summary::before {
+  content: "+";
+  font-weight: 400;
+  margin-right: 2px;
+}
+.settings-page .advanced-settings[open] > summary::before {
+  content: "−";
+}
+
+.schedule-runtime-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  background: #eef1f5;
+  color: #667386;
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-size: 12px;
+  margin-bottom: 20px;
+}
+.schedule-runtime-note details {
+  margin-left: auto;
+}
+.schedule-runtime-note summary {
+  cursor: pointer;
+}
+.schedule-runtime-note p {
+  margin: 8px 0 0;
+}
+.schedules-page > .empty {
+  border: 1px dashed #d6dee7;
+  border-radius: 12px;
+  padding: 34px;
+  text-align: center;
+  background: #fff;
+}

@@ -1,0 +1,28 @@
+{
+  "name": "ytriple-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24 <27"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env --import tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "check": "npm run typecheck && npm test",
+    "db:migrate": "node --env-file-if-exists=.env --import tsx scripts/migrate.ts"
+  },
+  "dependencies": {
+    "fastify": "5.12.5",
+    "pg": "8.23.0",
+    "tsx": "4.23.13",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/pg": "8.23.1",
+    "typescript": "7.0.2",
+    "prettier": "3.9.7"
+  }
+}
