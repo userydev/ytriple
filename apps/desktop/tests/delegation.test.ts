@@ -18,6 +18,7 @@ import {
   type SubmitInput,
 } from "../src/core/types";
 import type { Model, Prompt, StreamEvent } from "../src/core/ycore";
+import { teamResponse, boundBaseFromPrompt } from "./team-response";
 const request = (extra: Partial<SubmitInput> = {}): SubmitInput => ({
   key: randomUUID(),
   context: "new",
@@ -66,7 +67,17 @@ class Script implements Model {
       };
       return;
     }
-    yield { type: "text.delta", run_id: key, text: body };
+    const system = p.messages.find((m) => m.role === "system")?.content ?? "";
+    const allowsArtifact = !system.includes("不允许提交 artifact");
+    const baseVersionId = boundBaseFromPrompt(p);
+    const delivered =
+      body.startsWith("{") && body.includes("ytriple_")
+        ? body
+        : teamResponse(
+            body,
+            allowsArtifact ? { body, baseVersionId } : null,
+          );
+    yield { type: "text.delta", run_id: key, text: delivered };
     yield { type: "run.completed", run_id: key };
   }
 }

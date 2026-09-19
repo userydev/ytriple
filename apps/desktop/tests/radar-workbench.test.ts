@@ -1,6 +1,5 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { Store } from "../src/core/store";
 import { Radar } from "../src/core/radar";
 import type { Material } from "../src/core/types";
@@ -479,17 +478,4 @@ test("organize synthesizes only the processed batch, not remaining unprocessed p
   for (const id of requested)
     assert.equal(ids.includes(`ycore:scope:${id}`), true);
   store.close();
-});
-
-test("decision window CSS keeps 1280 input tools on a horizontal row", () => {
-  const css = readFileSync(new URL("../src/ui/style.css", import.meta.url), "utf8");
-  assert.match(
-    css,
-    /\.decision-window \.composer(?:\.is-compact)?,[\s\S]*?display:\s*flex;[\s\S]*?flex-direction:\s*column/,
-  );
-  assert.match(
-    css,
-    /\.decision-window \.composer\.is-compact \.composer-tools[\s\S]*?display:\s*flex/,
-  );
-  assert.match(css, /\.decision-window-head strong[\s\S]*?-webkit-line-clamp:\s*2/);
 });

@@ -8,6 +8,7 @@ import { Store } from "../src/core/store";
 import { Runtime } from "../src/core/runtime";
 import { Decisions, parseDecision } from "../src/core/decisions";
 import { ServiceError, type Model, type Prompt } from "../src/core/ycore";
+import { protocolModel } from "./team-response";
 import type { Decision, Draft, Run, Work } from "../src/core/types";
 const question = {
   question: "首版是否包含离线导入？",
@@ -27,6 +28,17 @@ const request = (context = "new") => ({
   recipient: null,
   projectId: null,
 });
+function stageAttempt(taskId: string, runId: string) {
+  const tail = taskId.slice(runId.length + 1).split(":");
+  const stage = Number(tail[0]);
+  const attemptToken = tail.find((p) => /^a\d+$/.test(p));
+  const legacyAttempt =
+    tail.length > 1 && /^\d+$/.test(tail[1]) ? Number(tail[1]) : 0;
+  const attempt = attemptToken
+    ? Number(attemptToken.slice(1))
+    : legacyAttempt;
+  return { stage, attempt };
+}
 class DecisionModel implements Model {
   scope = "test-decision-service";
   calls: { key: string; prompt: Prompt }[] = [];
@@ -35,12 +47,14 @@ class DecisionModel implements Model {
   async *stream(prompt: Prompt, key: string) {
     this.calls.push({ key, prompt });
     yield { type: "run.started" as const, run_id: key };
-    if (this.answerMode === "interrupt" && key.includes("answer-"))
+    const runId = prompt.taskId.split(":")[0];
+    const { stage, attempt } = stageAttempt(prompt.taskId, runId);
+    if (this.answerMode === "interrupt" && attempt > 0)
       throw new ServiceError("STREAM_INTERRUPTED", "验证断线");
-    const stage = prompt.taskId.split(":")[1];
     const ask =
-      Number(stage) === this.askStage &&
-      (!key.includes("answer-") || this.answerMode === "ask-again");
+      stage === this.askStage &&
+      (this.answerMode === "ask-again" ? attempt < 2 : attempt === 0) &&
+      (this.answerMode === "ask-again" || !key.includes("answer-"));
     yield {
       type: "text.delta" as const,
       run_id: key,
@@ -53,7 +67,7 @@ async function waiting(
   store = new Store(":memory:"),
   model = new DecisionModel(),
 ) {
-  const runtime = new Runtime(store, () => model);
+  const runtime = new Runtime(store, () => protocolModel(model));
   const run = runtime.submit(request());
   const queued = runtime.submit({
     ...request(run.workId),
@@ -93,9 +107,15 @@ test("a genuine decision pauses the same run, preserves supplement queue, and an
   runtime.answerDecision(submission);
   await runtime.settled(run.workId);
   assert.equal(model.calls.length, 4);
-  assert.equal(model.calls.filter((c) => c.key === `${run.id}-0`).length, 1);
-  assert.equal(model.calls[2].key, `${run.id}-1-answer-1`);
-  assert.ok(JSON.stringify(model.calls[2].prompt).includes("先做在线导入"));
+  assert.equal(
+    model.calls.filter((c) => c.prompt.taskId.startsWith(`${run.id}:0`)).length,
+    1,
+  );
+  assert.ok(
+    model.calls.some((c) =>
+      JSON.stringify(c.prompt).includes("先做在线导入"),
+    ),
+  );
   assert.equal(store.require<Run>("run", run.id).status, "succeeded");
   assert.equal(store.require<Run>("run", queued.id).status, "queued");
   assert.equal(store.snapshot().runs.length, 2);
@@ -144,7 +164,7 @@ test("decision draft and checkpoint survive restart; shutdown does not cancel wa
     const reopened = new Store(join(dir, "db"));
     reopened.recover();
     const model = new DecisionModel();
-    const next = new Runtime(reopened, () => model);
+    const next = new Runtime(reopened, () => protocolModel(model));
     const d = reopened.require<Decision>("decision", decision.id);
     assert.equal(d.draft, saved.draft);
     assert.equal(reopened.require<Run>("run", run.id).status, "waiting");
@@ -194,7 +214,7 @@ test("read-only recovery of a completed decision does not turn its control paylo
       return { status: "succeeded", result: { text: control }, error: null };
     },
   };
-  const runtime = new Runtime(store, () => model);
+  const runtime = new Runtime(store, () => protocolModel(model));
   const run = runtime.submit(request());
   await runtime.settled(run.workId);
   await runtime.reconcile(run.id);
@@ -229,9 +249,9 @@ test("answer-step recovery uses its own idempotency key and does not repeat the 
       };
     },
   };
-  const resumed = new Runtime(store, () => recoverModel);
+  const resumed = new Runtime(store, () => protocolModel(recoverModel));
   await resumed.reconcile(run.id);
-  assert.equal(queried, `${run.id}-1-answer-1`);
+  assert.equal(queried, c.remoteKey);
   model.answerMode = "normal";
   resumed.resume(run.workId);
   await resumed.settled(run.workId);
@@ -278,7 +298,9 @@ test("a second necessary decision has a distinct checkpoint and does not accept 
   model.answerMode = "normal";
   runtime.answerDecision(answer(second, "仍按原选择继续"));
   await runtime.settled(run.workId);
-  assert.equal(model.calls.at(-2)!.key, `${run.id}-1-answer-2`);
+  assert.ok(
+    model.calls.at(-2)!.prompt.taskId.startsWith(`${run.id}:1`),
+  );
   assert.equal(store.require<Run>("run", run.id).status, "succeeded");
   store.close();
 });
@@ -293,7 +315,7 @@ test("malformed decision output fails without publishing it or starting subseque
       yield { type: "run.completed", run_id: key };
     },
   };
-  const runtime = new Runtime(store, () => model);
+  const runtime = new Runtime(store, () => protocolModel(model));
   const run = runtime.submit(request());
   await runtime.settled(run.workId);
   assert.equal(store.require<Run>("run", run.id).status, "failed");

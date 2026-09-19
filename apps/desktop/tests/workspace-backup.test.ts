@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../src/core/store";
+import { legacyFinish } from "./team-response";
 import { WorkspaceBackups } from "../src/core/workspace-backup";
 import { Skills } from "../src/core/skills";
 import { Assets } from "../src/core/assets";
@@ -51,7 +52,7 @@ async function fixture() {
   };
   const r = store.submit(input);
   store.setRun(r.id, { status: "running" });
-  const v = store.finish(r.id, "成果第一版", true)!;
+  const v = legacyFinish(store,r.id, "成果第一版", true)!;
   store.adopt(d.id, v.id);
   const r2 = store.submit({
     ...input,
@@ -60,7 +61,7 @@ async function fixture() {
     text: "AI 修订",
   });
   store.setRun(r2.id, { status: "running" });
-  const v2 = store.finish(r2.id, "成果第二版", true)!;
+  const v2 = legacyFinish(store,r2.id, "成果第二版", true)!;
   store.saveDraft({
     id: r.workId,
     text: "未发送，请保留旧版本依据",

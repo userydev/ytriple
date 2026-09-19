@@ -19,6 +19,7 @@ import {
   type SuggestionDocument,
 } from "../core/project-suggestions";
 import { ProcessRecords } from "../core/process";
+import { WorkflowLearning } from "../core/workflow-learning";
 import { versionLabel } from "../core/output";
 import { Assets } from "../core/assets";
 import { LocalDirectories } from "../core/local-directories";
@@ -39,7 +40,8 @@ import {
 declare const __YTRIPLE_DOCK_ICON__: string;
 import { readFile, writeFile, stat } from "node:fs/promises";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { join, resolve, extname, basename } from "node:path";
+import { join, resolve, extname, basename, dirname } from "node:path";
+declare const __YTRIPLE_MEMBER_TEMPLATE_LICENSE__: string;
 import { randomUUID } from "node:crypto";
 import { Store } from "../core/store";
 import { Runtime } from "../core/runtime";
@@ -144,7 +146,10 @@ let service: ServiceStatus = {
   connected: false,
   ai: false,
   error: null,
+  accountSummaryState: "idle",
+  accountSummaryError: null,
 };
+let accountSummaryGeneration = 0;
 let configuring = false;
 let backups: WorkspaceBackups;
 let activeDataDir: string;
@@ -175,6 +180,45 @@ function changed() {
     if (window && !window.isDestroyed())
       window.webContents.send("workbench:changed", snapshot());
   }, 60);
+}
+async function loadAccountSummary() {
+  const generation = ++accountSummaryGeneration;
+  if (!accounts?.enabled || accounts.info().state !== "signed_in") {
+    service = {
+      ...service,
+      accountSummary: null,
+      accountSummaryState: "idle",
+      accountSummaryError: null,
+    };
+    changed();
+    return;
+  }
+  service = {
+    ...service,
+    accountSummary: null,
+    accountSummaryState: "loading",
+    accountSummaryError: null,
+  };
+  changed();
+  try {
+    const summary = await accounts.fetchAccountSummary();
+    if (generation !== accountSummaryGeneration) return;
+    service = {
+      ...service,
+      accountSummary: summary,
+      accountSummaryState: summary === null ? "unsupported" : "ready",
+      accountSummaryError: null,
+    };
+  } catch (e) {
+    if (generation !== accountSummaryGeneration) return;
+    service = {
+      ...service,
+      accountSummary: null,
+      accountSummaryState: "error",
+      accountSummaryError: e instanceof Error ? e.message : String(e),
+    };
+  }
+  changed();
 }
 async function connect() {
   try {
@@ -212,6 +256,8 @@ async function connect() {
     };
     throw e;
   } finally {
+    if (accounts?.enabled && accounts.info().state === "signed_in")
+      void loadAccountSummary();
     changed();
   }
   return service;
@@ -468,13 +514,21 @@ app
                 connected: false,
                 ai: false,
                 error: accounts.info().error,
+                accountSummary: null,
               };
+              await loadAccountSummary();
               pauseModelAutomation();
               if (client) await connect();
               return accounts.info();
             });
+          case "account-refresh":
+            await loadAccountSummary();
+            return snapshot().service;
+          case "read-member-template-license":
+            return __YTRIPLE_MEMBER_TEMPLATE_LICENSE__;
           case "account-sign-out":
             return changeService(async () => {
+              accountSummaryGeneration++;
               await accounts.signOut(accountModelGuard);
               client = undefined;
               service = {
@@ -483,6 +537,7 @@ app
                 connected: false,
                 ai: false,
                 error: accounts.info().error,
+                accountSummary: null,
               };
               pauseModelAutomation();
               return accounts.info();
@@ -1120,6 +1175,27 @@ app
             break;
           case "prepare-process":
             result = new ProcessRecords(store).prepare(input);
+            break;
+          case "export-process": {
+            const markdown = new ProcessRecords(store).exportMarkdown(input);
+            const selected = await dialog.showSaveDialog(window, {
+              defaultPath: "过程记录.md",
+              filters: [{ name: "Markdown", extensions: ["md"] }],
+            });
+            if (!selected.canceled && selected.filePath) {
+              await writeFile(selected.filePath, markdown, "utf8");
+              result = { exported: true };
+            }
+            break;
+          }
+          case "prepare-workflow-candidate":
+            result = new WorkflowLearning(store).prepare(input.sourceVersionId);
+            break;
+          case "save-workflow-candidate":
+            result = new WorkflowLearning(store).save(
+              input.candidateId,
+              input.teamKey,
+            );
             break;
           case "prepare-revision":
             result = new Artifacts(store).prepareRevision(input);

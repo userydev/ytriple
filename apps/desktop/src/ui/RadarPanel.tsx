@@ -37,19 +37,12 @@ import {
   readingForMaterial,
   researchDraftId,
   resolveRadarView,
+  savedEditions,
   savedNews,
   sourceNameForMaterial,
-  topicEditionHistory,
   topicMatchesNews,
   type RadarResearchAnchor,
 } from "../core/radar-reading";
-import {
-  canSplitReader,
-  editionCardMeta,
-  editionFeed,
-  editionImage,
-  organizeEmptyCopy,
-} from "../core/radar-workbench";
 import { FeedsPanel } from "./FeedsPanel";
 import { RadarAutomationEditor } from "./RadarAutomation";
 import { visibleRadarMaterials } from "../core/material-list";
@@ -226,21 +219,6 @@ function sameRef(a: RadarContentRef | null, b: RadarContentRef | null) {
   return contentKey(a) === contentKey(b);
 }
 
-function CardImage({
-  image,
-}: {
-  image: { url: string; credit?: string | null };
-}) {
-  const [ok, setOk] = useState(true);
-  if (!ok) return null;
-  return (
-    <figure className="radar-card-image">
-      <img src={image.url} alt="" onError={() => setOk(false)} />
-      {image.credit ? <figcaption>{image.credit}</figcaption> : null}
-    </figure>
-  );
-}
-
 export function RadarPanel({
   data,
   selectedId,
@@ -328,44 +306,26 @@ export function RadarPanel({
     return collectNewsItems(data.materials);
   }, [data, view.scope, currentTopic?.id, currentTopic?.revision]);
   const visible = filterNewsQuery(list, view.query);
-  const editionCards = useMemo(() => {
-    const needle = view.query.trim().toLocaleLowerCase();
-    return editionFeed(data, view.scope, view.topicId).filter((edition) => {
-      if (!needle) return true;
-      const topicTitle =
-        data.radar.topics.find((item) => item.id === edition.topicId)?.title ??
-        "";
-      return (edition.insight.title + edition.insight.summary + topicTitle)
-        .toLocaleLowerCase()
-        .includes(needle);
-    });
-  }, [data, view.scope, view.topicId, view.query]);
-  const showingSources = view.surface === "sources";
+  const editions = view.scope === "saved" ? savedEditions(data) : [];
+  const topicEditions =
+    view.scope === "topic" && currentTopic
+      ? data.radar.editions
+          .filter((item) => item.topicId === currentTopic.id)
+          .sort((a, b) => b.number - a.number)
+      : [];
 
   const object = view.object;
   const selected =
     object?.kind === "edition"
       ? data.radar.editions.find((item) => item.id === object.id)
       : undefined;
-  const previousEditions = selected
-    ? topicEditionHistory(data.radar.editions, selected.topicId).filter(
-        (item) => item.id !== selected.id,
-      )
-    : [];
   const readingMaterial =
     object?.kind === "material"
       ? data.materials.find(
           (item) => item.id === object.id && item.version === object.version,
         ) ?? openingMaterial
       : undefined;
-  const queue = view.queue.length
-    ? view.queue
-    : showingSources
-      ? visible.map((item) => newsRef(item.primary))
-      : editionCards.map((edition) => ({
-          kind: "edition" as const,
-          id: edition.id,
-        }));
+  const queue = view.queue.length ? view.queue : visible.map((item) => newsRef(item.primary));
   const queueIndex = object
     ? queue.findIndex((item) => sameRef(item, object))
     : -1;
@@ -462,12 +422,7 @@ export function RadarPanel({
         ? []
         : view.returnStack;
     const nextQueue = fromList
-      ? showingSources
-        ? visible.map((item) => newsRef(item.primary))
-        : editionCards.map((edition) => ({
-            kind: "edition" as const,
-            id: edition.id,
-          }))
+      ? visible.map((item) => newsRef(item.primary))
       : view.queue;
     persist({
       ...view,
@@ -490,7 +445,7 @@ export function RadarPanel({
   useEffect(() => {
     const node = pageRef.current;
     if (!node || typeof ResizeObserver === "undefined") return;
-    const sync = () => setWide(canSplitReader(node.clientWidth));
+    const sync = () => setWide(node.clientWidth >= 1120);
     sync();
     const observer = new ResizeObserver(sync);
     observer.observe(node);
@@ -650,11 +605,11 @@ export function RadarPanel({
     };
   }, [object ? contentKey(object) : `list:${view.scope}:${view.topicId ?? ""}:${view.query}`, askOpen && (!wide || researchPage)]);
 
-  async function organize(topic: RadarTopic, retry = false) {
+  async function refresh(topic: RadarTopic, retry = false) {
     setBusy(topic.id);
     try {
       await command<RadarJob>({
-        type: "radar-organize",
+        type: "radar-refresh",
         topicId: topic.id,
         retry,
       });
@@ -703,9 +658,10 @@ export function RadarPanel({
       }).catch(onError);
   }
 
+  const asking = askOpen;
   const articleMode = Boolean(selected || readingMaterial);
-  const showResearchColumn = articleMode && wide;
-  const showResearchPage = articleMode && !wide && (askOpen || researchPage);
+  const showResearchColumn = asking && wide && !researchPage;
+  const showResearchPage = asking && (!wide || researchPage);
 
   function continueWork(id: string) {
     flushArticleScroll();
@@ -727,12 +683,6 @@ export function RadarPanel({
       onUseMaterial(readingMaterial, currentTopic, excerpt || undefined);
   }
 
-  const boundResearch = showObjectResearch ? research : (
-    <section className="decision-window" aria-label="围绕当前内容讨论">
-      <header className="decision-window-head"><div><strong>与团队讨论</strong><p className="muted">{selected ? "这份解读" : "这篇材料"}</p></div></header>
-      <div className="decision-window-body"><p>核查依据、了解背景，或决定下一步。</p><button className="primary" onClick={askAboutCurrent}>开始讨论</button></div>
-    </section>
-  );
   return (
     <section className="radar-page" ref={pageRef}>
       {articleMode ? (
@@ -822,76 +772,58 @@ export function RadarPanel({
           </button>
         </div>
       </header>
-      <div className="radar-toolbar">
-        <div className="radar-views" role="tablist" aria-label="视图">
+      <div className="radar-scopes" role="tablist" aria-label="范围">
+        <button
+          type="button"
+          aria-selected={view.scope === "all"}
+          onClick={() => openList("all")}
+        >
+          全部
+        </button>
+        <button
+          type="button"
+          aria-selected={view.scope === "followed"}
+          onClick={() => openList("followed")}
+        >
+          关注
+        </button>
+        {topics.slice(0, 5).map((topic) => (
           <button
             type="button"
-            aria-selected={!showingSources}
-            onClick={() => persist({ ...view, surface: "editions" })}
+            key={topic.id}
+            aria-selected={view.scope === "topic" && view.topicId === topic.id}
+            onClick={() => openList("topic", topic.id)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              setTopicMenu(topic.id);
+            }}
           >
-            解读
+            {topic.title}
           </button>
-          <button
-            type="button"
-            aria-selected={showingSources}
-            onClick={() => persist({ ...view, surface: "sources" })}
-          >
-            来源材料
-          </button>
-        </div>
-        <div className="radar-scopes" role="tablist" aria-label="筛选">
-          <button
-            type="button"
-            aria-selected={view.scope === "all"}
-            onClick={() => openList("all")}
-          >
-            全部
-          </button>
-          <button
-            type="button"
-            aria-selected={view.scope === "followed"}
-            onClick={() => openList("followed")}
-          >
-            关注
-          </button>
-          {topics.slice(0, 5).map((topic) => (
-            <button
-              type="button"
-              key={topic.id}
-              aria-selected={view.scope === "topic" && view.topicId === topic.id}
-              onClick={() => openList("topic", topic.id)}
-              onContextMenu={(event) => {
-                event.preventDefault();
-                setTopicMenu(topic.id);
-              }}
-            >
-              {topic.title}
-            </button>
-          ))}
-          {topics.length > 5 ? (
-            <details className="radar-more-topics">
-              <summary>更多话题</summary>
-              {topics.slice(5).map((topic) => (
-                <button
-                  type="button"
-                  key={topic.id}
-                  onClick={() => openList("topic", topic.id)}
-                >
-                  {topic.title}
-                </button>
-              ))}
-            </details>
-          ) : null}
-          <button
-            type="button"
-            aria-selected={view.scope === "saved"}
-            onClick={() => openList("saved")}
-          >
-            收藏
-          </button>
-        </div>
+        ))}
+        {topics.length > 5 ? (
+          <details className="radar-more-topics">
+            <summary>更多话题</summary>
+            {topics.slice(5).map((topic) => (
+              <button
+                type="button"
+                key={topic.id}
+                onClick={() => openList("topic", topic.id)}
+              >
+                {topic.title}
+              </button>
+            ))}
+          </details>
+        ) : null}
+        <button
+          type="button"
+          aria-selected={view.scope === "saved"}
+          onClick={() => openList("saved")}
+        >
+          收藏
+        </button>
         <input
-          aria-label={showingSources ? "搜索来源材料" : "搜索解读"}
+          aria-label="搜索新闻"
           value={view.query}
           onChange={(event) =>
             persist({ ...view, query: event.target.value, listOffset: 0, listAnchor: null })
@@ -982,71 +914,23 @@ export function RadarPanel({
             >
               返回正文
             </button>
-            {boundResearch}
+            {showObjectResearch ? research : null}
           </section>
         ) : articleMode && selected ? (
           <article className="radar-article" ref={mainRef}>
             <p className="radar-kicker">
-              {currentTopic?.title ??
-                data.radar.topics.find((item) => item.id === selected.topicId)
-                  ?.title ??
-                "议题"}{" "}
-              · 保存于 {formatRadarTime(selected.createdAt)}
-              {selected.processing
-                ? " · 公开材料已经过中性整理"
-                : " · 以往发布的解读"}
+              {currentTopic?.title ?? "解读"} · 保存于 {formatRadarTime(selected.createdAt)}
             </p>
             <h1>{selected.insight.title}</h1>
             <p className="lede">{selected.insight.summary}</p>
-            {selected.previousId && selected.insight.changes.length ? (
-              <section className="radar-edition-changes">
-                <h2>相对此前解读的变化</h2>
-                <ul>
-                  {selected.insight.changes.map((change, index) => (
-                    <li key={index}>{change}</li>
-                  ))}
-                </ul>
-              </section>
-            ) : null}
             <div className="radar-article-body">
               {selected.insight.sections.map((section, index) => (
                 <section key={index}>
                   <h2>{section.heading}</h2>
                   <Markdown>{section.body}</Markdown>
-                  <p className="muted">
-                    依据 {section.sources.join("、")}
-                  </p>
                 </section>
               ))}
             </div>
-            {selected.insight.limitations.length ? (
-              <section>
-                <h2>未决与覆盖边界</h2>
-                <ul>
-                  {selected.insight.limitations.map((item, index) => (
-                    <li key={index}>{item}</li>
-                  ))}
-                </ul>
-              </section>
-            ) : null}
-            {previousEditions.length ? (
-              <section>
-                <h2>以往发布的解读</h2>
-                <p className="muted">
-                  日期是解读保存时间，不是事件发生时间。
-                </p>
-                {previousEditions.map((item) => (
-                  <button
-                    type="button"
-                    className="text-action"
-                    key={item.id}
-                    onClick={() => openObject({ kind: "edition", id: item.id })}
-                  >
-                    v{item.number} {item.title}
-                  </button>
-                ))}
-              </section>
-            ) : null}
             <RadarContext
               data={data}
               topic={data.radar.topics.find((item) => item.id === selected.topicId)}
@@ -1071,21 +955,6 @@ export function RadarPanel({
               {coverageKindLabel(readingMaterial)}
             </p>
             <h1>{readingMaterial.title}</h1>
-            {readingMaterial.derived?.status === "ready" ? (
-              <section className="radar-derived">
-                <p className="radar-kicker">中性整理 · 不是原文</p>
-                <h2>{readingMaterial.derived.titleZh}</h2>
-                <p>{readingMaterial.derived.digest}</p>
-                <ul>
-                  {readingMaterial.derived.keypoints.map((point, index) => (
-                    <li key={index}>
-                      {point.text}
-                      <small>「{point.quote}」</small>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ) : null}
             {display?.titleOnly ? (
               <p className="muted">
                 这篇只有标题
@@ -1106,7 +975,6 @@ export function RadarPanel({
               </p>
             ) : (
               <div className="radar-article-body">
-                <p className="radar-kicker">来源原文</p>
                 <Markdown>{display?.body ?? ""}</Markdown>
                 {readingMaterial.url ? (
                   <p className="muted">
@@ -1173,133 +1041,119 @@ export function RadarPanel({
             />
           </article>
         ) : (
-          <section
-            className={`radar-stream ${showingSources ? "sources" : "editions"}`}
-            ref={mainRef}
-            aria-label={showingSources ? "来源材料" : "解读"}
-          >
-            {!showingSources && !editionCards.length ? (
+          <section className="radar-stream" ref={mainRef} aria-label="新闻">
+            {view.scope === "followed" && !visible.length ? (
               <div className="empty">
-                <h2>还没有已发布的解读</h2>
-                <p>{organizeEmptyCopy(currentTopic)}</p>
+                <h2>关注范围内还没有新闻</h2>
+                <p>没有把其他来源混进来。</p>
+                <button type="button" onClick={() => openList("all")}>
+                  看看全部新闻
+                </button>
+              </div>
+            ) : null}
+            {view.scope === "all" && !visible.length ? (
+              <div className="empty">
+                <h2>还没有可读的新闻</h2>
                 <RadarSupplyNote data={data} />
-                {currentTopic ? (
-                  <button
-                    type="button"
-                    className="primary"
-                    disabled={busy === currentTopic.id}
-                    onClick={() => void organize(currentTopic)}
-                  >
-                    {busy === currentTopic.id ? "正在整理…" : "整理一次"}
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="primary"
-                    onClick={() => setFollowOpen(true)}
-                  >
-                    关注话题
-                  </button>
-                )}
                 <button
                   type="button"
-                  className="quiet"
-                  onClick={() => persist({ ...view, surface: "sources" })}
+                  className="primary"
+                  onClick={() => setFollowOpen(true)}
                 >
-                  查看来源原文
+                  关注话题
                 </button>
-                {currentTopic && editionJobStatus(data, currentTopic.id) ? (
+              </div>
+            ) : null}
+            {view.scope === "topic" && currentTopic && !visible.length ? (
+              <div className="empty">
+                <h2>这个话题还没有匹配的新闻</h2>
+                <p>按标题和正文的字面规则查找，没有可靠命中时保持空白。</p>
+                <button type="button" onClick={() => openList("all")}>
+                  看看全部新闻
+                </button>
+                <button
+                  type="button"
+                  disabled={busy === currentTopic.id}
+                  onClick={() => void refresh(currentTopic)}
+                >
+                  整理解读
+                </button>
+                {editionJobStatus(data, currentTopic.id) ? (
                   <p className="muted">
                     {editionJobStatus(data, currentTopic.id)?.message}
                   </p>
                 ) : null}
               </div>
             ) : null}
-            {!showingSources
-              ? editionCards.map((edition, index) => {
-                  const meta = editionCardMeta(data, edition);
-                  const image = editionImage(data, edition);
-                  return (
-                    <article
-                      className={`radar-card ${index === 0 ? "lead" : ""}`}
-                      key={edition.id}
-                      data-radar-anchor={contentKey({
-                        kind: "edition",
-                        id: edition.id,
-                      })}
+            {visible.map((item) => {
+              const shown = displayNewsText(item.primary);
+              return (
+                <article
+                  className="radar-item"
+                  key={item.key}
+                  data-radar-anchor={contentKey(newsRef(item.primary))}
+                >
+                  <p className="radar-kicker">
+                    {sourceNameForMaterial(data, item.primary)} ·{" "}
+                    {formatRadarTime(newsSortTime(item.primary))} ·{" "}
+                    {coverageKindLabel(item.primary)}
+                    {item.citations.some((citation) => citation.selected)
+                      ? " · 手选"
+                      : ""}
+                  </p>
+                  <button
+                    type="button"
+                    className="radar-item-title"
+                    onClick={() => openObject(newsRef(item.primary), true)}
+                  >
+                    {item.primary.title}
+                  </button>
+                  {shown.lede ? <p className="radar-item-lede">{shown.lede}</p> : null}
+                  {item.primary.url ? (
+                    <a
+                      className="radar-original"
+                      href={item.primary.url}
+                      target="_blank"
+                      rel="noreferrer"
                     >
-                      {image ? <CardImage image={image} /> : null}
-                      <div className="radar-card-copy">
-                      <p className="radar-kicker">{meta.topic}</p>
-                      <button
-                        type="button"
-                        className="radar-item-title"
-                        onClick={() =>
-                          openObject({ kind: "edition", id: edition.id }, true)
-                        }
-                      >
-                        {edition.insight.title}
-                      </button>
-                      <p className="radar-item-lede">{edition.insight.summary}</p>
-                      {meta.change ? (
-                        <p className="radar-card-change">变化：{meta.change}</p>
-                      ) : null}
-                      <p className="radar-card-footer">{meta.footer}</p>
-                      </div>
-                    </article>
-                  );
-                })
-              : null}
-            {showingSources && !visible.length ? (
-              <div className="empty">
-                <h2>这个范围内还没有来源材料</h2>
-                <RadarSupplyNote data={data} />
-              </div>
-            ) : null}
-            {showingSources
-              ? visible.map((item) => {
-                  const shown = displayNewsText(item.primary);
-                  const image = item.primary.image;
-                  return (
-                    <article
-                      className="radar-card source-card"
-                      key={item.key}
-                      data-radar-anchor={contentKey(newsRef(item.primary))}
-                    >
-                      {image ? <CardImage image={image} /> : null}
-                      <p className="radar-kicker">
-                        {sourceNameForMaterial(data, item.primary)} ·{" "}
-                        {formatRadarTime(newsSortTime(item.primary))} ·{" "}
-                        {coverageKindLabel(item.primary)}
-                      </p>
-                      <button
-                        type="button"
-                        className="radar-item-title"
-                        onClick={() => openObject(newsRef(item.primary), true)}
-                      >
-                        {item.primary.derived?.status === "ready"
-                          ? item.primary.derived.titleZh
-                          : item.primary.title}
-                      </button>
-                      <p className="radar-item-lede">
-                        {item.primary.derived?.status === "ready"
-                          ? item.primary.derived.digest
-                          : shown.lede}
-                      </p>
-                    </article>
-                  );
-                })
-              : null}
-            {currentTopic ? (
-              <p className="radar-topic-tools">
+                      原文↗
+                    </a>
+                  ) : null}
+                </article>
+              );
+            })}
+            {editions.map((edition) => (
+              <article className="radar-item" key={edition.id}>
+                <p className="radar-kicker">
+                  已收藏解读 · 保存于 {formatRadarTime(edition.createdAt)}
+                </p>
                 <button
                   type="button"
-                  className="quiet"
-                  disabled={busy === currentTopic.id}
-                  onClick={() => void organize(currentTopic)}
+                  className="radar-item-title"
+                  onClick={() => openObject({ kind: "edition", id: edition.id }, true)}
                 >
-                  整理一次
+                  {edition.insight.title}
                 </button>
+                <p className="radar-item-lede">{edition.insight.summary}</p>
+              </article>
+            ))}
+            {topicEditions.length ? (
+              <details className="radar-topic-editions">
+                <summary>这个话题的解读</summary>
+                {topicEditions.map((edition) => (
+                  <button
+                    type="button"
+                    className="text-action"
+                    key={edition.id}
+                    onClick={() => openObject({ kind: "edition", id: edition.id })}
+                  >
+                    {edition.insight.title}
+                  </button>
+                ))}
+              </details>
+            ) : null}
+            {currentTopic ? (
+              <p className="radar-topic-tools">
                 <button type="button" className="quiet" onClick={() => setEditing(currentTopic)}>
                   来源范围
                 </button>
@@ -1324,8 +1178,8 @@ export function RadarPanel({
           </section>
         )}
         {showResearchColumn ? (
-          <aside className="radar-research-pane" aria-label="团队">
-            {boundResearch}
+          <aside className="radar-research-pane" aria-label="提问">
+            {showObjectResearch ? research : null}
           </aside>
         ) : null}
       </div>

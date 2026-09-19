@@ -14,6 +14,7 @@ import {
   type ScheduleOccurrence,
 } from "../src/core/schedule-contract";
 import type { Model } from "../src/core/ycore";
+import { protocolModel, teamResponse } from "./team-response";
 import type { Draft, Run, Work } from "../src/core/types";
 import { defaultWorkflow } from "../src/core/types";
 import { commandSchema } from "../src/core/commands";
@@ -21,6 +22,7 @@ import { commandSchema } from "../src/core/commands";
 function fixture(path = ":memory:", override?: Model) {
   const store = new Store(path);
   store.initializeConfiguration();
+
   let now = Date.parse("2026-09-17T12:00:00Z"),
     scope = "server-account-a";
   const calls: string[] = [];
@@ -36,7 +38,7 @@ function fixture(path = ":memory:", override?: Model) {
       yield { type: "run.completed", run_id: key };
     },
   };
-  const runtime = new Runtime(store, () => model);
+  const runtime = new Runtime(store, () => protocolModel(model));
   const schedules = new Schedules(
     store,
     runtime,
@@ -415,7 +417,12 @@ test("remote reconciliation updates usage confirmation and resumes the same char
     async lookup() {
       return {
         status: "succeeded",
-        result: { text: "真实远端终态正文" },
+        result: {
+          text: teamResponse("完成", {
+            body: "真实远端终态正文",
+            baseVersionId: null,
+          }),
+        },
         error: null,
       };
     },

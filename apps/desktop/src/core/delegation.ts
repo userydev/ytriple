@@ -1,3 +1,4 @@
+import { teamResponseInstruction } from "./team-response";
 import {
   availableSkills,
   skillKey,
@@ -5,7 +6,6 @@ import {
   parseSkillRequest,
   type SkillUse,
 } from "./skill-contract";
-import { z } from "zod";
 import { memberTools, parseToolRequest, toolRecordText } from "./tool-contract";
 import { LocalTools } from "./tools";
 import type { WorkspaceActions } from "./workspace-actions";
@@ -21,37 +21,9 @@ import {
   type Model,
   type Prompt,
 } from "./ycore";
-const requestSchema = z
-  .object({
-    memberId: z.string().min(1).max(80),
-    objective: z.string().trim().min(1).max(2000),
-    context: z.string().trim().min(1).max(8000),
-    references: z.array(z.number().int().positive()).max(20),
-  })
-  .strict();
-export type DelegationRequest = z.infer<typeof requestSchema>;
-export function parseDelegation(body: string): DelegationRequest | null {
-  let value: unknown;
-  try {
-    value = JSON.parse(body.trim());
-  } catch {
-    if (/^\s*\{\s*"ytriple_delegate"\s*:/.test(body))
-      throw Error("委派格式不完整，已保留输出，不会自动重试");
-    return null;
-  }
-  if (!value || typeof value !== "object" || !("ytriple_delegate" in value))
-    return null;
-  return z.object({ ytriple_delegate: requestSchema }).strict().parse(value)
-    .ytriple_delegate;
-}
-export const delegationKey = (id: string) =>
-  `delegation-${id.replaceAll(":", "-")}`;
-export function isDelegationId(runId: string, id: string) {
-  return (
-    id.startsWith(`${runId}:`) &&
-    /^\d+(?::t\d+:a\d+:d)*:t\d+:a\d+$/.test(id.slice(runId.length + 1))
-  );
-}
+// Compatibility implementation for runs created before execution manifests.
+export { parseDelegation, delegationKey, isDelegationId } from "./agent-controls";
+import { parseDelegation, delegationKey, type DelegationRequest } from "./agent-controls";
 class AwaitingDecision extends Error {}
 export class DelegationRunner {
   constructor(
@@ -170,7 +142,13 @@ export class DelegationRunner {
           messages: [
             {
               role: "system",
-              content: this.instruction(input.member, input.depth, uses),
+              content: [
+                this.instruction(input.member, input.depth, uses),
+                teamResponseInstruction(this.run, {
+                  finalStage: input.depth === 0 && (!!this.run.recipient || input.stage === this.run.workflow.stages.length - 1),
+                  allowsArtifact: !this.run.recipient && !!this.run.workflow.stages[input.stage]?.result,
+                }),
+              ].filter(Boolean).join("\n\n"),
             },
             {
               role: "user",

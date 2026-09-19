@@ -32,6 +32,23 @@ export const teamSchema = z
               .trim()
               .min(1, "请填写成员职责与约束")
               .max(8000, "成员职责不能超过 8000 个字符"),
+            provenance: z
+              .object({
+                templateId: z.string().min(1).max(120),
+                templateRevision: z.string().min(1).max(120),
+                source: z
+                  .object({
+                    repository: z.string().url().max(500),
+                    commit: z.string().regex(/^[a-f0-9]{40}$/),
+                    path: z.string().min(1).max(300),
+                    contentSha256: z.string().regex(/^[a-f0-9]{64}$/),
+                    license: z.literal("MIT"),
+                    adaptation: z.string().min(1).max(80),
+                  })
+                  .strict(),
+              })
+              .strict()
+              .optional(),
           })
           .strict(),
       )
@@ -48,6 +65,9 @@ export const workflowSchema = z
     id: memberId,
     version: z.number().int().positive(),
     name,
+    executionStrategy: z
+      .enum(["fixed-stages", "adaptive-delegation"])
+      .optional(),
     delegation: z
       .object({
         maxTasks: z.number().int().min(1).max(8),
@@ -71,11 +91,26 @@ export const workflowSchema = z
       )
       .min(1)
       .max(16),
+    learning: z
+      .object({
+        candidateId: z.string().min(1).max(120),
+        sourceVersionId: z.string().uuid(),
+        applicability: z.string().min(1).max(4000),
+        unverified: z.array(z.string().min(1).max(500)).max(12),
+        sourceNotes: z.string().min(1).max(4000),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .refine(
     (w) => w.stages.every((s, i) => !s.result || i === w.stages.length - 1),
     "只有最后一步可以形成成果；前面的输出作为公开贡献",
+  )
+  .refine(
+    (w) => !w.executionStrategy ||
+      (w.executionStrategy === "adaptive-delegation" ? !!w.delegation : !w.delegation),
+    "协作策略与委派设置不一致，请重新选择策略",
   );
 export const versionKey = (config: Team | Workflow) =>
   `${config.id}@${config.version}`;

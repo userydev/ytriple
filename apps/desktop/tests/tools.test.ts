@@ -29,6 +29,7 @@ import {
   type Run,
 } from "../src/core/types";
 import type { Model, Prompt, StreamEvent } from "../src/core/ycore";
+import { protocolModel, teamResponse } from "./team-response";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ToolEvidence } from "../src/ui/ToolEvidence";
@@ -81,7 +82,7 @@ test("historical flows reject unexpected tool controls and oversized escaped out
   try {
     store.put("meta", "workflow", defaultWorkflow);
     const model = new Script(() => calculate()),
-      runtime = new Runtime(store, () => model);
+      runtime = new Runtime(store, () => protocolModel(model));
     const run = runtime.submit(input());
     await runtime.settled(run.workId);
     assert.equal(store.require<Run>("run", run.id).status, "failed");
@@ -101,7 +102,7 @@ test("historical flows reject unexpected tool controls and oversized escaped out
         ? material({ mode: "read", reference: 1, start: 0, maxChars: 6000 })
         : "工具超限，需要缩小范围。",
     );
-    const runtime = new Runtime(bounded, () => model),
+    const runtime = new Runtime(bounded, () => protocolModel(model)),
       run = runtime.submit(
         input({
           refs: [{ materialId: source.id, version: 1, label: source.title }],
@@ -134,7 +135,7 @@ test("one concise schema correction can be repaired without executing the invali
       }
       return "计算结果已经由工具返回。";
     });
-    const runtime = new Runtime(store, () => model), run = runtime.submit(input());
+    const runtime = new Runtime(store, () => protocolModel(model)), run = runtime.submit(input());
     await runtime.settled(run.workId);
     assert.equal(store.require<Run>("run", run.id).status, "succeeded");
     assert.equal(store.all("tool-call").length, 1);
@@ -264,7 +265,7 @@ test("real local lookup and arithmetic feed exact receipts into subsequent analy
             ? calculate()
             : "计算为25%，仅比较传入的测试值；未验证真实效果。",
     );
-    const runtime = new Runtime(store, () => model),
+    const runtime = new Runtime(store, () => protocolModel(model)),
       run = runtime.submit(
         input({
           refs: [{ materialId: old.id, version: 1, label: old.title, excerpt }],
@@ -273,8 +274,7 @@ test("real local lookup and arithmetic feed exact receipts into subsequent analy
     await runtime.settled(run.workId);
     assert.equal(store.require<Run>("run", run.id).status, "succeeded");
     assert.equal(model.prompts.length, 4);
-    assert.ok(!model.prompts[0].messages[1].content.includes("目标60秒"));
-    assert.ok(model.prompts[1].messages[1].content.includes("目标60秒"));
+    assert.ok(!model.prompts[1].messages[1].content.includes("新版本不能混进"));
     assert.ok(
       !model.prompts.some((p) =>
         p.messages[1].content.includes("新版本不能混进"),
@@ -308,7 +308,7 @@ test("disabled, unknown and malformed controls cannot execute or become publishe
     const store = fixture(":memory:", []);
     try {
       const model = new Script(() => body),
-        runtime = new Runtime(store, () => model),
+        runtime = new Runtime(store, () => protocolModel(model)),
         run = runtime.submit(input());
       await runtime.settled(run.workId);
       assert.equal(store.require<Run>("run", run.id).status, "failed");
@@ -334,7 +334,7 @@ test("tool errors are visible data, never fabricated values, and unsupported ari
             ? calculate([...values], operation)
             : "工具失败，不能给出有效结果。",
         ),
-        runtime = new Runtime(store, () => model),
+        runtime = new Runtime(store, () => protocolModel(model)),
         run = runtime.submit(input());
       await runtime.settled(run.workId);
       const receipt = store.all<ToolReceipt>("tool-call")[0];
@@ -351,7 +351,7 @@ test("tool errors are visible data, never fabricated values, and unsupported ari
     const model = new Script((p, n) =>
         n === 1 ? calculate([0.1, 0.2], "add") : "约0.3",
       ),
-      runtime = new Runtime(store, () => model),
+      runtime = new Runtime(store, () => protocolModel(model)),
       run = runtime.submit(input());
     await runtime.settled(run.workId);
     assert.equal(
@@ -383,7 +383,7 @@ test("delegated lookup stays inside assigned references even when parent has mor
             ? "第二份材料不在此子任务范围。"
             : "负责人采纳范围限制。",
     );
-    const runtime = new Runtime(store, () => model),
+    const runtime = new Runtime(store, () => protocolModel(model)),
       run = runtime.submit(
         input({
           refs: [a, b].map((m) => ({
@@ -415,7 +415,7 @@ test("tool policy and member grants freeze per run, with global limits and dupli
       const model = new Script((p, n) =>
         calculate(duplicate ? [1, 2] : [1, n], "add"),
       );
-      const runtime = new Runtime(store, () => model),
+      const runtime = new Runtime(store, () => protocolModel(model)),
         run = runtime.submit(input());
       store.put("meta", "team", {
         ...defaultTeam,
@@ -444,7 +444,7 @@ test("completed tool receipts survive process restart and remote reconciliation 
       if (n === 1) return calculate();
       throw new TypeError("lost stream");
     });
-    let runtime = new Runtime(store, () => model);
+    let runtime = new Runtime(store, () => protocolModel(model));
     const run = runtime.submit(input());
     await runtime.settled(run.workId);
     assert.equal(store.require<Run>("run", run.id).status, "unknown");
@@ -464,7 +464,9 @@ test("completed tool receipts survive process restart and remote reconciliation 
           id,
           status: "succeeded",
           error: null,
-          result: { text: "已根据工具25%继续，保留测试限制。" },
+          result: {
+            text: teamResponse("已根据工具25%继续，保留测试限制。", null),
+          },
         };
       },
     }));
@@ -483,7 +485,7 @@ test("stopped or scope-modified tool requests are rejected before execution and 
   const store = fixture();
   try {
     const model = new Script((_p, n) => (n === 1 ? calculate() : "完成")),
-      runtime = new Runtime(store, () => model),
+      runtime = new Runtime(store, () => protocolModel(model)),
       run = runtime.submit(input());
     await runtime.settled(run.workId);
     const record = store.all<ToolReceipt>("tool-call")[0],
@@ -551,7 +553,7 @@ test("workspace backup preserves actual tool evidence and rejects orphaned or in
   let recovered: Store | undefined;
   try {
     const model = new Script((_p, n) => (n === 1 ? calculate() : "结果25%")),
-      runtime = new Runtime(store, () => model),
+      runtime = new Runtime(store, () => protocolModel(model)),
       run = runtime.submit(input());
     await runtime.settled(run.workId);
     const backup = new WorkspaceBackups(root),

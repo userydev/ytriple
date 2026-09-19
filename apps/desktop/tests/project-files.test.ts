@@ -20,6 +20,7 @@ import { LocalDirectories } from "../src/core/local-directories";
 import { Runtime } from "../src/core/runtime";
 import type { Draft } from "../src/core/types";
 import type { Model, Prompt } from "../src/core/ycore";
+import { protocolModel } from "./team-response";
 async function fixture() {
   const home = await realpath(
     await mkdtemp(join(tmpdir(), "ytriple-project-files-")),
@@ -226,7 +227,7 @@ test("team reading uses selected source snapshots and versions, preserves drafts
     assert.ok(draft.text.startsWith("特别关注边界条件。"));
     assert.equal(f.store.snapshot().runs.length, 0);
     const model = new Capture(),
-      runtime = new Runtime(f.store, () => model);
+      runtime = new Runtime(f.store, () => protocolModel(model));
     const first = send(runtime, draft);
     await runtime.settled(first.workId);
     assert.equal(f.store.snapshot().works[0].title, "理解项目 · sample");

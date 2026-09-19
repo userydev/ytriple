@@ -1,6 +1,6 @@
 import { TeamTrace } from "./TeamTrace";
 import { UnknownRunActions } from "./UnknownRunActions";
-import { outcomeSnapshotChanged } from "../core/outcome-contract";
+import { processSnapshotStaleData } from "../core/process-scope-stale";
 import { scheduleProblem } from "../core/schedule-contract";
 import { versionLabel } from "../core/output";
 import { latestBrief, latestStandards } from "../core/project-contract";
@@ -65,14 +65,17 @@ import { Composer, IconButton } from "./Composer";
 import { ConfigurationEditor } from "./ConfigurationEditor";
 import { WorkEditor } from "./WorkEditor";
 import { WorkArea } from "./WorkArea";
-import { DecisionWindow } from "./DecisionWindow";
-import { decisionWindowState } from "../core/radar-workbench";
 import { useWorkViews } from "./useWorkViews";
 import { Dialog } from "./Dialog";
 import { RadarHighlights } from "./RadarHighlights";
 import { WorkspaceActions } from "./WorkspaceActions";
 const MethodActions = lazy(() =>
   import("./MethodActions").then((m) => ({ default: m.MethodActions })),
+);
+const WorkflowCandidateActions = lazy(() =>
+  import("./WorkflowCandidateActions").then((m) => ({
+    default: m.WorkflowCandidateActions,
+  })),
 );
 const SchedulesPage = lazy(() =>
   import("./SchedulesPage").then((m) => ({ default: m.SchedulesPage })),
@@ -1013,21 +1016,40 @@ function App() {
               />
             </Suspense>
           ) : null}
+          {version.kind === "review" || version.kind === "method" ? (
+            <Suspense fallback={null}>
+              <WorkflowCandidateActions
+                key={`wfc-${version.id}`}
+                data={data}
+                version={version}
+                onPrepared={useMethodDraft}
+                onRefresh={async () => {
+                  setData(await command<Snapshot>({ type: "snapshot" }));
+                }}
+              />
+            </Suspense>
+          ) : null}
           <div className="version-context">
-            {data.runs
-              .find((r) => r.id === version.runId)
-              ?.refs.some((ref) =>
-                data.materials.some(
-                  (m) =>
-                    m.id === ref.materialId &&
-                    m.version === ref.version &&
-                    outcomeSnapshotChanged(m, data.outcomes),
-                ),
-              ) ? (
-              <span>
-                反馈记录已变化 · 此报告保留生成时的依据，可重新复盘或检查
-              </span>
-            ) : null}
+            {(() => {
+              const stale = data.runs
+                .find((r) => r.id === version.runId)
+                ?.refs.map((ref) =>
+                  data.materials.find(
+                    (m) =>
+                      m.id === ref.materialId && m.version === ref.version,
+                  ),
+                )
+                .filter(Boolean)
+                .map((m) => processSnapshotStaleData(m!, data))
+                .find((s) => s.status !== "current");
+              return stale ? (
+                <span role="status">
+                  {stale.status === "uncovered"
+                    ? stale.detail
+                    : stale.detail || "相关依据已变化，需复核"}
+                </span>
+              ) : null;
+            })()}
             {version.kind === "readiness" ? (
               <span>AI 检查意见 · 不代表已交接或已验证</span>
             ) : null}
@@ -1225,41 +1247,35 @@ function App() {
       }}
     />
   ) : null;
-  const windowState = decisionWindowState(data, context, selectedVersion);
   const decision = (
-    <DecisionWindow
-      chrome={immersive ? "pane" : "window"}
-      title={work?.title ?? "团队"}
-      objectLabel={undefined}
-      work={windowState.work}
-      messages={windowState.messages}
-      latestRun={windowState.latestRun}
-      currentVersion={windowState.currentVersion}
-      onRecord={(id) => {
-        setProcessFocus([id]);
-        setImmersive(true);
-        viewState.update(context, { focused: "process" });
-      }}
-      events={windowState.events}
-      contributions={data.contributions.filter((item) => item.workId === context)}
-      decision={windowState.decision}
-      workspaceActions={workspaceActionReceipts}
-      input={composer}
-      onExpand={
-        immersive
-          ? undefined
-          : () => {
-              void command<Snapshot>({ type: "snapshot" })
-                .then((snapshot) => {
-                  setData(snapshot);
-                  viewState.flush();
-                  setImmersive(true);
-                })
-                .catch(fail);
-            }
-      }
-      onError={fail}
-    />
+    <section className="decision-pane">
+      <div className="conversation">
+        <small>当前目标</small>
+        <h2>{work?.title ?? "开始一项工作"}</h2>
+        {messages.map((m) => (
+          <article key={m.id} className={`message ${m.role}`}>
+            <small>{m.role === "user" ? "你" : "团队"}</small>
+            <Markdown>{m.body}</Markdown>
+          </article>
+        ))}
+        {runs
+          .filter((r) => r.status === "unknown")
+          .map((r) => (
+            <UnknownRunActions
+              key={r.id}
+              id={r.id}
+              kind="work"
+              local={r.recovery === "local"}
+              onError={fail}
+            />
+          ))}
+        {latestRun?.error ? (
+          <p className="error-inline">{latestRun.error}</p>
+        ) : null}
+        {immersive ? workspaceActionReceipts : null}
+      </div>
+      {composer}
+    </section>
   );
   return (
     <div
@@ -1534,9 +1550,67 @@ function App() {
                       : null
                   }
                   research={
-                    page === "radar" && !immersive && radarResearch?.kind !== "follow"
-                      ? decision
-                      : undefined
+                    page === "radar" &&
+                    !immersive &&
+                    radarResearch &&
+                    radarResearch.contextId === context ? (
+                      <div className="radar-research">
+                        {(radarResearch.kind === "follow"
+                          ? []
+                          : messages
+                        )
+                          .slice(-4)
+                          .map((message) => (
+                          <article
+                            className={`message ${message.role}`}
+                            key={message.id}
+                          >
+                            <small>
+                              {message.role === "user" ? "你" : "团队"}
+                            </small>
+                            <Markdown>{message.body}</Markdown>
+                          </article>
+                        ))}
+                        {runs
+                          .filter((item) => item.status === "unknown")
+                          .map((item) => (
+                            <UnknownRunActions
+                              key={item.id}
+                              id={item.id}
+                              kind="work"
+                              local={item.recovery === "local"}
+                              onError={fail}
+                            />
+                          ))}
+                        {latestRun ? (
+                          <p className="muted" role="status">
+                            {
+                              {
+                                queued: "待发",
+                                running: "团队处理中",
+                                succeeded: "已回复",
+                                failed: "运行失败",
+                                unknown: "状态待核",
+                                cancelled: "已停止",
+                                waiting: "待你决定",
+                              }[latestRun.status]
+                            }
+                          </p>
+                        ) : null}
+                        {latestRun?.error ? (
+                          <p className="error-inline">{latestRun.error}</p>
+                        ) : null}
+                        {data.contributions
+                          .filter((item) => item.runId === latestRun?.id && (item.tool?.status === "failed" || item.toolFormatError))
+                          .map((item) => (
+                            <p key={item.id} className="error-inline" role="alert">
+                              操作未完成：{item.toolFormatError?.message ?? item.tool?.output}
+                            </p>
+                          ))}
+                        {workspaceActionReceipts}
+                        {radarResearch.kind === "follow" ? null : composer}
+                      </div>
+                    ) : undefined
                   }
                 />
               </Suspense>

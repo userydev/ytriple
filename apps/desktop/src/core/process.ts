@@ -19,6 +19,9 @@ import type {
   Work,
 } from "./types";
 import { outputLabels, versionLabel } from "./output";
+import { buildProcessScopeFields } from "./process-scope-stale";
+import { formatParallelFeedbackEvidence, formatPublicProcessBlock } from "./process-feedback";
+import { displayContributionBody } from "./team-response";
 export type ProcessRequest = {
   workId: string;
   mode: Exclude<OutputMode, "result" | "readiness">;
@@ -29,174 +32,193 @@ export type ProcessRequest = {
 };
 export class ProcessRecords {
   constructor(readonly store: Store) {}
-  prepare(input: ProcessRequest) {
-    return this.store.transaction(() => {
-      const work = this.store.require<Work>("work", input.workId);
-      if (input.runId && input.contributionIds)
-        throw Error("请选择一个轮次或一组记录");
-      const targetVersion = input.versionId
-        ? this.store.require<ArtifactVersion>("version", input.versionId)
-        : undefined;
-      if (
-        targetVersion &&
-        ((input.mode !== "review" && input.mode !== "method") ||
-          targetVersion.workId !== work.id ||
-          (input.runId && targetVersion.runId !== input.runId))
-      )
-        throw Error("所选成果不属于当前复盘范围");
-      const allRuns = this.store
-        .all<Run>("run")
-        .filter((r) => r.workId === work.id);
-      if (input.runId && !allRuns.some((r) => r.id === input.runId))
-        throw Error("所选轮次不属于当前工作");
-      const all = this.store
-        .all<Contribution>("contribution")
-        .filter((c) => c.workId === work.id);
-      const ids = input.contributionIds
-        ? [...new Set(input.contributionIds)]
-        : undefined;
-      if (ids?.some((id) => !all.some((c) => c.id === id)))
-        throw Error("所选过程不属于当前工作");
-      const contributions = all.filter((c) =>
-        ids ? ids.includes(c.id) : !input.runId || c.runId === input.runId,
-      );
-      if (!contributions.length) throw Error("当前范围尚无过程记录");
-      if (
-        input.excerpt !== undefined &&
-        (contributions.length !== 1 ||
-          !input.excerpt.trim() ||
-          !contributions[0].body.includes(input.excerpt))
-      )
-        throw Error("选段必须来自一条准确的公开分析");
-      const runIds = [...new Set(contributions.map((c) => c.runId))];
-      const runs = allRuns.filter((r) => runIds.includes(r.id));
-      const versions =
-        input.mode === "review" || input.mode === "method"
-          ? this.store
-              .all<ArtifactVersion>("version")
-              .filter(
-                (v) =>
-                  v.workId === work.id &&
-                  (v.id === targetVersion?.id ||
-                    (v.runId && runIds.includes(v.runId)) ||
-                    runs.some((r) => r.baseVersionId === v.id)),
-              )
-          : [];
-      const outcomes =
-        input.mode === "review" || input.mode === "method"
-          ? this.store
-              .all<OutcomeRecord>("outcome")
-              .filter(
-                (r) =>
-                  r.workId === work.id &&
-                  versions.some((v) => v.id === r.versionId),
-              )
-          : [];
-      const messages =
-        input.mode === "review" || input.mode === "method"
-          ? this.store
-              .all<Message>("message")
-              .filter(
-                (m) =>
-                  m.workId === work.id &&
-                  runIds.includes(m.runId) &&
-                  m.role === "user",
-              )
-          : [];
-      const decisions = this.store
-        .all<Decision>("decision")
-        .filter(
-          (d) =>
-            d.workId === work.id &&
-            (ids ? ids.includes(d.contributionId) : runIds.includes(d.runId)),
-        );
-      const evidence: Reference[] = [];
-      for (const contribution of contributions)
-        for (const reference of contribution.task?.refs ??
-          runs.find((r) => r.id === contribution.runId)?.refs ??
-          []) {
-          if (
-            !evidence.some(
-              (r) =>
-                r.materialId === reference.materialId &&
-                r.version === reference.version &&
-                r.excerpt === reference.excerpt,
+  exportMarkdown(input: ProcessRequest) {
+    const { body, title } = this.buildSnapshot(input);
+    return `# ${title}\n\n${body}`;
+  }
+  buildSnapshot(input: ProcessRequest) {
+    const work = this.store.require<Work>("work", input.workId);
+    if (input.runId && input.contributionIds)
+      throw Error("请选择一个轮次或一组记录");
+    const targetVersion = input.versionId
+      ? this.store.require<ArtifactVersion>("version", input.versionId)
+      : undefined;
+    if (
+      targetVersion &&
+      ((input.mode !== "review" && input.mode !== "method") ||
+        targetVersion.workId !== work.id ||
+        (input.runId && targetVersion.runId !== input.runId))
+    )
+      throw Error("所选成果不属于当前复盘范围");
+    const allRuns = this.store
+      .all<Run>("run")
+      .filter((r) => r.workId === work.id);
+    if (input.runId && !allRuns.some((r) => r.id === input.runId))
+      throw Error("所选轮次不属于当前工作");
+    const all = this.store
+      .all<Contribution>("contribution")
+      .filter((c) => c.workId === work.id);
+    const ids = input.contributionIds
+      ? [...new Set(input.contributionIds)]
+      : undefined;
+    if (ids?.some((id) => !all.some((c) => c.id === id)))
+      throw Error("所选过程不属于当前工作");
+    const contributions = all.filter((c) =>
+      ids ? ids.includes(c.id) : !input.runId || c.runId === input.runId,
+    );
+    if (!contributions.length) throw Error("当前范围尚无过程记录");
+    if (
+      input.excerpt !== undefined &&
+      (contributions.length !== 1 ||
+        !input.excerpt.trim() ||
+        !contributions[0].body.includes(input.excerpt))
+    )
+      throw Error("选段必须来自一条准确的公开分析");
+    const runIds = [...new Set(contributions.map((c) => c.runId))];
+    const runs = allRuns.filter((r) => runIds.includes(r.id));
+    const versions =
+      input.mode === "review" || input.mode === "method"
+        ? this.store
+            .all<ArtifactVersion>("version")
+            .filter(
+              (v) =>
+                v.workId === work.id &&
+                (v.id === targetVersion?.id ||
+                  (v.runId && runIds.includes(v.runId)) ||
+                  runs.some((r) => r.baseVersionId === v.id)),
             )
+        : [];
+    const outcomes =
+      input.mode === "review" || input.mode === "method"
+        ? this.store
+            .all<OutcomeRecord>("outcome")
+            .filter(
+              (r) =>
+                r.workId === work.id &&
+                versions.some((v) => v.id === r.versionId),
+            )
+        : [];
+    const messages =
+      input.mode === "review" || input.mode === "method"
+        ? this.store
+            .all<Message>("message")
+            .filter(
+              (m) =>
+                m.workId === work.id &&
+                runIds.includes(m.runId) &&
+                m.role === "user",
+            )
+        : [];
+    const decisions = this.store
+      .all<Decision>("decision")
+      .filter(
+        (d) =>
+          d.workId === work.id &&
+          (ids ? ids.includes(d.contributionId) : runIds.includes(d.runId)),
+      );
+    const evidence: Reference[] = [];
+    for (const contribution of contributions)
+      for (const reference of contribution.task?.refs ??
+        runs.find((r) => r.id === contribution.runId)?.refs ??
+        []) {
+        if (
+          !evidence.some(
+            (r) =>
+              r.materialId === reference.materialId &&
+              r.version === reference.version &&
+              r.excerpt === reference.excerpt,
           )
-            evidence.push(reference);
-        }
-      const methods = new Map<string, string>();
-      for (const c of contributions)
-        for (const use of c.skills ?? []) {
-          const skill = runs
-            .find((r) => r.id === c.runId)
-            ?.skills?.find((s) => skillKey(s) === use.key);
-          if (skill)
-            methods.set(
-              `${c.runId}:${use.key}`,
-              `## 方法 ${use.key}\n${skill.name}；来源：${skill.source.kind}；仅载入正文，未运行脚本或验证效果。\n${skill.body}`,
-            );
-        }
-      const body = [
-        `# ${outputLabels[input.mode]}的记录范围\n工作：${work.title}\n工作编号：${work.id}\n范围：${ids ? "所选记录" : input.runId ? "指定轮次" : "整个工作现有记录"}\n本材料是点击时的公开记录快照，之后新增内容不包含在内。记录没有内部推理，也不能证明真实使用效果。`,
-        ...runs.map(
-          (r) =>
-            `## 轮次 ${r.id}\n目标：${r.text}\n状态：${r.status}\n时间：${r.createdAt}\n团队：${r.team.name} v${r.team.version}\n流程：${r.workflow.name} v${r.workflow.version}\n${r.error ? `限制：${r.error}` : ""}`,
-        ),
-        ...contributions.map(
-          (c) =>
-            `## 记录 ${c.id}\n轮次：${c.runId}\n成员：${c.memberName}（${c.memberId}）\n任务：${c.objective}\n状态：${c.status}\n${c.task?.parentId ? `受委派于记录：${c.task.parentId}；限定材料：${c.task.refs.map((r) => `${r.materialId} v${r.version}`).join("、") || "仅背景，无附件"}\n` : ""}${c.task?.returnedFrom ? `收到子任务回信：${c.task.returnedFrom}\n` : ""}${c.delegation ? `委派记录：${c.delegation.childKey}；回信记录：${c.delegation.responseId ?? "尚无"}\n` : ""}时间：${c.createdAt}\n${c.skills?.length ? `已载入的方法：${c.skills.map((s) => `${s.key}（${s.purpose}）`).join("、")}\n` : ""}${input.excerpt !== undefined ? "仅引用选段：" : "公开内容："}\n${input.excerpt ?? (c.body || "未记录公开分析")}\n${c.error ? `限制：${c.error}` : ""}`,
-        ),
-        ...decisions.map(
-          (d) =>
-            `## 决定 ${d.id}\n相关记录：${d.contributionId}\n问题：${d.question}\n影响：${d.impact}\n状态：${d.status}\n${d.answer ? `用户已提交回答：${d.answer}` : "尚无已提交回答"}`,
-        ),
-        ...versions.map(
-          (v) =>
-            `## 成果 ${v.id}\n${versionLabel(v)}\n轮次：${v.runId ?? "历史手动修订"}\n父版本：${v.parentId ?? "无"}\n${v.body}`,
-        ),
-        ...messages.map(
-          (m) => `## 用户输入 ${m.id}\n轮次：${m.runId}\n${m.body}`,
-        ),
-        ...evidence.map((r, i) => {
-          const m = this.store.material(r);
-          return `## 来源 ${i + 1}\n材料：${r.materialId} v${r.version}\n标题：${r.label}\n覆盖：${m.coverage}\n${m.readError ? `未读取：${m.readError}` : (r.excerpt ?? m.body)}`;
-        }),
-        ...methods.values(),
+        )
+          evidence.push(reference);
+      }
+    const methods = new Map<string, string>();
+    for (const c of contributions)
+      for (const use of c.skills ?? []) {
+        const skill = runs
+          .find((r) => r.id === c.runId)
+          ?.skills?.find((s) => skillKey(s) === use.key);
+        if (skill)
+          methods.set(
+            `${c.runId}:${use.key}`,
+            `## 方法 ${use.key}\n${skill.name}；来源：${skill.source.kind}；仅载入正文，未运行脚本或验证效果。\n${skill.body}`,
+          );
+      }
+    const body = [
+      `# ${outputLabels[input.mode]}的记录范围\n工作：${work.title}\n工作编号：${work.id}\n范围：${ids ? "所选记录" : input.runId ? "指定轮次" : "整个工作现有记录"}\n本材料是点击时的公开记录快照，之后新增内容不包含在内。记录没有内部推理，也不能证明真实使用效果。`,
+      ...runs.map(
+        (r) =>
+          `## 轮次 ${r.id}\n目标：${r.text}\n状态：${r.status}\n时间：${r.createdAt}\n团队：${r.team.name} v${r.team.version}\n流程：${r.workflow.name} v${r.workflow.version}\n${r.error ? `限制：${r.error}` : ""}`,
+      ),
+      ...contributions.map(
+        (c) =>
+          `## 记录 ${c.id}\n轮次：${c.runId}\n成员：${c.memberName}（${c.memberId}）\n任务：${c.objective}\n状态：${c.status}\n${c.task?.parentId ? `受委派于记录：${c.task.parentId}；限定材料：${c.task.refs.map((r) => `${r.materialId} v${r.version}`).join("、") || "仅背景，无附件"}\n` : ""}${c.task?.returnedFrom ? `收到子任务回信：${c.task.returnedFrom}\n` : ""}${c.delegation ? `委派记录：${c.delegation.childKey}；回信记录：${c.delegation.responseId ?? "尚无"}\n` : ""}时间：${c.createdAt}\n${c.skills?.length ? `已载入的方法：${c.skills.map((s) => `${s.key}（${s.purpose}）`).join("、")}\n` : ""}${input.excerpt !== undefined ? "仅引用选段：" : "公开内容："}\n${input.excerpt ?? (displayContributionBody(c.body, runs.find(r => r.id === c.runId)!) || "未记录公开分析")}\n${formatPublicProcessBlock(c)}\n${c.tool ? `宿主工具回执：${c.tool.status}；${JSON.stringify(c.tool)}` : ""}\n${c.error ? `限制：${c.error}` : ""}`,
+      ),
+      ...decisions.map(
+        (d) =>
+          `## 决定 ${d.id}\n相关记录：${d.contributionId}\n问题：${d.question}\n影响：${d.impact}\n状态：${d.status}\n${d.answer ? `用户已提交回答：${d.answer}` : "尚无已提交回答"}`,
+      ),
+      ...versions.map(
+        (v) =>
+          `## 成果 ${v.id}\n${versionLabel(v)}\n轮次：${v.runId ?? "历史手动修订"}\n父版本：${v.parentId ?? "无"}\n${v.body}`,
+      ),
+      ...messages.map(
+        (m) => `## 用户输入 ${m.id}\n轮次：${m.runId}\n${m.body}`,
+      ),
+      ...evidence.map((r, i) => {
+        const m = this.store.material(r);
+        return `## 来源 ${i + 1}\n材料：${r.materialId} v${r.version}\n标题：${r.label}\n覆盖：${m.coverage}\n${m.readError ? `未读取：${m.readError}` : (r.excerpt ?? m.body)}`;
+      }),
+      ...methods.values(),
         formatOutcomes(outcomes),
+        input.mode === "review" || input.mode === "method"
+          ? formatParallelFeedbackEvidence(this.store, work.id, versions, outcomes, contributions.map(c => c.id))
+          : "",
         input.mode === "review" || input.mode === "method"
           ? "## 复盘边界\n用户输入保留原话，不自动归类为已验证反馈。实际使用效果需要记录中的直接证据；没有时明确未验证。已停止、失败、等待或尚在运行的记录只可作阶段分析。"
           : "",
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-      if (Buffer.byteLength(body) > 24000)
-        throw Error(
-          "所选过程超过本轮输入范围，请选择较少记录或一个轮次；原草稿保持不变",
-        );
-      const digest = createHash("sha256").update(body).digest("hex"),
-        materialId = `process:v2:${digest}`;
-      const material: Material = {
-        id: materialId,
-        version: 1,
-        title: `${outputLabels[input.mode]} · ${ids ? `${ids.length} 条记录` : input.runId ? "单轮" : "全工作"}`,
-        body,
-        coverage: "process_snapshot",
-        createdAt: new Date().toISOString(),
-        processSource: {
-          workId: work.id,
-          runIds,
-          contributionIds: contributions.map((c) => c.id),
-          versionIds: versions.map((v) => v.id),
-          outcomeIds: outcomes.map((r) => r.id),
-          outcomeState:
-            input.mode === "review" || input.mode === "method"
-              ? outcomeState(outcomes)
-              : undefined,
-          capturedAt: new Date().toISOString(),
-          mode: input.mode,
-        },
-      };
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    if (Buffer.byteLength(body) > 24000)
+      throw Error(
+        "所选过程超过本轮输入范围，请选择较少记录或一个轮次；原草稿保持不变",
+      );
+    const digest = createHash("sha256").update(body).digest("hex");
+    const materialId = `process:v2:${digest}`;
+    const title = `${outputLabels[input.mode]} · ${ids ? `${ids.length} 条记录` : input.runId ? "单轮" : "全工作"}`;
+    const processSource = buildProcessScopeFields(this.store, {
+      workId: work.id,
+      scopeKind: ids ? "selection" : input.runId ? "run" : "work",
+      sources: [
+        ...runs.map(r => ({ id: `msg:${r.id}`, entityId: r.id, kind: "message" as const, coverage: "full" as const, label: r.text.slice(0, 400) })),
+        ...decisions.map(d => ({ id: `dec:${d.id}`, entityId: d.id, kind: "decision" as const, coverage: "full" as const, label: `${d.question}\n${d.answer}`.slice(0, 400) })),
+        ...outcomes.map(o => ({ id: `out:${o.id}`, entityId: o.id, kind: "outcome" as const, coverage: "full" as const, label: `${o.withdrawn ? "已撤回 · " : ""}${o.body}`.slice(0, 400) })),
+      ],
+      runIds,
+      contributionIds: contributions.map((c) => c.id),
+      versionIds: versions.map((v) => v.id),
+      outcomeIds: outcomes.map((r) => r.id),
+      outcomeState:
+        input.mode === "review" || input.mode === "method"
+          ? outcomeState(outcomes)
+          : undefined,
+      capturedAt: new Date().toISOString(),
+      mode: input.mode,
+    });
+    const material: Material = {
+      id: materialId,
+      version: 1,
+      title,
+      body,
+      coverage: "process_snapshot",
+      createdAt: new Date().toISOString(),
+      processSource,
+    };
+    return { work, body, title, materialId, material };
+  }
+  prepare(input: ProcessRequest) {
+    return this.store.transaction(() => {
+      const { work, material, materialId } = this.buildSnapshot(input);
       const draft = this.store.get<Draft>("draft", work.id),
         refs = [...(draft?.refs ?? [])].filter(
           (r) => r.materialId !== draft?.preparedProcess?.materialId,

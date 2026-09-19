@@ -11,6 +11,7 @@ const dockIcon = new Resvg(await readFile("../../assets/app-icon.svg"), {
   .asPng();
 await build({
   define: {
+    __YTRIPLE_MEMBER_TEMPLATE_LICENSE__: JSON.stringify(await readFile("src/assets/licenses/agency-agents-MIT.license", "utf8")),
     __YTRIPLE_DOCK_ICON__: JSON.stringify(
       `data:image/png;base64,${dockIcon.toString("base64")}`,
     ),

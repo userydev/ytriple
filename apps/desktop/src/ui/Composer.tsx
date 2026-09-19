@@ -583,6 +583,7 @@ export function Composer({
       />
       <div className="composer-tools">
         <div className="tool-group">
+          {compactRadar ? null : (
           <IconButton
             label="添加材料"
             className="attach-trigger"
@@ -591,6 +592,7 @@ export function Composer({
           >
             <Plus size={19} />
           </IconButton>
+          )}
           {compactRadar ? null : (
             <>
           <IconButton
@@ -614,7 +616,17 @@ export function Composer({
           )}
         </div>
         <div className="tool-group">
-          {compactRadar ? null : (
+          {compactRadar ? (
+            <button
+              type="button"
+              className="quiet"
+              onClick={() => {
+                void save().then(onExpand).catch(onError);
+              }}
+            >
+              在工作中打开
+            </button>
+          ) : (
           <IconButton
             label={immersive ? "收起工作区" : "展开团队工作区"}
             className="workspace-trigger"

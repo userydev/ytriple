@@ -12,6 +12,7 @@ import {
   outcomeSnapshotChanged,
   type OutcomeRecord,
 } from "../core/outcome-contract";
+import { processSnapshotStaleData } from "../core/process-scope-stale";
 import { versionLabel } from "../core/output";
 import { Dialog } from "./Dialog";
 import { IconButton } from "./Composer";
@@ -310,15 +311,20 @@ export function OutcomeDialog({
               {versionLabel(v)} · {new Date(v.createdAt).toLocaleString()}
               {data.runs
                 .find((r) => r.id === v.runId)
-                ?.refs.some((ref) =>
-                  data.materials.some(
-                    (m) =>
-                      m.id === ref.materialId &&
-                      m.version === ref.version &&
-                      outcomeSnapshotChanged(m, data.outcomes),
-                  ),
-                )
-                ? " · 反馈已变化"
+                ?.refs.some((ref) => {
+                  const m = data.materials.find(
+                    (row) =>
+                      row.id === ref.materialId &&
+                      row.version === ref.version,
+                  );
+                  if (!m) return false;
+                  if (m.processSource)
+                    return (
+                      processSnapshotStaleData(m, data).status !== "current"
+                    );
+                  return outcomeSnapshotChanged(m, data.outcomes);
+                })
+                ? " · 依据或反馈已变化"
                 : ""}
             </button>
           ))}

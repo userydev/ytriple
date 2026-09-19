@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { Store } from "../src/core/store";
+import { legacyFinish } from "./team-response";
 import { LocalDirectories } from "../src/core/local-directories";
 import { ProjectSuggestions } from "../src/core/project-suggestions";
 import type { ArtifactVersion } from "../src/core/types";
@@ -48,7 +49,7 @@ async function fixture() {
       refs: [{ materialId: material.id, version: 1, label: material.title }],
     });
     store.setRun(run.id, { status: "running" });
-    store.finish(run.id, body, true);
+    legacyFinish(store, run.id, body, true);
     return store.all<ArtifactVersion>("version").at(-1)!;
   }
   const version = result();

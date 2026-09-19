@@ -1,4 +1,5 @@
 import { outcomeSnapshotChanged } from "../core/outcome-contract";
+import { processSnapshotStaleData } from "../core/process-scope-stale";
 import { useState } from "react";
 import { Play, Check } from "lucide-react";
 import type { ArtifactVersion, Draft, Snapshot } from "../core/types";
@@ -53,14 +54,16 @@ export function MethodActions({
   }
   const originChanged = data.runs
     .find((r) => r.id === version.runId)
-    ?.refs.some((ref) =>
-      data.materials.some(
-        (m) =>
-          m.id === ref.materialId &&
-          m.version === ref.version &&
-          outcomeSnapshotChanged(m, data.outcomes),
-      ),
-    );
+    ?.refs.some((ref) => {
+      const m = data.materials.find(
+        (row) =>
+          row.id === ref.materialId && row.version === ref.version,
+      );
+      if (!m) return false;
+      if (m.processSource)
+        return processSnapshotStaleData(m, data).status !== "current";
+      return outcomeSnapshotChanged(m, data.outcomes);
+    });
   return (
     <section className="method-actions">
       {originChanged ? (

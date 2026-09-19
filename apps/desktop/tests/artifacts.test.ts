@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../src/core/store";
+import { legacyFinish, teamResponse } from "./team-response";
 import { Artifacts } from "../src/core/artifacts";
 import { commandSchema } from "../src/core/commands";
 import type {
@@ -37,7 +38,7 @@ function prepared(store = new Store(":memory:")) {
     deliveryId: delivery.id,
   });
   store.setRun(run.id, { status: "running" });
-  const version = store.finish(
+  const version = legacyFinish(store,
     run.id,
     "第一段：保留事实。\n\n第二段：保留限制。",
     true,
@@ -153,7 +154,7 @@ test("concurrent result is preserved and can be referenced for AI revision witho
     body: "另一处产生的新成果",
   };
   store.put("version", head.id, head);
-  store.finish(next.id, "迟到的生成内容", true);
+  legacyFinish(store,next.id, "迟到的生成内容", true);
   assert.equal(store.require<Work>("work", run.workId).queuePaused, true);
   assert.equal(store.snapshot().versions.length, 2);
   assert.throws(() => store.setWorkState(run.workId, "complete"), /待整理/);
@@ -230,7 +231,13 @@ test("explicitly sending an AI revision continues the original work and creates 
       yield {
         type: "text.delta",
         run_id: key,
-        text: "第一段：保留事实。\n\n第二段：重新整理后仍保留限制。",
+        text: teamResponse(
+          "第一段：保留事实。\n\n第二段：重新整理后仍保留限制。",
+          {
+            body: "第一段：保留事实。\n\n第二段：重新整理后仍保留限制。",
+            baseVersionId: version.id,
+          },
+        ),
       };
       yield { type: "run.completed", run_id: key };
     },

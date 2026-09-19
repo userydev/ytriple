@@ -3,19 +3,19 @@ import { toolCatalog } from "../core/tool-contract";
 import { ToolEvidence } from "./ToolEvidence";
 import { useEffect, useState, type ReactNode } from "react";
 import Markdown from "./Markdown";
-import {
-  MessageCircle,
-  ListChecks,
-  NotebookPen,
-  BookOpen,
-  X,
-} from "lucide-react";
+import { MessageCircle, ListChecks, NotebookPen, BookOpen, X } from "lucide-react";
+import { command } from "./api";
 import type { Snapshot, Contribution } from "../core/types";
 import type { ProcessRequest } from "../core/process";
 import { IconButton } from "./Composer";
 import { ProjectRequirements } from "./ProjectRequirements";
 import { References } from "./References";
 import { outputLabels } from "../core/output";
+import { formatContextScope } from "../core/context-scope";
+import { displayContributionBody } from "../core/team-response";
+import { formatPublicProcessBlock } from "../core/process-feedback";
+import { formatManifestForDiagnostics } from "../core/input-manifest";
+import { FeedbackEvidence } from "./FeedbackEvidence";
 import { TeamTrace } from "./TeamTrace";
 const statusLabel = {
   running: "处理中",
@@ -188,13 +188,46 @@ export function ProcessPane({
               <p>{c.tool.request.purpose}</p>
               <ToolEvidence receipt={c.tool} contribution={c} data={data} />
             </>
-          ) : (
-            <Markdown>
-              {c.status === "running" && /^\s*\{/.test(c.body)
-                ? "正在组织协作请求…"
-                : c.body || "尚无公开分析记录"}
-            </Markdown>
-          )}
+          ) : null}
+          {!c.tool || c.tool.status === "failed" ? (
+            <>
+              <Markdown>
+                {c.status === "running" && /^\s*\{/.test(c.body)
+                  ? "正在组织协作请求…"
+                  : (() => {
+                      const run = data.runs.find((r) => r.id === c.runId);
+                      return run
+                        ? displayContributionBody(c.body, run)
+                        : c.body;
+                    })() || "尚无公开分析记录"}
+              </Markdown>
+              {c.publicProcess || c.publicProcessWarnings?.length ? (
+                <div className="public-process-meta">
+                  <Markdown>{formatPublicProcessBlock(c, id => data.inputManifests?.find(m => m.id === c.inputManifestId)?.entries.find(e => e.id === id)?.label.slice(0, 100) ?? "来源详见输入清单")}</Markdown>
+                </div>
+              ) : null}
+              {c.tool?.status === "failed" && c.status === "succeeded" ? (
+                <p className="error-inline" role="status">
+                  宿主记录：工具执行失败；上方 AI 公开说明不能视为实际成功。
+                </p>
+              ) : null}
+              {c.inputManifestId ? (
+                <details className="input-manifest">
+                  <summary>本轮实际输入清单（宿主）</summary>
+                  <pre>
+                    {(() => {
+                      const m = data.inputManifests?.find(
+                        (row) => row.id === c.inputManifestId,
+                      );
+                      return m
+                        ? formatManifestForDiagnostics(m)
+                        : "清单不可用或尚未持久化";
+                    })()}
+                  </pre>
+                </details>
+              ) : null}
+            </>
+          ) : null}
         </div>
         {c.skills?.length ? (
           <details className="method-provenance">
@@ -238,6 +271,7 @@ export function ProcessPane({
         <small>
           {c.id} · {new Date(c.createdAt).toLocaleString()}
         </small>
+        {/^\s*\{/.test(c.body) ? <details><summary>原始协议诊断</summary><pre>{c.body}</pre></details> : null}
       </details>
     </article>
   );
@@ -245,29 +279,68 @@ export function ProcessPane({
     <section className="process-pane" onMouseUp={capture} onKeyUp={capture}>
       <div className="section-heading">
         <h2>协作过程</h2>
-        <div className="toolbar">
-          <IconButton
-            label="总结所选过程"
-            disabled={busy || !shown.length}
-            onClick={() => void prepare("summary")}
-          >
-            <ListChecks size={17} />
-          </IconButton>
-          <IconButton
-            label="沉淀所选过程为方法草案"
-            disabled={busy || !shown.length}
-            onClick={() => void prepare("method")}
-          >
-            <BookOpen size={17} />
-          </IconButton>
-          <IconButton
-            label="复盘所选工作记录"
-            disabled={busy || !shown.length}
-            onClick={() => void prepare("review")}
-          >
-            <NotebookPen size={17} />
-          </IconButton>
-        </div>
+      </div>
+      <p className="muted process-actions-copy">
+        以下操作只准备草稿与冻结快照，不会立即调用模型。范围：当前筛选的
+        {selected.length ? ` ${selected.length} 条所选记录` : scope === "all" ? "整个工作" : "单轮记录"}
+        。执行记录与 AI 公开说明分别呈现。
+      </p>
+      <div className="process-action-buttons">
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy || !shown.length}
+          onClick={() => void prepare("summary")}
+        >
+          整理成文档
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy || !shown.length}
+          onClick={() => void prepare("review")}
+        >
+          手动复盘
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy || !shown.length}
+          onClick={() => void prepare("method")}
+        >
+          整理为方法草案
+        </button>
+        <button
+          type="button"
+          className="secondary"
+          disabled={busy || !shown.length}
+          onClick={() =>
+            void (async () => {
+              if (busy) return;
+              setBusy(true);
+              try {
+                await command({
+                  type: "export-process",
+                  workId,
+                  ...(selected.length
+                    ? { contributionIds: selected, mode: "summary" as const }
+                    : scope !== "all"
+                      ? { runId: scope, mode: "summary" as const }
+                      : { mode: "summary" as const }),
+                });
+              } catch (e) {
+                onError(e);
+              } finally {
+                setBusy(false);
+              }
+            })()
+          }
+        >
+          导出原始记录 · Markdown
+        </button>
+      </div>
+      <div className="toolbar process-icon-actions">
+        <button type="button" disabled={busy || !shown.length} onClick={() => void prepare("explanation")}>追问所选过程</button>
       </div>
       {runs.length ? (
         <div className="process-scope">
@@ -309,6 +382,7 @@ export function ProcessPane({
           ) : null}
         </div>
       ) : null}
+      <FeedbackEvidence data={data} workId={workId} records={selected.length ? shown.filter(c => selected.includes(c.id)) : shown} />
       {runs
         .filter((r) => scope === "all" || r.id === scope)
         .map((r) => (
@@ -320,7 +394,7 @@ export function ProcessPane({
                   {outputLabels[r.outputMode ?? "result"]} ·{" "}
                   {statusLabel[r.status]}
                 </small>
-                <h3>{r.text}</h3>
+                <h3>{r.text.length > 180 ? `${r.text.slice(0, 180)}…` : r.text}</h3>
               </div>
             </div>
             <TeamTrace
@@ -345,9 +419,29 @@ export function ProcessPane({
               </p>
               {r.modelIdentity ? (
                 <p className="muted">
-                  {r.modelIdentity.label} · {r.modelIdentity.endpoint}
+                  实际模型 · {r.modelIdentity.label} · {r.modelIdentity.endpoint}
                 </p>
-              ) : null}
+              ) : (
+                <p className="muted">实际模型 · 本轮未记录连接标识</p>
+              )}
+              {r.contextScope ? (
+                <p className="muted">
+                  上下文范围 · {formatContextScope(r.contextScope)}
+                </p>
+              ) : (
+                <p className="muted">上下文范围 · 本轮开始前未记录快照</p>
+              )}
+              {r.execution ? (
+                <p className="muted">
+                  执行清单 ·{" "}
+                  {r.execution.strategyId === "adaptive-delegation"
+                    ? "负责人按需委派"
+                    : "固定步骤"}{" "}
+                  · 内核 {r.execution.kernelId} v{r.execution.kernelVersion}
+                </p>
+              ) : (
+                <p className="muted">执行清单 · 历史记录未记录内核版本</p>
+              )}
               {r.projectContext ? (
                 <ProjectRequirements
                   context={r.projectContext}

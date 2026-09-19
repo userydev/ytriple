@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../src/core/store";
+import { legacyFinish } from "./team-response";
 import { Projects } from "../src/core/projects";
 import { latestBrief, latestStandards } from "../src/core/project-contract";
 import { Runtime } from "../src/core/runtime";
@@ -167,7 +168,7 @@ test("adopting a result as a standard preserves exact provenance and does not ed
   const d = s.createDelivery(a.id, "交付");
   const run = s.submit({ ...request(a.id), deliveryId: d.id });
   s.setRun(run.id, { status: "running" });
-  const version = s.finish(run.id, "先给出结果。\n然后解释方法。", true)!;
+  const version = legacyFinish(s, run.id, "先给出结果。\n然后解释方法。", true)!;
   const saved = projects.saveStandard({
     ...standard(a.id),
     source: { versionId: version.id, excerpt: "先给出结果。" },
@@ -266,7 +267,7 @@ test("moving completed work adopts the new project's requirements for later subm
   projects.saveStandard(standard(a.id));
   const old = s.submit(request(a.id));
   s.setRun(old.id, { status: "running" });
-  s.finish(old.id, "原成果", true);
+  legacyFinish(s, old.id, "原成果", true);
   s.updateWork(old.workId, "迁移后的工作", b.id, null);
   const next = s.submit(request(b.id, old.workId));
   assert.equal(next.projectContext?.projectId, b.id);

@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { Store } from "../src/core/store";
+import { legacyFinish } from "./team-response";
 import { LocalDirectories } from "../src/core/local-directories";
 import { LocalSystem, type LocalSystemPlan } from "../src/core/local-system";
 import { ProjectInitialization } from "../src/core/project-initialization";
@@ -79,7 +80,7 @@ test("empty management system can be previewed and created without moving existi
       recipient: null,
     });
     f.store.setRun(run.id, { status: "running" });
-    f.store.finish(
+    legacyFinish(f.store,
       run.id,
       "# 笔记工具\n目标：保存并检索笔记。验收：重启可恢复。",
       true,

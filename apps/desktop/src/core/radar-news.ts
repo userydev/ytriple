@@ -609,7 +609,6 @@ export function resolveRadarView(
     workId,
     researchRef: workId ? researchRef : null,
     followDraft: view.followDraft,
-    surface: view.surface === "sources" ? "sources" : "editions",
   };
 }
 

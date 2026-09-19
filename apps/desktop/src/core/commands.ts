@@ -34,6 +34,8 @@ export const commandSchema = z.discriminatedUnion("type", [
     })
     .strict(),
   z.object({ type: z.literal("account-sign-out") }).strict(),
+  z.object({ type: z.literal("account-refresh") }).strict(),
+  z.object({ type: z.literal("read-member-template-license") }).strict(),
   z.object({
     type: z.literal("model-save"),
     profile: directProfile,
@@ -274,6 +276,24 @@ export const commandSchema = z.discriminatedUnion("type", [
     runId: id.optional(),
     contributionIds: z.array(id).min(1).max(30).optional(),
     excerpt: z.string().min(1).max(12000).optional(),
+  }),
+  z.object({
+    type: z.literal("export-process"),
+    workId: id,
+    versionId: id.optional(),
+    mode: z.enum(["explanation", "summary", "review", "method"]),
+    runId: id.optional(),
+    contributionIds: z.array(id).min(1).max(30).optional(),
+    excerpt: z.string().min(1).max(12000).optional(),
+  }),
+  z.object({
+    type: z.literal("prepare-workflow-candidate"),
+    sourceVersionId: id,
+  }),
+  z.object({
+    type: z.literal("save-workflow-candidate"),
+    candidateId: id,
+    teamKey: id.optional(),
   }),
   z.object({ type: z.literal("dismiss-candidate"), candidateId: id }),
   z.object({

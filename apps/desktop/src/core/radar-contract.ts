@@ -202,7 +202,6 @@ export const radarViewSchema = z
     workId: z.string().max(300).nullable(),
     researchRef: radarContentRefSchema.nullable(),
     followDraft: z.string().max(2000),
-    surface: z.enum(["editions", "sources"]).optional(),
   })
   .strict();
 export type RadarView = z.infer<typeof radarViewSchema>;
@@ -218,7 +217,6 @@ export const defaultRadarView: RadarView = {
   workId: null,
   researchRef: null,
   followDraft: "",
-  surface: "editions",
 };
 export type RadarSnapshot = {
   watches: RadarWatch[];

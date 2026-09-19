@@ -9,6 +9,7 @@
 **Cursor（2026-09-18）**：`/Users/Admin/.local/bin/cursor-agent` 版本 `2026.08.11-e8db854`，`status` 已登录；`--list-models` 返回 `composer-2.5`、`claude-sonnet-5-thinking-high`、`claude-opus-5-thinking-high` 等。裸命令 `agent` 指向 Grok，必须用明确入口。尚未做本项目模型试单，余额未核实。
 
 - [参数](https://cursor.com/docs/cli/reference/parameters)：`-p --output-format json --workspace <隔离树> --model <实际ID>`；`--mode plan`/`ask` 只读，省略 mode 为实现。按 chat ID `--resume`；切模型显式传 `--model` 并核对回执。参数存在不等于本项目接续已实测；规划要写正文时另用实现模式。
+- Claude 规划、Composer 实现按需采用；短任务直接实现，已有 Pro 方案不重复论证。每包一名主写者，不自动多模型并发/互审；模型不可用报告缺项，不默换。以当前模型列表为准，不固化永久名单。
 - [权限](https://cursor.com/docs/cli/reference/permissions)使用项目 `.cursor/cli.json` allow/deny；核对 AGENTS、`.cursor/rules`、Hooks/MCP、沙箱。`-p` 不等于只读，`--force` 扩大自动执行，不默认使用；不自动 trust、批准所有 MCP 或转云端。写入能力按本机权限验证。
 - [用量](https://cursor.com/help/models-and-usage/usage-limits)区分 Cursor Models/第三方模型池，按账户 Spending 核实。Composer/Claude 不假定同价；Cursor 内 Grok 不等于本地 Grok Build 的 SuperGrok 额度。不启用超额付费或自带 API Key。
 
@@ -24,13 +25,6 @@
 [官方 headless](https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/14-headless-mode.md)：一次调用含多轮执行；JSON 可能含 `thought`，须筛字段。用量区分输入/缓存/输出，可能不含压缩；OAuth 成本缺失不代表免费。本机 `grok usage SESSION_ID TURN` 可读单轮记录，回执字段按版本核实。Grok 内部 token 不自动进入 Codex，回传内容才进入其上下文。
 
 派工前核对规则、技能、Hooks、MCP。交接开销风险成立，具体包是否更贵尚未实测；观察真实任务往返、回传量和用量，不额外试单。
-
-### 临时资源与收尾
-
-- 核对既有资源。进程/端口/容器/测试窗口/标签记入 `.local/<任务>/resources.json`：用途、创建者、PID/启动时间/目录或资源 ID、停止方式；无凭据。
-- 用 `finally`/`trap` 覆盖成功/失败/取消；恢复时核对遗留。先正常停止，再查进程树/容器退出、端口释放、窗口/标签关闭。强杀先验归属，不按名称批量杀；关终端不等于子进程退出。
-- 只清本任务独占资源，不退出整个宿主软件/浏览器、不动共享库或其他任务/用户窗口；保留代码、数据、证据。
-- 交付预览在 PLAN/答复注明入口、保留原因、负责人和停止点，替换/验收后关闭。回执列释放/保留/失败项，由 Codex 核验。
 
 ### 环境与检查
 

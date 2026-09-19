@@ -81,6 +81,8 @@ export type Prompt = {
   messages: { role: "system" | "user" | "assistant"; content: string }[];
   refs: { id: string; revision: number }[];
   taskId: string;
+  /** Optional provider JSON Schema; legacy managed deployments omit it. */
+  outputSchema?: Record<string, unknown>;
 };
 export type StreamEvent = {
   type: "run.started" | "text.delta" | "run.completed" | "run.failed";
@@ -90,6 +92,23 @@ export type StreamEvent = {
 };
 export function isUncertainExecution(code: string | undefined) {
   return code === "EXECUTION_LOST" || code === "PROVIDER_ERROR";
+}
+
+/** Keep compatibility with deployed M0: stream schemas require the new gateway backend. */
+export const YCORE_STREAM_SUPPORTS_OUTPUT_SCHEMA = false;
+
+export function buildManagedStreamRequestBody(prompt: Prompt) {
+  return {
+    mode: "stream" as const,
+    model_profile: "default" as const,
+    task_id: prompt.taskId,
+    messages: prompt.messages,
+    document_refs: prompt.refs,
+    max_output_tokens: 4096,
+    ...(YCORE_STREAM_SUPPORTS_OUTPUT_SCHEMA && prompt.outputSchema
+      ? { output_schema: prompt.outputSchema }
+      : {}),
+  };
 }
 export interface Model {
   readonly identity?: import("./model-contract").ModelIdentity;
@@ -407,14 +426,7 @@ export class YCore implements Model {
     const response = await this.request("/v1/ai/runs", {
       method: "POST",
       headers: { "Idempotency-Key": key },
-      body: JSON.stringify({
-        mode: "stream",
-        model_profile: "default",
-        task_id: prompt.taskId,
-        messages: prompt.messages,
-        document_refs: prompt.refs,
-        max_output_tokens: 4096,
-      }),
+      body: JSON.stringify(buildManagedStreamRequestBody(prompt)),
       signal: AbortSignal.any([signal, AbortSignal.timeout(180000)]),
     });
     if (

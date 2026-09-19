@@ -551,11 +551,7 @@ export class Radar {
       );
     if (active) return active;
     const selected = organized
-      ? this.constrainOrganized(
-          topic,
-          this.selection(topic),
-          organized.processorVersion,
-        )
+      ? this.constrainOrganized(topic, this.selection(topic), organized.processorVersion)
       : this.selection(topic);
     const sources = this.materialize(selected.sources);
     if (!this.readable(sources))

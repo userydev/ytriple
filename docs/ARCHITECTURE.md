@@ -65,15 +65,15 @@ renderer 不取得服务密钥、原始文件系统或任意命令执行能力�
 | 布局 | 决策/过程/结果的区域、顺序、比例、页签、聚焦与设备偏好 | 只呈现和导航，不创建成员或推进流程；默认左决策、右过程/结果切换，也可三面自由排列 |
 | 团队搭配 | 成员身份、责任、角色绑定、可用 Skill/工具和模型能力需求 | 不固定窗口数量或执行顺序；通过角色绑定供流程使用，不硬编码某位成员姓名 |
 | 协作流程 | 分工、调查、核查、汇合、用户介入与结束条件 | 不绑定具体 UI、供应商或固定人数；在既有运行边界内独立发布版本 |
-| 执行内核 | 加载搭配与流程、验证兼容性、执行任务、记录事件、取消与恢复 | 不依赖 React/Electron，调用模型和工具适配器；不把产品流程下沉为 ycore 模型接口 |
+| 执行内核 | 版本化 agent 内核：策略、有界循环与提示/工具反馈政策；经窄宿主端口调用模型与工具 | 新运行冻结 execution 与检查点；无清单旧记录走 legacy |
 
-这些是代码与配置边界，仍留在一个 ytriple 仓库，不要求拆成多服务或开发可视化流程设计器。先以少量受版本管理的流程实现/声明和团队配置支持真实工作；需要新控制逻辑时允许升级流程模块，不强行用一个万能配置语言表达全部任务。
+八个 agency-agents 模板固定 commit、源文哈希和 MIT 许可，复制成可编辑成员，默认无工具/技能。职责与出处随团队、运行、备份冻结。
 
-每次运行保存团队配置版本及解析后的成员/能力快照、流程版本和所需执行协议版本。角色缺失、能力不可用或流程不兼容时明确阻塞，不自动套用看似相近的流程。事件引用稳定的任务、成员和成果身份，不带左/右栏或组件名称作为业务身份。
+布局、搭配、流程与内核同仓独立演进，不建通用流程设计器。每轮冻结成员/能力、流程和执行协议快照；缺失或不兼容即阻塞。升级只影响新提交，变更旧工作须在可恢复边界显式接续，不能静默解释旧记录。无清单旧运行保留 legacy，待其全部结束后才可移除执行器，历史始终可读。切布局不增加调用、不改变任务或成果身份，重开恢复布局与快照。
 
-新运行使用所选的新版本；正在执行的运行沿用已锁定版本。用户明确调整当前工作时，在可恢复的边界结束或暂停旧轮，记录变更并从已有有效成果接续。升级后无法执行旧版本时，历史仍可读取，接续需显式迁移，不能静默用新规则解释旧记录。旧版兼容策略必须在运行持久化实现时验证。
+自建轻量 harness：`agent-executor` 选阶段，`agent-loop` 统一普通步骤与子任务的提示、模型、顶层控制、工具反馈和停止；正文 JSON 不执行。`AgentKernel` 独立提供阶段计划、委派许可、提示/上下文组装与失败政策。`AgentHost` 窄端口连接模型、材料、记录和工具；权限、限额、持久化、调用身份、队列与成果校验仍归宿主。桌面与私有服务复用 Runtime。
 
-验收同时覆盖换搭配、换流程、切布局：前两者各自升级且不重建原工作；同一运行从双区切换到三面排列时，已提交调用数不增加、成员任务不中止、草稿/引用/版本不变。程序重开恢复用户布局和运行所用快照。
+升级须注册新内核版本，通过 Runtime 的 `KernelReference` 选择新提交；旧版本禁止覆写。流程选择固定步骤或按需委派，内核版本由可信宿主选择。恢复校验 `execution`/检查点和协议，再用贡献、回执、待决重建循环；不兼容即阻塞，未知调用先核对。测试验证 v1/v2 实际调用差异、旧轮跨版本接续、计划/提示替换与备份往返；默认仍是 v1。
 
 ### 4.2 执行与过程表达
 
@@ -81,7 +81,7 @@ renderer 不取得服务密钥、原始文件系统或任意命令执行能力�
 
 每轮限制模型调用数、输入量、时间与可用工具。普通阅读/保存材料不启动模型。付费调用先持久化关联与幂等键，终态成功才提交完整结果；部分内容可保存为草稿，失败不能伪装成功。
 
-UI 消费真实运行事件与持久对象。过程窗口显示成员提供的公开分析，不索取或伪造模型内部推理。委派、证据异议、判断修订与成果版本相连；原始日志留在排障层。总结和复盘引用这些实际记录，缺少记录就是缺少证据。
+过程窗分开呈现宿主执行记录与 AI 公开依据摘要，不索取内部推理。`team-response-v1` 兼容旧响应，可附 `public` v1；非法附属数据只警告，不放宽 answer/artifact 校验，不追加修补调用。决策面只显示回答和待决。
 
 用户改变目标或成果基准版本时，后续提交校验该基准；迟到结果进入可追溯的旧轮记录，不覆盖当前成果。停止先阻止新增委派，再取消能取消的调用，保留已完成贡献；未确认远端停止时明确显示未知/待核对。
 
@@ -144,9 +144,9 @@ PRODUCT 决定产品行为，PLAN 由 Codex 内部维护开发顺序，本文件
 
 Draft/Run 保存可选 outputMode，旧数据默认为 result；explanation 只产生交流回答，summary/review 生成各自独立的 ArtifactVersion.kind 与 artifactId 版本链。运行基准、并发候选、待决的版本校验、后续 AI 修订按对应类别取版本；主成果的交付采用不接受支持类别。此前只有一种成果的记录不用迁移，历史引用不变。
 
-ProcessRecords 在事务中构造带摘要用途、来源记录编号和捕获范围的不可变 Material，使用内容摘要身份避免重复添加；引用只指向此快照，后续流式内容不修改它。所选记录的轮次目标、当时搭配/流程版本、来源材料范围以及已提交决定随记录携带；复盘额外带相应成果及用户输入，待决未发送草稿不进入快照。超过 24 KB 的范围不静默截断，以减少记录或轮次为恢复路径。
+ProcessRecords 按工作、轮次或所选记录冻结公开贡献、材料、决定与准确成果，24 KB 超限明确拒绝。原始记录可直接导出 Markdown；复盘、文档和方法先准备草稿，用户发送后生成独立版本链。
 
-运行器对过程任务提供专门输出约束；不会额外混入未选择的过去交流或主成果正文。它仍使用当前工作所选团队和流程处理，不伪称动态加载了某个 Skill。解释不能写主成果，总结/复盘也不会自动改变项目标准。反馈对象、方法沉淀、Skill 与工具的独立边界见下文章节；过程输出本身不授予这些能力。
+过程任务限定所选快照。普通交流按 `workSeq` 与轮次/字节预算接续，较早用户输入进入背景区，explanation 附有界主成果。`team-response-v1` 分开答复与可选 artifact，修订校验 `baseVersionId`。首次执行冻结 `contextSnapshot`，恢复复用；非法终态不发布，旧协议保持兼容。控制轮不施加最终 JSON Schema，终态由宿主校验；托管请求兼容旧版 ycore。
 
 ### 项目文件快照与理解
 
@@ -180,7 +180,7 @@ ProcessRecords 在事务中构造带摘要用途、来源记录编号和捕获�
 
 `outcome` 按准确版本保存交接、使用、验证和待修订记录，各自独立，不自动组成状态升级链。当前来源明确为 `user_report`，保存填报发生日期、实际记录时间、接收对象、用途、原话、正文 SHA-256 和可选材料版本/选段快照；附件存在不等于验证成立。通过请求键检查重试一致性，重复请求不重复记录；不修改正文，不触发外发或工具执行。撤回保留原记录、原因与时间。此轮尚无外部接收回执连接器或效果认证器。
 
-过程复盘按所选轮次/记录关联的准确成果版本纳入使用记录；也支持显式指定同一工作的历史成果。原准备材料与历史报告不随反馈变化被改写。新快照记录反馈身份和撤回状态，界面可发现新增/撤回后依据已变化；旧数据没有该字段时不能反推已经做过这项核对。后续复盘和检查必须重新准备材料。就绪检查、用户填报和复盘意见均不会自动采纳为项目标准或可复用方法。
+每次调用持久化 `input-manifest`，来源清单与上下文同步冻结，标记全文、选段、摘要或裁剪；子任务只归属实际分配范围。AI 的反馈声明仅能引用该清单；送入、声明、成果变化和效果是并列证据。新记录提示未涵盖，所选原依据撤回/修改提示复核；旧快照不覆盖，无记录不补造。
 
 ## 按需委派运行协议
 
@@ -208,6 +208,7 @@ ProcessRecords 在事务中构造带摘要用途、来源记录编号和捕获�
 
 AI 修订方法保留原依据并生成独立新版本，新版本需要自己的试用和采纳。复制/编辑方法保留来源，导出携带来源标识和正文校验；导入时来源只是原空间的说明，不恢复原工作身份或采纳记录。源反馈撤回或新增时提示重新核对，不静默重写方法或既有运行。
 
+成功复盘/方法可显式提炼 `workflow-candidate`，来源运行隔离、校验角色/阶段/委派限额、幂等保存独立流程及适用/待验条件，配置中另行应用。解析失败可见且不改主成果；旧运行/权限不变，可执行不代表效果已提高。备份校验清单和候选的跨工作归属。
 
 ### 本机持续委托与运行边界
 
@@ -232,7 +233,7 @@ Radar topics can combine explicit fixed materials and up to five selected subscr
 
 The due instant, settings revision and topic ID identify an immutable check. A transaction persists that check and advances the next time before job creation. Each new Radar job persists its automatic check reference before calling the model. Restart can reconnect an interrupted check to its original job; interruption before job persistence is explicitly recorded and paused. No uncertain or failed call is automatically retried. Scope drift pauses future work. Resolving an unknown run updates its check but never silently re-enables the watch.
 
-The request cap counts persisted automatic job submissions across all watch revisions, including failures; editing or toggling the watch cannot reset the rolling window. It is a local per-topic request cap, not financial billing or a service account-wide entitlement. Manual generation remains explicit and separate. The timer only runs in the desktop process; server editorial scheduling and cross-device execution remain unimplemented.
+Watch request caps count persisted auto submissions per topic (failures included); edits cannot reset the window. Local desktop timer only; not billing or cross-device execution.
 
 ## 工作空间备份与恢复
 
@@ -278,7 +279,7 @@ SSE 由 eventsource-parser 处理分块和 UTF-8；正常 `finish_reason: stop` 
 
 Radar watch 的 direct 范围只含准确绑定对象的暂停、降频和降低每日上限；首次启用、恢复或扩大范围必须确认。撤销以 watch revision 恢复先前设置，已发生调用不回滚，`nextAt` 重新落在未来且不触发追补。
 
-公共来源同步只落真实材料、可选源图和游标。打开/浏览/切页不调用模型。明确整理最多处理五条新公开材料：ycore 按修订+处理器版本缓存中性摘要，不接收议题焦点；title-only 不计模型。议题合成仍在 ytriple，沿用准确来源版本；失败保留旧解读。自动 watch 不额外触发 ycore 处理。远端持续执行仍属 F4。
+公共来源同步先持久化真实材料与游标，议题供给再从固定材料、所选 feed 和公开来源的最新可读修订形成有界候选、记录纳入/排除和覆盖范围。自动候选按优先顺序整篇适配实际输入预算，包含上版解读开销；不截正文，未纳入篇数与原因保存并展示。固定材料不擅删，固定范围超限或预算内没有可读证据时明确停止；候选为空或没有可读正文时不提交模型；同步失败保留旧材料和游标，不把失败解释为没有新内容。雷达本机 watch 与通用来源调度分开，远端持续执行仍属于 F4。
 
 ## 本机分发与启动边界
 
@@ -300,7 +301,7 @@ SDK 的后台刷新和默认磁盘存储关闭；请求前临近过期时合并�
 
 账号登录与产品权限是两个状态。无权益时保留账号，显示尚无服务权限，可检查连接或退出；本地材料不受限制。连接变化沿用未结束运行保护，并暂停范围不匹配的自动任务。退出先落盘并清除本机会话，再尝试撤销该 provider session；服务端撤销失败明确报告未确认。退出或会话文件损坏后都不会回退旧固定令牌（含环境变量）；访问令牌方式必须另行明确配置。
 
-目前仅接入已有邮箱/密码账号，不提供注册、找回密码、OAuth 或 MFA 操作界面。已有账号的安装版正向路径与负向矩阵范围见 [PLAN](PLAN.md)；不能把本机真实 GoTrue 验证等同于全部线上账号生命周期已可使用。官方接口依据：[密码登录](https://supabase.com/docs/reference/javascript/auth-signinwithpassword)、[刷新会话](https://supabase.com/docs/reference/javascript/auth-refreshsession)、[退出](https://supabase.com/docs/reference/javascript/auth-signout)。
+目前只接入已有邮箱/密码账号，未提供注册、找回密码、OAuth/MFA。账号页独立读取 `/v1/account`，严格验证契约版本、产品与当前用户；加载/失败清除旧摘要，退出与切换后拒收旧响应。价格按币种最小单位显示，未定价不视为免费；安装与线上验收边界见 [PLAN](PLAN.md)。
 
 ## 私有服务空间与执行宿主
 

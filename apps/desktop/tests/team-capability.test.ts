@@ -22,6 +22,7 @@ import {
   type Work,
 } from "../src/core/types";
 import type { Model, Prompt, StreamEvent } from "../src/core/ycore";
+import { protocolModel } from "./team-response";
 
 class Script implements Model {
   prompts: Prompt[] = [];
@@ -61,7 +62,7 @@ test("ordinary and delegated members both receive shared knowledge without extra
   ordinary.put("meta", "workflow", defaultWorkflow);
   const excerpt = ordinary.addMaterial("仅标题来源", "只有标题", "title_only");
   const ordinaryModel = new Script(() => "覆盖不足，不能声称已读全文。");
-  const ordinaryRuntime = new Runtime(ordinary, () => ordinaryModel);
+  const ordinaryRuntime = new Runtime(ordinary, () => protocolModel(ordinaryModel));
   const ordinaryRun = ordinaryRuntime.submit(
     submit({
       refs: [{ materialId: excerpt.id, version: 1, label: excerpt.title }],
@@ -99,7 +100,7 @@ test("ordinary and delegated members both receive shared knowledge without extra
     }
     return "核查：当前只有来源摘要，不能声称全文。";
   });
-  const delegatedRuntime = new Runtime(delegated, () => delegatedModel);
+  const delegatedRuntime = new Runtime(delegated, () => protocolModel(delegatedModel));
   const delegatedRun = delegatedRuntime.submit(
     submit({
       text: "根据这份材料说明覆盖，需要时再核查",

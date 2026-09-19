@@ -13,6 +13,11 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { CredentialVault } from "./model-connections";
+import type { AccountSummary } from "./types";
+import {
+  ACCOUNT_CONTRACT,
+  accountSummarySchema,
+} from "./account-summary-contract";
 import { YCore, ServiceError } from "./ycore";
 
 function endpoint(value: string) {
@@ -347,6 +352,97 @@ export class Accounts {
       this.notify();
       throw Error(this.state.error!);
     }
+  }
+  async fetchAccountSummary(): Promise<AccountSummary | null> {
+    const record = this.record;
+    if (!record || this.state.state !== "signed_in") return null;
+    const expectedUserId = record.session.user.id;
+    const token = await this.token(record);
+    const response = await this.fetcher(record.baseUrl + "/v1/account", {
+      redirect: "error",
+      signal: AbortSignal.timeout(8000),
+      headers: {
+        Authorization: "Bearer " + token,
+        "X-YCore-Product": "ytriple",
+        Accept: "application/json",
+      },
+    });
+    if (response.status === 404) {
+      await response.body?.cancel();
+      if (this.record !== record || this.state.state !== "signed_in")
+        throw Error("账号已变化，忽略过期的账号信息");
+      return null;
+    }
+    const contract = response.headers.get("x-ycore-contract");
+    if (contract !== ACCOUNT_CONTRACT)
+      throw Error("服务契约版本不匹配，请升级客户端");
+    const text = await boundedText(response);
+    if (this.record !== record || this.state.state !== "signed_in")
+      throw Error("账号已变化，忽略过期的账号信息");
+    if (!response.ok)
+      throw Error(
+        response.status === 401
+          ? "账号会话不可用，请重新登录"
+          : `账号信息读取失败（${response.status}）`,
+      );
+    const parsed = accountSummarySchema.parse(JSON.parse(text));
+    if (parsed.user_id !== expectedUserId)
+      throw Error("服务返回的账号与当前登录不一致");
+    return {
+      productId: parsed.product_id,
+      userId: parsed.user_id,
+      accessState: parsed.access_state,
+      catalogNote: parsed.catalog_note,
+      subscription: parsed.subscription
+        ? {
+            planId: parsed.subscription.plan_id,
+            planName: parsed.subscription.plan_name,
+            planVersion: parsed.subscription.plan_version,
+            priceId: parsed.subscription.price_id,
+            price: parsed.subscription.price
+              ? {
+                  amountMinor: parsed.subscription.price.amount_minor,
+                  currency: parsed.subscription.price.currency,
+                  billingPeriod: parsed.subscription.price.billing_period,
+                  priced: parsed.subscription.price.priced,
+                }
+              : null,
+            validFrom: parsed.subscription.valid_from,
+            validUntil: parsed.subscription.valid_until,
+            revision: parsed.subscription.revision,
+            revokedAt: parsed.subscription.revoked_at,
+          }
+        : null,
+      entitlement: parsed.entitlement
+        ? {
+            ownership: parsed.entitlement.ownership,
+            dailyRequests: parsed.entitlement.daily_requests,
+            dailyBudgetUnits: parsed.entitlement.daily_token_units,
+            validUntil: parsed.entitlement.valid_until,
+            remainingRequests: parsed.entitlement.remaining_requests,
+            remainingBudgetUnits: parsed.entitlement.remaining_budget_units,
+          }
+        : null,
+      usageToday: {
+        requests: parsed.usage_today.requests,
+        budgetUnits: parsed.usage_today.budget_units,
+        note: parsed.usage_today.note,
+      },
+      catalog: parsed.catalog.map((row) => ({
+        planId: String(row.plan_id),
+        displayName: String(row.display_name),
+        version: Number(row.version),
+        prices: Array.isArray(row.prices)
+          ? row.prices.map((pr: any) => ({
+              priceId: String(pr.price_id),
+              amountMinor: pr.amount_minor ?? null,
+              currency: pr.currency ?? null,
+              billingPeriod: pr.billing_period ?? null,
+              priced: Boolean(pr.priced),
+            }))
+          : [],
+      })),
+    };
   }
   async signOut(beforeChange: (scope: string) => void) {
     if (this.refresh) await this.refresh.catch(() => {});

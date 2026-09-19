@@ -4,10 +4,18 @@ import type { WorkspaceData } from "./backup-contract";
 import type { Schedule } from "./schedule-contract";
 import { resultKind, outputLabels } from "./output";
 import {
+  appliesTeamResponseProtocol,
+  parseTeamResponse,
+  TEAM_RESPONSE_PROTOCOL,
+  usesTeamResponseProtocol,
+} from "./team-response";
+import {
   initializationSummary,
   type InitializationPlan,
 } from "./project-initialization";
 import { captureProjectContext } from "./projects";
+import { WorkflowLearning } from "./workflow-learning";
+import type { InputManifest } from "./input-manifest";
 import {
   defaultLayout,
   layoutSchema,
@@ -24,6 +32,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { defaultTeam, defaultWorkflow, adaptiveWorkflow, workbenchTeam, workbenchWorkflow } from "./types";
+import { freezeExecutionManifest, type KernelReference } from "./agent-kernel-contract";
 import { workspaceContextSchema, type WorkspaceContext } from "./workspace-context";
 import {
   teamSchema,
@@ -374,6 +383,8 @@ export class Store {
       contributions: this.all<Contribution>("contribution"),
       versions: this.all<ArtifactVersion>("version"),
       candidates: this.all("candidate"),
+      workflowCandidates: this.all("workflow-candidate"),
+      inputManifests: this.all("input-manifest"),
       decisions: this.all("decision"),
       materials: this.all<Material>("material"),
       assets: this.all<Asset>("asset"),
@@ -391,6 +402,12 @@ export class Store {
       prepared && input.refs.some((r) => r.materialId === prepared.materialId)
         ? prepared
         : undefined;
+    const preparedWf = input.preparedWorkflow ?? previous?.preparedWorkflow;
+    const preparedWorkflow =
+      preparedWf &&
+      input.refs.some((r) => r.materialId === preparedWf.materialId)
+        ? preparedWf
+        : undefined;
     return this.put("draft", input.id, {
       ...input,
       workspaceContext: input.workspaceContext ?? previous?.workspaceContext,
@@ -398,6 +415,7 @@ export class Store {
       workflowKey: input.workflowKey ?? previous?.workflowKey,
       skillKeys: input.skillKeys ?? previous?.skillKeys,
       preparedProcess,
+      preparedWorkflow,
       updatedAt: now(),
     });
   }
@@ -552,7 +570,7 @@ export class Store {
     };
     return this.put("material", `${m.id}@1`, m);
   }
-  submit(input: SubmitInput, serviceScope?: string): Run {
+  submit(input: SubmitInput, serviceScope?: string, kernelReference?: KernelReference): Run {
     if (!input.text.trim()) throw Error("写下想让团队做的事");
     if (Buffer.byteLength(input.text) > 16000)
       throw Error("目标过长，请将长文添加为材料");
@@ -636,7 +654,33 @@ export class Store {
           v.workId === work.id &&
           (v.kind ?? "result") === resultKind(input.outputMode),
       );
+      const submitSeq = (work.nextSubmitSeq ?? 0) + 1;
+      work.nextSubmitSeq = submitSeq;
+      let refs = input.refs;
+      let inheritedRefs = false;
+      if (
+        !isNew &&
+        !refs.length &&
+        usesTeamResponseProtocol(input.outputMode)
+      ) {
+        const previous = this.all<Run>("run")
+          .filter((r) => r.workId === work.id && (r.workSeq ?? 0) < submitSeq)
+          .sort((a, b) => (a.workSeq ?? 0) - (b.workSeq ?? 0))
+          .at(-1);
+        if (previous?.refs.length) {
+          refs = structuredClone(previous.refs.filter(ref => this.material(ref).coverage !== "workflow_candidate_snapshot"));
+          inheritedRefs = refs.length > 0;
+        }
+      }
+      const execution = freezeExecutionManifest(workflow, kernelReference);
       const run: Run = {
+        execution,
+        executionCheckpoint: structuredClone(execution),
+        workSeq: submitSeq,
+        inheritedRefs: inheritedRefs || undefined,
+        responseProtocol: usesTeamResponseProtocol(input.outputMode)
+          ? TEAM_RESPONSE_PROTOCOL
+          : undefined,
         workspacePolicy: this.get("meta", "workspace-policy") ?? { direct: false },
         workspaceContext: work.workspaceContext ? structuredClone(work.workspaceContext) : undefined,
         tools: captureTools(team),
@@ -645,7 +689,7 @@ export class Store {
         workId: work.id,
         text: input.text.trim(),
         outputMode: input.outputMode,
-        refs: input.refs,
+        refs,
         recipient: input.recipient,
         skills: new Skills(this).capture(input.skillKeys ?? [], team),
         requestedSkillKeys: input.skillKeys ?? [],
@@ -662,6 +706,7 @@ export class Store {
           work.projectId,
           work.deliveryId,
         ),
+        workflowCandidateSource: prepared?.preparedWorkflow?.sourceVersionId,
       };
       work.updatedAt = now();
       if (work.archived || work.completedAt)
@@ -751,18 +796,38 @@ export class Store {
       }
     });
   }
-  finish(runId: string, body: string, result: boolean) {
+  private manifestForRun(runId: string) {
+    const contribution = this.all<Contribution>("contribution")
+      .filter((c) => c.runId === runId && c.status === "succeeded")
+      .at(-1);
+    if (!contribution?.inputManifestId) return undefined;
+    return this.get<InputManifest>("input-manifest", contribution.inputManifestId);
+  }
+  finish(runId: string, body: string, allowsArtifact: boolean) {
     return this.transaction(() => {
       const run = this.require<Run>("run", runId);
       if (run.status !== "running") throw Error("运行已停止，不能提交迟到成果");
+      if (appliesTeamResponseProtocol(run)) {
+        const parsed = parseTeamResponse(
+          body,
+          run,
+          true,
+          this.manifestForRun(runId),
+        );
+        if (!parsed?.answer.trim())
+          throw Error("响应协议缺少可用回答，未发布成果");
+        if (parsed.artifact && !allowsArtifact)
+          throw Error("本轮不允许提交主成果候选");
+        return this.finishParsed(run, parsed, allowsArtifact);
+      }
       let version: ArtifactVersion | undefined;
-      result =
+      let result =
         run.outputMode === "summary" ||
         run.outputMode === "review" ||
         run.outputMode === "readiness" ||
         run.outputMode === "method"
           ? true
-          : result && run.outputMode !== "explanation";
+          : allowsArtifact && run.outputMode !== "explanation";
       if (result) {
         const previous = this.all<ArtifactVersion>("version")
           .filter(
@@ -822,8 +887,80 @@ export class Store {
         refs: run.refs,
         createdAt: now(),
       });
+      new WorkflowLearning(this).tryCaptureFromRun(runId);
       return version;
     });
+  }
+  private finishParsed(
+    run: Run,
+    parsed: import("./team-response").TeamResponsePayload,
+    allowsArtifact: boolean,
+  ) {
+    const runId = run.id;
+    let version: ArtifactVersion | undefined;
+    const publish =
+      allowsArtifact &&
+      parsed.artifact !== null &&
+      run.outputMode !== "explanation";
+    if (publish) {
+      const previous = this.all<ArtifactVersion>("version")
+        .filter(
+          (v) =>
+            v.workId === run.workId &&
+            (v.kind ?? "result") === resultKind(run.outputMode),
+        )
+        .at(-1);
+      if ((previous?.id ?? null) !== run.baseVersionId) {
+        this.put<ArtifactCandidate>("candidate", run.id, {
+          id: run.id,
+          artifactId: previous!.artifactId,
+          workId: run.workId,
+          runId,
+          baseVersionId: run.baseVersionId,
+          body: parsed.artifact!.body,
+          status: "pending",
+          resolvedVersionId: null,
+          createdAt: now(),
+        });
+        this.setRun(runId, { status: "succeeded" });
+        this.pauseQueue(run.workId, true);
+        this.put<Message>("message", `${runId}:reply`, {
+          id: `${runId}:reply`,
+          workId: run.workId,
+          runId,
+          role: "assistant",
+          body: parsed.answer,
+          refs: run.refs,
+          createdAt: now(),
+        });
+        return;
+      }
+      version = {
+        id: randomUUID(),
+        artifactId: previous?.artifactId ?? randomUUID(),
+        workId: run.workId,
+        runId,
+        parentId: previous?.id ?? null,
+        number: (previous?.number ?? 0) + 1,
+        body: parsed.artifact!.body,
+        createdAt: now(),
+        author: "team",
+        kind: resultKind(run.outputMode),
+      };
+      this.put("version", version.id, version);
+    }
+    this.setRun(runId, { status: "succeeded" });
+    this.put<Message>("message", `${runId}:reply`, {
+      id: `${runId}:reply`,
+      workId: run.workId,
+      runId,
+      role: "assistant",
+      body: parsed.answer,
+      refs: run.refs,
+      createdAt: now(),
+    });
+    new WorkflowLearning(this).tryCaptureFromRun(runId);
+    return version;
   }
   adopt(deliveryId: string, versionId: string) {
     const d = this.require<Delivery>("delivery", deliveryId),

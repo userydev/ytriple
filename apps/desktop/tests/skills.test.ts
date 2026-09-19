@@ -26,6 +26,7 @@ import {
   type SubmitInput,
 } from "../src/core/types";
 import type { Model, Prompt, StreamEvent } from "../src/core/ycore";
+import { protocolModel, teamResponse } from "./team-response";
 const input = (extra: Partial<SubmitInput> = {}): SubmitInput => ({
   key: randomUUID(),
   context: "new",
@@ -117,7 +118,7 @@ test("queued submission freezes exact methods, draft and disabled selection fail
       definition.body,
     );
     const model = new Script(() => "根据指定方法给出有限结论。");
-    const runtime = new Runtime(store, () => model);
+    const runtime = new Runtime(store, () => protocolModel(model));
     runtime.resume(run.workId);
     await runtime.settled(run.workId);
     assert.equal(store.require<Run>("run", run.id).status, "succeeded");
@@ -153,7 +154,7 @@ test("automatic methods load only after selection, record purpose and exact requ
           })
         : "已按方法核对，证据范围有限。",
     );
-    const runtime = new Runtime(store, () => model),
+    const runtime = new Runtime(store, () => protocolModel(model)),
       run = runtime.submit(input());
     await runtime.settled(run.workId);
     assert.equal(store.require<Run>("run", run.id).status, "succeeded");
@@ -206,7 +207,7 @@ test("member method catalog and bodies stay out of an unassigned child task", as
             ? "资料不足。"
             : "负责人给出有限结论。",
     );
-    const runtime = new Runtime(store, () => model),
+    const runtime = new Runtime(store, () => protocolModel(model)),
       run = runtime.submit(input());
     await runtime.settled(run.workId);
     assert.equal(store.require<Run>("run", run.id).status, "succeeded");
@@ -235,7 +236,7 @@ test("unapproved, duplicated and malformed method requests terminate without pub
               },
             }),
       );
-      const runtime = new Runtime(store, () => model),
+      const runtime = new Runtime(store, () => protocolModel(model)),
         run = runtime.submit(input());
       await runtime.settled(run.workId);
       assert.equal(store.require<Run>("run", run.id).status, "failed");
@@ -279,7 +280,7 @@ test("restart reconciles original interrupted method request and reconstructs lo
     },
   };
   try {
-    let runtime = new Runtime(store, () => model);
+    let runtime = new Runtime(store, () => protocolModel(model));
     run = runtime.submit(input());
     await runtime.settled(run.workId);
     assert.equal(store.require<Run>("run", run.id).status, "unknown");
@@ -299,7 +300,9 @@ test("restart reconciles original interrupted method request and reconstructs lo
               run_id: id,
               error: null,
               status: "succeeded",
-              result: { text: "已依据读取范围完成" },
+              result: {
+                text: teamResponse("已依据读取范围完成", null),
+              },
             };
           },
         }) as Model,

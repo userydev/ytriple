@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readFile, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../src/core/store";
+import { legacyFinish, protocolModel } from "./team-response";
 import { Methods } from "../src/core/methods";
 import { Skills } from "../src/core/skills";
 import { ProcessRecords } from "../src/core/process";
@@ -50,7 +51,7 @@ function finish(store: Store, raw: SubmitInput, body: string) {
     error: null,
     createdAt: new Date().toISOString(),
   });
-  return { run, version: store.finish(run.id, body, true)! };
+  return { run, version: legacyFinish(store, run.id, body, true)! };
 }
 function fixture(path = ":memory:") {
   const store = new Store(path);
@@ -233,7 +234,7 @@ test("completed trial is loaded into actual request; adoption points at exact ru
       draft = f.methods.prepareTrial(p.version.id, null),
       key = draft.skillKeys![0];
     const model = new Capture(),
-      runtime = new Runtime(f.store, () => model),
+      runtime = new Runtime(f.store, () => protocolModel(model)),
       trial = send(
         runtime,
         draft,
@@ -333,7 +334,7 @@ test("method source and accepted state survive restart; export carries provenanc
       draft = f.methods.prepareTrial(p.version.id, null),
       key = draft.skillKeys![0];
     const model = new Capture(),
-      runtime = new Runtime(f.store, () => model),
+      runtime = new Runtime(f.store, () => protocolModel(model)),
       trial = send(runtime, draft, "使用目标和实测核对方法");
     await runtime.settled(trial.workId);
     f.methods.adopt(key, trial.id, "只采纳条件与证据核对方法，效果仍待验证");

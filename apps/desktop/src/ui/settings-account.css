@@ -146,3 +146,23 @@ div.settings-note strong {
     text-align: left;
   }
 }
+.account-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 18px 0;
+}
+.account-usage-grid > div {
+  display: grid;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 8px;
+  background: #f7f8fa;
+}
+.account-usage-grid > div strong { color: #727a83; font-size: 12px; font-weight: 500; }
+.account-usage-grid > div span { font-size: 20px; font-variant-numeric: tabular-nums; }
+.account-usage-grid > p,
+.account-usage-grid > details { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .account-usage-grid { grid-template-columns: 1fr; }
+}
