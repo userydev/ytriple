@@ -107,7 +107,8 @@
 - 发布：ytriple main 合并 `af097780f6af0ee45dd808b7d777bbe50e1e33c4`，安装 `414bd4087f3610f2`；ycore 部署 `main-20260919-03102b6`，API/worker 同版，原数据及预算迁移保留。两仓库 dev/main 已推送；后续仅同步发布记录。证据/旧包/数据备份在两树 `.local/release-20260919/`；完整真实使用仍待验收。
 - [x] 当前合并检查：306 桌面/18 私有服务/92 ycore 测试，check/build 等范围见 `.local/merge-ai-foundation/acceptance.json`；本轮复用证据，没有重跑。
 - [x] 历史路径：本树 `.local/` 的 `f1/`、`f2/`、`f3/`、`f3-radar-delivery/`；`project-context-validation/`、`project-files-validation/`（含 live-evidence）、`initialization-validation/`、`asset-validation/`、`backup-validation/`、`schedules-validation/`、`outcome-validation/` 保留隔离/真实范围区别。
-- [x] 新阅读证据：`.local/f3-radar-news/`。AI 新包证据仍在 `/Users/Admin/.codex/worktrees/08c0/ytriple-dev/.local/` 的 `ai-team/`、`agent-harness/`、`templates-subscriptions/`、`process-learning/`，未复制到当前树。
-- 规则见 [AGENTS.md](../AGENTS.md)，产品长期边界见 [PRODUCT.md](PRODUCT.md)，安装/回退见 [DEVELOPMENT.md](DEVELOPMENT.md)，私有服务见 [SERVICE.md](SERVICE.md)。新迁移需重新证明回退，不能照搬旧发布结论。
+- [x] 新阅读证据：`.local/f3-radar-news/`。AI 新包证据已集中到 `.local/worktree-evidence/ai-foundation/`，原目录名保留。
+- 清理：仅留 main/dev；源码快照、Git bundle 及恢复映射在 `.local/cleanup-20260919/manifest.json`；未合并历史保留本地 archive 标签，当前版与升级前回退包/数据保留。
+- 规则见 [AGENTS.md](../AGENTS.md)，安装/回退见 [DEVELOPMENT.md](DEVELOPMENT.md)。新迁移需单独验证回退。
 
 </details>
