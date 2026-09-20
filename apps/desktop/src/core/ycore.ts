@@ -62,6 +62,41 @@ const derivedSchema = z.object({
     .nullable()
     .optional(),
 });
+const decisionAnswerSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("boolean"), probability: z.number().min(0).max(1) }),
+  z.object({
+    kind: z.literal("choice"),
+    choice: z.string(),
+    probabilities: z.record(z.string(), z.number()),
+    confidence: z.number().optional(),
+  }),
+  z.object({
+    kind: z.literal("score"),
+    score: z.number(),
+    legend: z.record(z.string(), z.string()),
+    probabilities: z.record(z.string(), z.number()),
+    confidence: z.number().optional(),
+  }),
+]);
+const coreDecisionSchema = z.object({
+  document_id: z.string(),
+  revision: z.number().int().positive(),
+  content_hash: z.string(),
+  contract_id: z.string(),
+  contract_version: z.number().int().positive(),
+  status: z.enum(["processing", "ready", "insufficient", "failed", "unknown"]),
+  result: z
+    .object({ answers: z.record(z.string(), decisionAnswerSchema) })
+    .passthrough()
+    .nullable(),
+  completed_at: z.string().nullable(),
+  error: z.object({ code: z.string(), message: z.string() }).nullable(),
+});
+const coreDecisionPageSchema = z.object({
+  data: z.array(coreDecisionSchema),
+  next_cursor: z.string().nullable(),
+  has_more: z.boolean(),
+});
 const refSchema = z.object({
   id: z.string(),
   revision: z.number().int().positive(),
@@ -340,6 +375,48 @@ export class YCore implements Model {
       }
     }
   }
+  associateDecisions(
+    store: Store,
+    records: z.infer<typeof coreDecisionSchema>[],
+  ) {
+    for (const record of records) {
+      const answers = record.result?.answers ?? {};
+      const semantic = answers.semantic_valid;
+      const topic = answers.topic;
+      const informationType = answers.information_type;
+      const quality = answers.content_quality;
+      const importance = answers.general_importance;
+      for (const material of store.all<Material>("material")) {
+        if (
+          material.upstream?.id !== record.document_id ||
+          material.upstream.revision !== record.revision ||
+          material.upstream.contentHash !== record.content_hash
+        )
+          continue;
+        store.put("material", `${material.id}@${material.version}`, {
+          ...material,
+          coreDecision: {
+            contractId: record.contract_id,
+            contractVersion: record.contract_version,
+            status: record.status,
+            semanticValidProbability:
+              semantic?.kind === "boolean" ? semantic.probability : null,
+            topic: topic?.kind === "choice" ? topic.choice : null,
+            informationType:
+              informationType?.kind === "choice"
+                ? informationType.choice
+                : null,
+            contentQuality: quality?.kind === "score" ? quality.score : null,
+            generalImportance:
+              importance?.kind === "score" ? importance.score : null,
+            completedAt: record.completed_at,
+            contentHash: record.content_hash,
+            error: record.error,
+          },
+        });
+      }
+    }
+  }
   async readFeed(url: string, signal?: AbortSignal) {
     try {
       return feedReadResult.parse(
@@ -572,6 +649,10 @@ export class YCore implements Model {
         existing.derived.revision === raw.revision
           ? { derived: existing.derived }
           : {}),
+        ...(existing?.coreDecision &&
+        existing.coreDecision.contentHash === raw.content_hash
+          ? { coreDecision: existing.coreDecision }
+          : {}),
       };
       store.put("material", `${id}@${m.version}`, m);
     };
@@ -659,6 +740,39 @@ export class YCore implements Model {
         throw e;
       }
     }
+    const decisionKey = `radar-decisions:${this.scope}`;
+    let decisionCursor = store.get<string>("meta", decisionKey);
+    try {
+      let more = true;
+      while (more) {
+        const params = new URLSearchParams({ limit: "100" });
+        if (decisionCursor) params.set("cursor", decisionCursor);
+        const page = coreDecisionPageSchema.parse(
+          await (
+            await this.request("/v1/radar/decisions?" + params.toString())
+          ).json(),
+        );
+        store.transaction(() => {
+          this.associateDecisions(store, page.data);
+          if (page.next_cursor)
+            store.put("meta", decisionKey, page.next_cursor);
+          store.put("meta", `radar-decisions-status:${this.scope}`, {
+            state: "ready",
+            error: null,
+            checkedAt: new Date().toISOString(),
+          });
+        });
+        if (page.next_cursor) decisionCursor = page.next_cursor;
+        more = page.has_more;
+      }
+    } catch (error) {
+      store.put("meta", `radar-decisions-status:${this.scope}`, {
+        state: "error",
+        error: error instanceof Error ? error.message : "Decision 同步失败",
+        checkedAt: new Date().toISOString(),
+      });
+    }
+
     return store
       .all<Material>("material")
       .filter((m) => m.upstream?.scope === this.scope).length;
