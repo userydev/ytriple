@@ -240,6 +240,19 @@ export type Material = {
     origin: "enclosure" | "media" | "content";
     credit?: string | null;
   };
+  coreDecision?: {
+    contractId: string;
+    contractVersion: number;
+    status: "processing" | "ready" | "insufficient" | "failed" | "unknown";
+    semanticValidProbability: number | null;
+    topic: string | null;
+    informationType: string | null;
+    contentQuality: number | null;
+    generalImportance: number | null;
+    completedAt: string | null;
+    contentHash: string;
+    error: { code: string; message: string } | null;
+  };
   derived?: {
     processorVersion: string;
     status: "ready" | "insufficient" | "failed";
