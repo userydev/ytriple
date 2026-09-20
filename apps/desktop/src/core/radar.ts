@@ -207,7 +207,7 @@ export class Radar {
         notes.push(
           `${source.name} 最近同步失败：${source.last_error}；候选仅来自此前已同步资料。`,
         );
-      else if (source && source.status !== "active")
+      else if (source && source.status !== "healthy")
         notes.push(
           `${source.name} 当前状态为 ${source.status}；候选仅来自此前已同步资料。`,
         );
