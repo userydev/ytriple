@@ -6,6 +6,7 @@ import {
 import type { Material, Message, Reference, Run, Snapshot, Work } from "./types";
 import { visibleRadarMaterials } from "./material-list";
 import { materialMatchesTopic } from "./radar-match";
+import { compareCoreDecision } from "./radar-decision";
 export {
   textMatchesKeyword,
   textMatchesAnyKeyword,
@@ -520,6 +521,7 @@ export function matchingPublicMaterials(
         return false;
       return materialMatchesTopic(material, topic);
     })
+    .sort(compareCoreDecision)
     .slice(0, 18);
 }
 
