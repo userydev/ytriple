@@ -6,12 +6,12 @@
 
 共同规范以 [Y-Core AI / Radar](https://github.com/userydev/ycore/blob/dev/docs/JEV.md) 和发布的 contracts 为准：先由 Y-Core 交付，再适配本端。本轮只更新文档，不开发/调用模型/安装/部署；不以远端旧检查点覆盖本地未推送进度。
 
-- [ ] 复用 YCore adapter 和托管登录，按用户、产品、service scope 隔离凭据、运行、材料缓存/个人源与阅读状态；同一人跨产品不自动共享权限、数据或额度。
+- [ ] 复用 YCore adapter 和托管登录，Supabase Auth 只提供统一身份，Y-Core 只管产品权益/额度/公共服务运行；项目、工作区、团队、资产、阅读/收藏/关注、个人订阅等继续保存在 ytriple 自己的持久层。按用户、产品、service scope 隔离凭据、运行、材料缓存/个人源与阅读状态；同一人跨产品不自动共享权限、数据或额度。
 - [ ] 对话/团队生成、JSON、联网证据和 Consumer Decision 统一经 Y-Core/Cloudflare；按 capabilities 协商，保留 v0.1.0。不新增密钥，不直连 fallback，不让所有调用先过 Jev。
 - [ ] 公共材料和 Core Decision 精确关联 revision/hash/contract；栏目/跟踪、私有规则和会话仍归 ytriple。刷新判断不改旧解读/已读收藏，不把个人 URL 写入全局 source。
 - [ ] 至少两用户及无权益/停用身份验证；换账号不接收旧响应，断线按原 run 找回，重复读取不调用模型，单用户耗尽额度不误封他人；共享采集在线不冒充整个团队离线执行。
 
-Codex 负责接入协调与验收，不把技术选型/日常转发交给用户。以下是保留的产品现状与旧发布证据，不表示上述接入完成。
+Codex 负责接入协调与验收，不把技术选型/日常转发交给用户。Y-Core VPS/数据库不接管 ytriple 的产品数据；需要服务端保存的大附件以后按真实需求使用对象存储并记录 owner/product 元数据，不提前建设统一文件平台。以下是保留的产品现状与旧发布证据，不表示上述接入完成。
 
 ## 目标与整体判断
 
