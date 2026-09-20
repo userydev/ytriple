@@ -11,6 +11,7 @@ import type { FeedSource } from "./feed-contract";
 import type { RadarWatch } from "./radar-watch-contract";
 import { visibleRadarMaterials } from "./material-list";
 import { materialMatchesTopic, topicExecutionScope } from "./radar-match";
+import { compareCoreDecision } from "./radar-decision";
 import {
   topicInputSchema,
   insightSchema,
@@ -174,7 +175,7 @@ export class Radar {
         if (!keywords.length && !topic.matchRules) return true;
         return materialMatchesTopic(material, topic);
       })
-      .sort(newestFirst);
+      .sort((a, b) => compareCoreDecision(a, b) || newestFirst(a, b));
     const publicLimit = Math.max(
       0,
       18 - topic.sources.length - selectedFeeds.length,
