@@ -46,6 +46,55 @@ const document = (revision: number, title = `Revision ${revision}`) => ({
     : {}),
 });
 
+const coreDecision = (revision = 2) => ({
+  document_id: "stable-document",
+  revision,
+  content_hash: `content-${revision}`,
+  source_ids: ["source-rss"],
+  contract_id: "core-radar-v1",
+  contract_version: 1,
+  input_profile: "public-document-v1",
+  status: "ready",
+  result: {
+    outcome: "completed",
+    contract_id: "core-radar-v1",
+    contract_version: 1,
+    contract_hash: "contract-hash",
+    input_hash: "input-hash",
+    adapter_version: "jev-evaluation-v1",
+    model: "fixture-jev",
+    usage: { input_tokens: 10, output_tokens: 5 },
+    answers: {
+      semantic_valid: { kind: "boolean", probability: 0.95 },
+      topic: {
+        kind: "choice",
+        choice: "ai_technology",
+        probabilities: { ai_technology: 0.9, other: 0.1 },
+      },
+      information_type: {
+        kind: "choice",
+        choice: "report",
+        probabilities: { report: 0.8, other: 0.2 },
+      },
+      content_quality: {
+        kind: "score",
+        score: 2,
+        legend: { "0": "Low", "1": "Medium", "2": "High" },
+        probabilities: { "0": 0.05, "1": 0.15, "2": 0.8 },
+      },
+      general_importance: {
+        kind: "score",
+        score: 1,
+        legend: { "0": "Low", "1": "Medium", "2": "High" },
+        probabilities: { "0": 0.1, "1": 0.8, "2": 0.1 },
+      },
+    },
+  },
+  created_at: "2026-09-18T02:00:00Z",
+  completed_at: "2026-09-18T02:00:01Z",
+  error: null,
+});
+
 test("material sync preserves stable identity, revisions, provenance and local relations across replay", async () => {
   const store = new Store(":memory:");
   let changeCalls = 0;
@@ -55,6 +104,12 @@ test("material sync preserves stable identity, revisions, provenance and local r
       return response({ data: [{ id: "source-rss", name: "RSS", status: "active", last_error: null }] });
     if (url.pathname === "/v1/documents")
       return response({ data: [document(1)], next_cursor: null, sync_cursor: "snapshot" });
+    if (url.pathname === "/v1/radar/decisions")
+      return response({
+        data: [coreDecision(2)],
+        next_cursor: "decision-2",
+        has_more: false,
+      });
     changeCalls++;
     return response({
       data: [
@@ -127,6 +182,14 @@ test("material sync preserves stable identity, revisions, provenance and local r
   await client.sync(store);
   const kept = store.get<Material>("material", `${materialId}@2`);
   assert.equal(kept?.derived?.titleZh, "修订要点");
+  assert.equal(kept?.coreDecision?.topic, "ai_technology");
+  assert.equal(kept?.coreDecision?.contentQuality, 2);
+  assert.equal(kept?.coreDecision?.generalImportance, 1);
+  assert.equal(kept?.coreDecision?.semanticValidProbability, 0.95);
+  assert.equal(
+    store.get<any>("meta", `radar-decisions-status:${client.scope}`).state,
+    "ready",
+  );
   assert.equal(store.all("material").length, 2);
   assert.equal(changeCalls, 3);
   assert.equal(
@@ -156,6 +219,8 @@ test("expired cursors rebuild in the same sync and failures retain prior materia
         next_cursor: null,
         sync_cursor: "rebuilt",
       });
+    if (url.pathname === "/v1/radar/decisions")
+      return response({ data: [], next_cursor: null, has_more: false });
     if (mode === "expired" && url.searchParams.get("cursor") === "initial")
       return response(
         { error: { code: "CURSOR_EXPIRED", message: "expired" } },
