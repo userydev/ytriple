@@ -4,11 +4,11 @@
 
 ## Y-Core 接入（当前目标，尚未验收）
 
-共同规范以 [Y-Core AI / Radar](https://github.com/userydev/ycore/blob/dev/docs/JEV.md) 和发布的 contracts 为准：先由 Y-Core 交付，再适配本端。本轮只更新文档，不开发/调用模型/安装/部署；不以远端旧检查点覆盖本地未推送进度。
+共同规范以 Y-Core `docs/PRODUCT.md` / `docs/PLAN.md` 和发布的 contracts 为准。当前 `dev` 已实现 Y-Core Decision 消费代码：同步公共 Document 后增量读取 `/v1/radar/decisions`，按准确 revision/hash 绑定本地 Material，并只作为公共候选排序信号；尚未完成用户本地同步后的真实客户端验收。本轮未部署、未安装、未调用付费模型。
 
 - [ ] 复用 YCore adapter 和托管登录，Supabase Auth 只提供统一身份，Y-Core 只管产品权益/额度/公共服务运行；项目、工作区、团队、资产、阅读/收藏/关注、个人订阅等继续保存在 ytriple 自己的持久层。按用户、产品、service scope 隔离凭据、运行、材料缓存/个人源与阅读状态；同一人跨产品不自动共享权限、数据或额度。
 - [ ] 对话/团队生成、JSON、联网证据和 Consumer Decision 统一经 Y-Core/Cloudflare；按 capabilities 协商，保留 v0.1.0。不新增密钥，不直连 fallback，不让所有调用先过 Jev。
-- [ ] 公共材料和 Core Decision 精确关联 revision/hash/contract；栏目/跟踪、私有规则和会话仍归 ytriple。刷新判断不改旧解读/已读收藏，不把个人 URL 写入全局 source。
+- [x] **Y-Core Decision 消费代码已实现。** 公共材料与 Decision 精确关联 revision/hash/contract，保存 semantic validity / topic / information type / quality / importance；只影响公共候选排序，不替代栏目/跟踪、私有规则和会话。Decision 同步失败单独记录状态，不破坏已同步材料。待本地真实服务验收后再标记产品交付。
 - [ ] 至少两用户及无权益/停用身份验证；换账号不接收旧响应，断线按原 run 找回，重复读取不调用模型，单用户耗尽额度不误封他人；共享采集在线不冒充整个团队离线执行。
 
 Codex 负责接入协调与验收，不把技术选型/日常转发交给用户。Y-Core VPS/数据库不接管 ytriple 的产品数据；需要服务端保存的大附件以后按真实需求使用对象存储并记录 owner/product 元数据，不提前建设统一文件平台。以下是保留的产品现状与旧发布证据，不表示上述接入完成。
@@ -47,7 +47,7 @@ Codex 负责接入协调与验收，不把技术选型/日常转发交给用户�
 
 | 操作 | 状态与边界 |
 | --- | --- |
-| 公共来源 | 已走通；Ars RSS/HN JSON 已采集消费，主要节选/标题；数量仅够验证底座，不等于覆盖用户关注 |
+| 公共来源 | 生产既有 Ars RSS/HN JSON 等路径已走通；Y-Core `dev` 已扩为 15 个候选来源但尚未逐源真实验收，不把开发配置写成生产覆盖事实 |
 | 阅读/收藏/位置/前后篇 | 已实现；新新闻流有隔离界面/测试证据，尚未安装；保留文章版本和阅读队列 |
 | 话题/个人 RSS/Atom | 已实现；轻关注、规则、预览、刷新/停用已接；刷新与 AI 分开，普通网页不是订阅 |
 | 问文章/进团队研究 | 有旧原生/真实模型证据；新界面待合并版验证。标题/链接不能冒充全文 |
